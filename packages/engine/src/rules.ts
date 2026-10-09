@@ -1,0 +1,131 @@
+import type { Rank } from './types.js';
+
+/**
+ * Configuración de reglas. La idea es que motor y tests carguen una `RulesConfig`
+ * y todo el comportamiento se derive de ella. Más adelante, si hay variantes
+ * regionales, se añade una `GUINOTE_OTRA` y se elige en el arranque de la sala.
+ *
+ * Los flags marcados con `// TODO(decision)` son decisiones pendientes confirmadas
+ * con valores por defecto; revisar antes de subir a producción.
+ */
+export interface RulesConfig {
+  readonly players: 2 | 4;
+  readonly handSize: number;
+  readonly dealBatch: number;
+
+  /** Puntos por rango de carta. Las cartas sin entrada valen 0. */
+  readonly cardPoints: Partial<Record<Rank, number>>;
+
+  /** Fuerza de las cartas de más fuerte (índice 0) a más débil. */
+  readonly strength: readonly Rank[];
+
+  /** Puntos extra por ganar la última baza (10 de últimas). */
+  readonly lastTrickBonus: number;
+
+  readonly dealerRotation: 'next';
+  readonly firstLeader: 'afterDealer';
+
+  readonly draw: {
+    readonly winnerDrawsFirst: boolean;
+    readonly lastCardIsTrump: boolean;
+  };
+
+  readonly arrastre: {
+    readonly mustFollowSuit: boolean;
+    readonly mustOverplay: boolean;
+    readonly mustTrumpIfVoid: boolean;
+    /** Si el compañero va ganando la baza, no estás obligado a superar. */
+    readonly partnerWinningExemptsOverplay: boolean;
+    /** Si el compañero va ganando la baza, no estás obligado a fallar con triunfo
+     *  (puedes descartar). Confirmado por el jugador: regla del guiñote aragonés. */
+    readonly partnerWinningExemptsTrump: boolean;
+    /** Si tienes triunfo pero no supera al de mesa, ¿estás obligado a tirarlo? */
+    readonly mustTrumpEvenIfCantBeat: boolean;
+  };
+
+  readonly swapSeven: {
+    readonly onlyOnOwnTurn: boolean;
+    readonly onlyIfWonLastTrick: boolean;
+    /** El cambio del 7 solo se permite en fase de robo (no en arrastre). */
+    readonly onlyDuringDraw: boolean;
+    readonly aloud: boolean;
+  };
+
+  readonly cantes: {
+    /** Par de figuras que suman cante: Sota (10) y Rey (12). */
+    readonly pair: readonly [Rank, Rank];
+    /** Puntos del cante en palo normal. */
+    readonly value: number;
+    /** Puntos del cante cuando el par es del palo de triunfo. */
+    readonly trumpValue: number;
+    /** El compañero del ganador de la baza también puede cantar. */
+    readonly teamMayDeclare: boolean;
+    /** Se puede cantar durante el arrastre. */
+    readonly allowedInArrastre: boolean;
+    /** El cante lo canta quien ganó la baza o su compañero. */
+    readonly requireTrickWonByTeam: boolean;
+  };
+
+  /** Puntuación de la partida a varias vueltas. `null` = mano suelta. */
+  readonly scoring: VueltasScoring | null;
+}
+
+/**
+ * Sistema de puntuación por vueltas (guiñote aragonés):
+ *  - Cada equipo lleva dos contadores: BUENAS (cuando gana la vuelta, suma
+ *    puntos - 50) y MALAS (cuando pierde, suma puntos, 0-50).
+ *  - La partida termina en cuanto un equipo acumula buenas > threshold.
+ *    Las malas NO son condición: un equipo que siempre gana la mano
+ *    tendrá buenas creciendo y malas en 0, y debe poder terminar.
+ *  - La puntuación se acumula desde la primera mano (idas). Si en idas
+ *    ya se supera el threshold, no se llega a jugar vueltas; si en
+ *    vueltas se supera, termina anticipadamente.
+ *
+ * Ejemplo con threshold = 50:
+ *  - Vuelta 1 (idas): A saca 70, B saca 30 → A.buenas = 20, B.malas = 30.
+ *    No se llega a >50 → se juega vueltas.
+ *  - Vuelta 2 (vueltas): A saca 80, B saca 20 → A.buenas = 50, B.malas = 50.
+ *    50 NO es >50 → no termina.
+ *  - Vuelta 3: A saca 60, B saca 40 → A.buenas = 60 (>50). Match Over: A gana.
+ */
+export interface VueltasScoring {
+  readonly mode: 'vueltas';
+  /** Umbral por contador. Un equipo gana cuando sus buenas > threshold. */
+  readonly threshold: number;
+}
+
+/**
+ * Reglas confirmadas del guiñote aragonés. Ver `docs/guinote-aragones-diseno.md`.
+ *
+ * Los flags `partnerWinningExemptsTrump` y `mustTrumpEvenIfCantBeat` están
+ * confirmados en el doc; el resto son TODO y se ajustarán cuando confirmes.
+ */
+export const GUINOTE_ARAGONES: RulesConfig = {
+  players: 4,
+  handSize: 6,
+  dealBatch: 3,
+  cardPoints: { 1: 11, 3: 10, 12: 4, 10: 3, 11: 2 },
+  strength: [1, 3, 12, 10, 11, 7, 6, 5, 4, 2],
+  lastTrickBonus: 10,
+  dealerRotation: 'next',
+  firstLeader: 'afterDealer',
+  draw: { winnerDrawsFirst: true, lastCardIsTrump: true },
+  arrastre: {
+    mustFollowSuit: true,
+    mustOverplay: true,
+    mustTrumpIfVoid: true,
+    partnerWinningExemptsOverplay: true,
+    partnerWinningExemptsTrump: true, // confirmado: compañero ganando exime de fallar con triunfo
+    mustTrumpEvenIfCantBeat: true, // si tienes triunfo y oponente gana, obligatorio aunque no supere
+  },
+  swapSeven: { onlyOnOwnTurn: true, onlyIfWonLastTrick: true, onlyDuringDraw: true, aloud: true },
+  cantes: {
+    pair: [10, 12],
+    value: 20,
+    trumpValue: 40,
+    teamMayDeclare: true,
+    allowedInArrastre: true,
+    requireTrickWonByTeam: true,
+  },
+  scoring: { mode: 'vueltas', threshold: 50 },
+};

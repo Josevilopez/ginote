@@ -1,0 +1,10 @@
+{
+  "name": "Guiñote aragonés",
+  "short_name": "Guiñote",
+  "description": "Juego de cartas aragonés",
+  "theme_color": "#0d4f3c",
+  "background_color": "#0a3d2e",
+  "display": "standalone",
+  "orientation": "portrait",
+  "start_url": "/"
+}

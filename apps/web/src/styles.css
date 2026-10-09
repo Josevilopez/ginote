@@ -1,0 +1,864 @@
+/* Mobile-first, sin frameworks. Variables CSS para tema verde de mesa. */
+
+:root {
+  --bg: #0a3d2e;
+  --bg-2: #0d4f3c;
+  --fg: #f5f0e1;
+  --fg-mute: #b9c5b8;
+  --accent: #e8c46b;
+  --danger: #e26d5c;
+  --ok: #6ddb9b;
+  --card-oros-color: #d4a017;
+  --card-copas-color: #c0392b;
+  --card-espadas-color: #1e3a8a;
+  --card-bastos-color: #1f6b3a;
+  --card-oros-light: #f0c84a;
+  --card-oros-dark: #a87a10;
+  --card-copas-light: #e8553d;
+  --card-copas-dark: #8a1f15;
+  --card-espadas-light: #4060c0;
+  --card-espadas-dark: #0e1f5a;
+  --card-bastos-light: #3a8a4a;
+  --card-bastos-dark: #144a26;
+  /* El sprite tiene 12 columnas × 5 filas (4 palos + reverso).
+     Cada celda es 160×245 px (ratio 0.653), así que derivamos el alto del
+     ancho para que la carta encaje perfectamente en la celda del sprite. */
+  --card-ratio: 0.653;
+  --card-w: 100px;
+  --card-h: calc(var(--card-w) / var(--card-ratio));
+  --card-w-small: 84px;
+  --card-h-small: calc(var(--card-w-small) / var(--card-ratio));
+  --card-w-baza: 81px;
+  --card-h-baza: calc(var(--card-w-baza) / var(--card-ratio));
+  /* Mazo (triunfo boca arriba + pila de dorsos). Por defecto usa el mismo
+     tamaño que la mano; los media queries lo reducen para no dominar el
+     tablero en desktop. */
+  --card-w-mazo: var(--card-w);
+  --card-h-mazo: var(--card-h);
+  /* Tamaño del sprite completo: 12 × ancho × 5 × alto. */
+  --card-sprite-w: calc(var(--card-w) * 12);
+  --card-sprite-h: calc(var(--card-h) * 5);
+  --safe-top: env(safe-area-inset-top, 0);
+  --safe-bottom: env(safe-area-inset-bottom, 0);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.app {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--safe-top);
+  padding-bottom: var(--safe-bottom);
+}
+
+/* Home */
+.home {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  gap: 16px;
+}
+.home h1 {
+  font-size: 64px;
+  margin: 0;
+  color: var(--accent);
+  letter-spacing: -2px;
+}
+.home .subtitle {
+  color: var(--fg-mute);
+  margin: 0 0 32px 0;
+}
+.home .hint {
+  color: var(--fg-mute);
+  font-size: 13px;
+  max-width: 280px;
+  margin-top: 32px;
+}
+
+.btn {
+  background: var(--bg-2);
+  color: var(--fg);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  padding: 14px 22px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.05s, background 0.15s;
+}
+.btn:active { transform: scale(0.97); }
+.btn.primary {
+  background: var(--accent);
+  color: #2a1f00;
+  border-color: transparent;
+}
+.btn.big {
+  padding: 18px 32px;
+  font-size: 18px;
+}
+.btn.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* Game layout */
+.game {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1.4fr auto auto;
+  height: 100%;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  min-height: 44px;
+}
+.trump-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.trump-label {
+  color: var(--fg-mute);
+}
+.trump-suit {
+  font-size: 20px;
+  line-height: 1;
+}
+.trump-suit[data-suit="oros"] { color: #f0c54a; }
+.trump-suit[data-suit="copas"] { color: #d9544b; }
+.trump-suit[data-suit="espadas"] { color: #c9d4d1; }
+.trump-suit[data-suit="bastos"] { color: #88c98a; }
+.trump-card-gone {
+  color: var(--fg-mute);
+  font-style: italic;
+  font-size: 12px;
+}
+.score {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  font-size: 13px;
+}
+.score-team.is-mine b {
+  color: var(--ok);
+  font-weight: 800;
+}
+.score-team.is-theirs b {
+  color: var(--fg-mute);
+  font-weight: 700;
+}
+.score-team.is-mine {
+  color: var(--ok);
+}
+.score-team.is-theirs {
+  color: var(--fg-mute);
+}
+/* Malas en la topbar: más pequeño y tenue que las buenas, para que la B
+   (que decide el ganador) sea lo que más llame la atención. */
+.score-team .score-malas {
+  font-size: 11px;
+  opacity: 0.6;
+  font-weight: 500;
+}
+/* Marcador acumulado en la topbar. Sin sufijo "M"/"B"; el color distingue:
+   in-malas (≤50): tono normal del equipo.
+   in-buenas (>50): verde brillante — el equipo está en zona de victoria. */
+.score-team b.in-malas {
+  color: inherit;
+  font-weight: 700;
+}
+.score-team.is-mine b.in-buenas {
+  color: var(--ok);
+  font-weight: 800;
+  text-shadow: 0 0 6px rgba(109, 219, 155, 0.4);
+}
+.score-team.is-theirs b.in-buenas {
+  color: var(--accent);
+  font-weight: 800;
+  text-shadow: 0 0 6px rgba(255, 200, 100, 0.4);
+}
+/* Sufijo M/B junto al número del acumulado: pequeño y sutil, indica
+   en qué tramo está el equipo. */
+.score-suffix {
+  font-size: 10px;
+  margin-left: 3px;
+  font-weight: 700;
+  opacity: 0.7;
+  vertical-align: 2px;
+}
+.score-suffix.in-buenas {
+  opacity: 1;
+}
+.score-team.is-mine .score-suffix.in-buenas { color: var(--ok); }
+.score-team.is-theirs .score-suffix.in-buenas { color: var(--accent); }
+/* Acumulado entre paréntesis: pequeño, más tenue, indica las BUENAS
+   acumuladas de la partida (se preserva entre vueltas). */
+.score-acumulado {
+  font-size: 11px;
+  opacity: 0.6;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+/* Pill de fase: "Idas" en la primera vuelta, "Vueltas" en las siguientes.
+   Compacto, integrado en el score del topbar, sin panel extra. */
+.phase-pill {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.phase-pill.phase-idas {
+  background: rgba(232, 196, 107, 0.18);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.phase-pill.phase-vueltas {
+  background: rgba(109, 219, 155, 0.18);
+  color: var(--ok);
+  border: 1px solid var(--ok);
+}
+
+/* Mazo de la mesa: triunfo vertical boca arriba arriba, con la pila
+   de dorsos horizontales (rotados 90°, mismo tamaño que el triunfo)
+   APOYADA en la base del triunfo. Posicionado a la IZQUIERDA del centro
+   del tablero, centrado verticalmente, para no chocar con la baza que
+   ahora está agrupada en el centro. */
+.mazo-area {
+  position: absolute;
+  top: 74%;
+  left: 17%;
+  transform: translateX(-50%);
+  width: calc(var(--card-h-mazo) + 8px);
+  height: calc(var(--card-h-mazo) * 1.35);
+  pointer-events: none;
+  z-index: 0;
+  filter: drop-shadow(0 6px 10px rgba(0,0,0,0.4));
+}
+/* Carta de triunfo: vertical (portrait), alineada al TOP del área */
+.mazo-trump-img {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: var(--card-w-mazo);
+  height: var(--card-h-mazo);
+  object-fit: contain;
+  z-index: 1;
+}
+/* Pila de dorsos: cada reverso es una caja CSS del tamaño del triunfo
+   (54×82.7) pero rotada 90° para aparecer horizontal (82.7×54). Tres
+   cartas apiladas con leves offsets para sugerir profundidad (más
+   cartas bajo la visible, como un mazo real). Se apoya en la base
+   del área, cubriendo solo el ~30% inferior del triunfo. */
+.mazo-deck {
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(var(--card-h-mazo) + 8px);
+  height: var(--card-w-mazo);
+  z-index: 2;
+}
+.mazo-deck-card {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--card-w-mazo);
+  height: var(--card-h-mazo);
+  transform: translate(-50%, -50%) rotate(90deg);
+  object-fit: cover;
+  display: block;
+  border-radius: 4px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+/* Capas inferiores: leve offset (en CSS, antes de la rotación) para que
+   asomen por los bordes tras la rotación, sugiriendo cartas bajo la
+   visible. */
+.mazo-deck-card:nth-child(1) {
+  transform: translate(-50%, -50%) rotate(90deg) translate(-4px, -4px);
+  z-index: 1;
+}
+.mazo-deck-card:nth-child(2) {
+  transform: translate(-50%, -50%) rotate(90deg) translate(-2px, -2px);
+  z-index: 2;
+}
+.mazo-deck-card:nth-child(3) {
+  transform: translate(-50%, -50%) rotate(90deg);
+  z-index: 3;
+}
+
+/* Mesa */
+.board {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  grid-template-rows: 1fr 1.2fr 1fr;
+  flex: 1;
+  margin: 4px;
+  background: radial-gradient(ellipse at center, #1a6647 0%, #0a3d2e 80%);
+  border-radius: 12px;
+  border: 2px solid rgba(255,255,255,0.06);
+  overflow: hidden;
+}
+
+.seat {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  font-size: 12px;
+  color: var(--fg-mute);
+  border-radius: 10px;
+  transition: background 0.15s;
+  gap: 4px;
+}
+.seat.turn {
+  background: rgba(232, 196, 107, 0.15);
+  outline: 1px solid var(--accent);
+}
+.seat.you { color: var(--accent); }
+.seat.partner { color: var(--ok); }
+.seat-name {
+  margin-bottom: 4px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  overflow: hidden;
+}
+.seat-hand {
+  display: none;
+}
+
+/* Contador compacto: número + "cartas" en una línea. Sin mazo decorativo. */
+.seat-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+.seat-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--accent);
+  color: #2a1f00;
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 1;
+}
+.seat-hint {
+  font-size: 11px;
+  opacity: 0.75;
+  margin-top: 2px;
+}
+.opp-stack {
+  position: relative;
+  width: 96px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.opp-card {
+  position: absolute;
+  width: 40px;
+  height: 56px;
+  border-radius: 5px;
+  background: repeating-linear-gradient(
+    45deg,
+    #5b1a2c,
+    #5b1a2c 3px,
+    #7a2238 3px,
+    #7a2238 6px
+  );
+  box-shadow: 0 2px 3px rgba(0,0,0,0.4);
+}
+.opp-card.opp-back-1 { top: 4px; left: 8px; transform: rotate(-12deg); }
+.opp-card.opp-back-2 { top: 4px; right: 8px; transform: rotate(12deg); }
+.opp-count {
+  position: relative;
+  z-index: 2;
+  min-width: 48px;
+  height: 48px;
+  padding: 0 12px;
+  border-radius: 24px;
+  background: var(--accent);
+  color: #2a1f00;
+  font-weight: 800;
+  font-size: 26px;
+  line-height: 48px;
+  text-align: center;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+}
+
+/* Posiciones de los asientos en la mesa (grid 3x3).
+   TÚ siempre en Sur (abajo centro). Sentido del juego: el siguiente es
+   el de la DERECHA (Este). Rotación antihoraria del juego = horario visual.
+   pos 0 = Sur (humano), pos 1 = Este, pos 2 = Norte, pos 3 = Oeste. */
+.seat.pos-0 { grid-column: 2; grid-row: 3; } /* Sur (abajo) — humano */
+.seat.pos-1 { grid-column: 3; grid-row: 2; } /* Este (derecha) — siguiente */
+.seat.pos-2 { grid-column: 2; grid-row: 1; } /* Norte (arriba) — el de en frente */
+.seat.pos-3 { grid-column: 1; grid-row: 2; } /* Oeste (izquierda) */
+
+/* Panel del seat activo: discreto, sin fondo grande. Solo nombre + acento. */
+.seat {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(13, 79, 60, 0.85);
+  border: 1px solid rgba(255,255,255,0.12);
+  animation: seat-pop 0.25s ease-out;
+  align-self: center;
+  justify-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.seat.you {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+  color: var(--accent);
+}
+.seat.winner {
+  border-color: var(--ok);
+}
+/* El humano ganando: oro + halo verde para distinguir "you won" del
+   verde plano que indica que el compañero/otro ganó. */
+.seat.you.winner {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 10px var(--ok);
+}
+.seat.pos-0 { align-self: end; padding-bottom: 8px; }
+.seat.pos-1 { justify-self: end; padding-right: 8px; }
+.seat.pos-2 { align-self: start; padding-top: 8px; }
+.seat.pos-3 { justify-self: start; padding-left: 8px; }
+.seat-hint {
+  font-size: 10px;
+  opacity: 0.6;
+  font-weight: 500;
+}
+.seat.you .seat-hint { color: var(--accent); opacity: 0.9; }
+.seat-count {
+  font-size: 10px;
+  opacity: 0.7;
+}
+.seat-count-badge { display: none; }
+
+@keyframes seat-pop {
+  from { transform: scale(0.85); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* Baza en el centro: las 4 cartas forman un rombo pequeño alrededor del
+   punto medio. Cuando no hay cartas, se muestra un "—". */
+.trick-area {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 1;
+}
+.trick-empty {
+  color: var(--fg-mute);
+  font-size: 36px;
+  opacity: 0.22;
+}
+.trick-card {
+  position: absolute;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
+}
+/* Las cartas de la baza usan su propio tamaño, más grande que las miniaturas. */
+.trick-card .card-img,
+.trick-card .card-img.small {
+  width: var(--card-w-baza) !important;
+  height: var(--card-h-baza) !important;
+  padding: 3px 4px;
+}
+.trick-card .card-img .rank { font-size: 1.1em; }
+.trick-card .card-img .suit { font-size: 1.8em; }
+/* Bajamos la baza 30px respecto al centro del board añadiendo +30px al
+   offset Y de cada carta. Antes teníamos top:30px en .trick-card, pero eso
+   movía las cartas del CENTRO al TOP del board (porque .trick-area tiene
+   align-items:center; el top:30px rompía ese centrado). Sumar al offset
+   Y es el approach correcto. */
+.trick-card.pos-0 { transform: translate(0, calc(var(--card-w-baza) * 0.95 + 30px)); }    /* Sur: debajo del centro */
+.trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 0.95), 30px); }         /* Este: derecha del centro */
+.trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 30px)); }   /* Norte: encima del centro */
+.trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -0.95), 30px); }        /* Oeste: izquierda del centro */
+
+/* Carta ganadora del truco: borde dorado + glow */
+.trick-card.winning .card-img {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 20px var(--accent), 0 0 8px var(--accent);
+  filter: brightness(1.15);
+  animation: winning-pulse 1.2s ease-in-out infinite alternate;
+  z-index: 2;
+}
+@keyframes winning-pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.08); }
+}
+
+/* Las cartas no ganadoras se quedan como están; solo destaca la ganadora. */
+
+/* Mini-mano de cada seat: cartas en anverso, pequeñas, debajo del nombre.
+   En el seat activo se ven más grandes; en los inactivos más tenues. */
+.seat-hand-mini {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: 100%;
+}
+.seat.active .mini-card .card {
+  width: clamp(28px, 4vw, 40px);
+  height: clamp(42px, 6vw, 60px);
+  padding: 2px 3px;
+}
+.seat.active .mini-card .card .rank { font-size: 0.7em; }
+.seat.active .mini-card .card .suit { font-size: 0.95em; }
+.seat:not(.active) .mini-card .card {
+  width: clamp(20px, 2.8vw, 28px);
+  height: clamp(30px, 4.2vw, 42px);
+  padding: 1px 2px;
+  opacity: 0.75;
+}
+.seat:not(.active) .mini-card .card .rank { font-size: 0.55em; }
+.seat:not(.active) .mini-card .card .suit { font-size: 0.75em; }
+
+/* Manos de los oponentes: cartas boca abajo, solapadas tipo baraja.
+   En los seats laterales (Este / Oeste) las cartas se apilan en vertical
+   para ocupar menos ancho. */
+.opp-hand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+.opp-back {
+  width: var(--card-w-small);
+  height: var(--card-h-small);
+  border-radius: 5px;
+  background-image: url('/cards/sprite/back.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border: 1.5px solid rgba(255,255,255,0.35);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.45);
+  margin-left: calc(-1 * var(--card-w-small) * 0.6);
+  transition: margin-left 0.2s;
+}
+.opp-back:first-child { margin-left: 0; }
+
+/* Seats laterales (Este / Oeste): subimos el seat ENTERO (nombre + marco
+   verde de activo + cartas) con transform para que no se alineen
+   verticalmente con las cartas de la baza. Si solo subiéramos el
+   .opp-hand, el nombre del jugador y el marco de turno se quedarían
+   abajo y habría un hueco entre ellos y las cartas. */
+.seat.pos-1,
+.seat.pos-3 {
+  transform: translateY(-90px);
+}
+/* Seats laterales: cartas en horizontal como en el asiento superior,
+   con solapamiento negativo a la izquierda. La altura se limita para que
+   la baraja no ocupe toda la celda vertical del board. */
+.seat.pos-1 .opp-hand,
+.seat.pos-3 .opp-hand {
+  height: calc(var(--card-h-small) + 6px);
+}
+
+/* Cartas — los tamaños viven en .card-img porque CardView devuelve un <img>
+   directo (sin wrapper). Si en el futuro se envuelve en un .card, basta con
+   borrar las reglas .card-img.size y dejar las del wrapper. */
+.card {
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  user-select: none;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.card.small {
+  width: var(--card-w-small);
+  height: var(--card-h-small);
+}
+.card.tiny {
+  width: var(--card-w-tiny);
+  height: var(--card-h-tiny);
+}
+.card-img {
+  width: var(--card-w);
+  height: var(--card-h);
+  object-fit: contain;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+.card-img.small {
+  width: var(--card-w-small);
+  height: var(--card-h-small);
+}
+
+.card.oros, .card-img.oros { color: var(--card-oros-color); }
+.card.copas, .card-img.copas { color: var(--card-copas-color); }
+.card.espadas, .card-img.espadas { color: var(--card-espadas-color); }
+.card.bastos, .card-img.bastos { color: var(--card-bastos-color); }
+.card .rank, .card-img .rank { color: inherit; }
+
+/* Acción — discreto, sin reloj ni decoración */
+.action-bar {
+  padding: 4px 10px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-mute);
+  min-height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+}
+.action-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.hint-turn { font-size: 11px; font-weight: 600; }
+.action-bar.is-you { color: var(--accent); opacity: 1; }
+
+/* Mano (cartas propias, tocables) */
+.hand {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 4px calc(4px + var(--safe-bottom));
+  background: var(--bg-2);
+  border-top: 1px solid rgba(255,255,255,0.08);
+  overflow-x: auto;
+  min-height: calc(var(--card-h) + 12px);
+}
+.card-slot {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  touch-action: none; /* evita scroll horizontal del navegador durante drag */
+}
+/* Sin `transition: transform` para que al reordenar el slot no haga el
+   parpadeo de "vuelve a su sitio y luego salta al nuevo". El press
+   feedback (:active translateY) se aplica instantáneo, que es OK. */
+.card-slot.playable { transform: translateY(0); }
+.card-slot.playable:active { transform: translateY(4px); }
+.card-slot.disabled { cursor: not-allowed; opacity: 0.4; filter: grayscale(0.6); }
+.card-slot.disabled:active { transform: none; }
+/* Drag activo: feedback visual para reordenar. */
+.card-slot.is-dragging {
+  filter: brightness(1.1) drop-shadow(0 6px 10px rgba(0,0,0,0.55));
+  z-index: 10;
+}
+
+/* Loading */
+.loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-mute);
+  font-size: 14px;
+}
+
+/* Fin de mano: panel pequeño en la parte de abajo que no tapa la mesa
+   para que la última jugada (10 de últimas) siga visible detrás. */
+.game-over {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 28px;
+  background: rgba(13, 79, 60, 0.97);
+  border: 2px solid var(--accent);
+  border-radius: 16px;
+  font-size: 14px;
+  z-index: 20;
+  pointer-events: none;
+  animation: badge-in 0.3s ease-out;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+.game-over h2 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 18px;
+  font-weight: 800;
+}
+.game-over .score-line {
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+.game-over .winner {
+  color: var(--ok);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+/* Overlay de fin de partida — gana quien cumpla el umbral en ambas cuentas. */
+.match-over {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 36px;
+  background: rgba(13, 79, 60, 0.97);
+  border: 3px solid var(--accent);
+  border-radius: 16px;
+  font-size: 14px;
+  z-index: 25;
+  pointer-events: none;
+  animation: badge-in 0.3s ease-out;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+}
+.match-over h2 {
+  margin: 0;
+  color: var(--accent);
+  font-size: 22px;
+  font-weight: 800;
+}
+.match-over .winner {
+  color: var(--ok);
+  font-weight: 800;
+  font-size: 18px;
+}
+.match-over .score-line {
+  color: var(--fg);
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+/* Badge pequeño con ganador + puntos (sin panel grande).
+   Lo colocamos en el hueco entre el board y la mano del jugador, NO
+   encima de sus cartas. La altura del bloque mano + action-bar es
+   aproximadamente var(--card-h) + ~50px (padding + action-bar + safe-area). */
+.trick-badge {
+  position: absolute;
+  bottom: calc(var(--card-h) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(13, 79, 60, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  font-size: 12px;
+  z-index: 6;
+  pointer-events: none;
+  animation: badge-in 0.3s ease-out;
+}
+.trick-badge-winner {
+  font-weight: 800;
+  color: var(--accent);
+}
+.trick-badge-points {
+  color: var(--ok);
+  font-weight: 600;
+}
+.trick-badge-team {
+  font-style: italic;
+  font-weight: 600;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+.trick-badge-team.is-mine {
+  color: var(--bg);
+  background: var(--ok);
+}
+.trick-badge-team.is-theirs {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+@keyframes badge-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+@keyframes overlay-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ---------- Responsive: escalado para tablet y desktop ----------
+   Mobile (default) mantiene los tamaños en :root (--card-w: 54px, etc).
+   En ≥600 px las cartas crecen y la mesa se centra con un max-width para
+   que no quede minúscula en un monitor 4K. La mano del jugador, el mazo
+   y las cartas de la baza se redimensionan solas porque usan esas vars.
+   El translateY(-90px) de los seats laterales se vuelve proporcional al
+   tamaño de la carta de baza, si no se desalinean al crecer las cartas. */

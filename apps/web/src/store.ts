@@ -1,0 +1,155 @@
+import { create } from 'zustand';
+import type { ClientMessage, ServerMessage } from '@guinote/protocol';
+import type { Action, Card, PlayerView } from '@guinote/engine';
+
+interface PartidaScore {
+  buenas: { '0': number; '1': number };
+  malas: { '0': number; '1': number };
+}
+
+interface State {
+  // Conexión
+  ws: WebSocket | null;
+  roomCode: string | null;
+  you: number | null;
+  seatNames: string[];
+  isBot: boolean[];
+
+  // Juego
+  view: PlayerView | null;
+  /** Overlay de baza recién resuelta (se quita a los ~1.5s por el componente). */
+  justResolved: { winner: number; plays: { seat: number; card: Card }[]; points: number; isLastTrick: boolean } | null;
+  gameOver: {
+    handPoints: { '0': number; '1': number };
+    score?: PartidaScore | undefined;
+    vuelta?: number | undefined;
+    matchWinner?: 0 | 1 | null | undefined;
+  } | null;
+  /** Resultado final de la partida (cuando un equipo cumple el umbral). */
+  matchOver: { winner: 0 | 1; score: PartidaScore; vuelta: number } | null;
+  error: string | null;
+  lastCmdId: number;
+
+  // Acciones
+  createRoom: () => Promise<void>;
+  sendAction: (action: Action) => void;
+  leave: () => void;
+}
+
+let wsRef: WebSocket | null = null;
+let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const useGame = create<State>((set, get) => ({
+  ws: null,
+  roomCode: null,
+  you: null,
+  seatNames: [],
+  isBot: [],
+  view: null,
+  justResolved: null,
+  gameOver: null,
+  matchOver: null,
+  error: null,
+  lastCmdId: 0,
+
+  async createRoom() {
+    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null });
+    try {
+      const resp = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Jugador' }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const { code } = (await resp.json()) as { code: string };
+      if (!code) throw new Error('Servidor no devolvió código de sala');
+      connect(code, set, get);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ error: `No se pudo crear la sala: ${msg}. ¿Está el servidor corriendo en :3001?` });
+    }
+  },
+
+  sendAction(action) {
+    const { ws, lastCmdId } = get();
+    if (!ws || ws.readyState !== 1) return;
+    const cmdId = `c-${lastCmdId + 1}`;
+    set({ lastCmdId: lastCmdId + 1 });
+    ws.send(JSON.stringify({ type: 'ACTION', commandId: cmdId, action } satisfies ClientMessage));
+  },
+
+  leave() {
+    if (wsRef) {
+      wsRef.send(JSON.stringify({ type: 'LEAVE' } satisfies ClientMessage));
+      wsRef.close();
+      wsRef = null;
+    }
+    set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null });
+  },
+}));
+
+function connect(
+  code: string,
+  set: (partial: Partial<State>) => void,
+  get: () => State,
+) {
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws/${code}`);
+  wsRef = ws;
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data) as ServerMessage;
+    if (msg.type === 'WELCOME') {
+      set({
+        you: msg.you,
+        roomCode: msg.roomCode,
+        seatNames: msg.seatNames,
+        isBot: msg.isBot,
+      });
+    } else if (msg.type === 'VIEW') {
+      const newView = msg.view as PlayerView;
+      // Detectar transición de mano terminada → nueva mano: si la vista
+      // anterior estaba en 'finished' y la nueva ya no, limpiamos el
+      // resumen de "Fin de mano" para que no se quede pegado al iniciar
+      // la siguiente.
+      const prevView = get().view;
+      const isNewHand =
+        prevView !== null &&
+        prevView.phase === 'finished' &&
+        newView.phase !== 'finished';
+      set({
+        view: newView,
+        gameOver: isNewHand ? null : get().gameOver,
+        matchOver: isNewHand ? null : get().matchOver,
+      });
+    } else if (msg.type === 'TRICK_JUST_RESOLVED') {
+      // Mostrar el overlay durante 1.5s. Si llega otro antes, se resetea.
+      if (justResolvedTimer) clearTimeout(justResolvedTimer);
+      set({
+        justResolved: {
+          winner: msg.winner,
+          plays: msg.plays as { seat: number; card: Card }[],
+          points: msg.points,
+          isLastTrick: msg.isLastTrick,
+        },
+      });
+      justResolvedTimer = setTimeout(() => {
+        set({ justResolved: null });
+        justResolvedTimer = null;
+      }, 4000);
+    } else if (msg.type === 'GAME_OVER') {
+      set({ gameOver: msg });
+      // Si la partida terminó, ocultar el gameOver de "Fin de mano" para que
+      // el overlay dedicado de "¡Hemos ganado!" sea el protagonista.
+      // Lo gestionamos desde el componente Game comparando con matchOver.
+    } else if (msg.type === 'MATCH_OVER') {
+      set({ matchOver: msg });
+    } else if (msg.type === 'ERROR') {
+      set({ error: msg.message });
+    }
+  };
+
+  ws.onopen = () => set({ ws });
+  ws.onclose = () => set({ ws: null });
+  ws.onerror = () => set({ error: 'Conexión perdida' });
+}

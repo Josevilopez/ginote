@@ -1,0 +1,28 @@
+{
+  "name": "guinote",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Guiñote aragonés online (4 jugadores, por parejas) — server autoritativo + motor puro + PWA mobile-first.",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:engine": "npm run test -w @guinote/engine",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json}\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
