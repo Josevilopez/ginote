@@ -24,23 +24,57 @@
      Cada celda es 160×245 px (ratio 0.653), así que derivamos el alto del
      ancho para que la carta encaje perfectamente en la celda del sprite. */
   --card-ratio: 0.653;
-  --card-w: 100px;
+  /* --card-w: 54px; */
+  --card-w: clamp(45px, 13.6vw, 120px);
   --card-h: calc(var(--card-w) / var(--card-ratio));
-  --card-w-small: 84px;
+  /* --card-w-small: 24px; */
+  --card-w-small: clamp(30px, 6vw, 100px);
   --card-h-small: calc(var(--card-w-small) / var(--card-ratio));
-  --card-w-baza: 81px;
+  /* --card-w-baza: 60px; */
+  --card-w-baza: clamp(75px, 8vw, 120px);
   --card-h-baza: calc(var(--card-w-baza) / var(--card-ratio));
   /* Mazo (triunfo boca arriba + pila de dorsos). Por defecto usa el mismo
      tamaño que la mano; los media queries lo reducen para no dominar el
      tablero en desktop. */
-  --card-w-mazo: var(--card-w);
-  --card-h-mazo: var(--card-h);
+  --card-w-mazo: clamp(40px, 11vw, 110px);
+  --card-h-mazo: calc(var(--card-w-mazo) / var(--card-ratio));
+  /* --card-w-mazo: clamp(30px, 6vw, 100px);
+  --card-h-mazo: calc(var(--card-w-mazo) / var(--card-ratio)); */
   /* Tamaño del sprite completo: 12 × ancho × 5 × alto. */
   --card-sprite-w: calc(var(--card-w) * 12);
   --card-sprite-h: calc(var(--card-h) * 5);
   --safe-top: env(safe-area-inset-top, 0);
   --safe-bottom: env(safe-area-inset-bottom, 0);
 }
+
+
+/* Ajuste de cartas para escritorio */
+@media (min-width: 769px) {
+  :root {
+    /* Mano del jugador */
+    --card-w: clamp(64px, 10vh, 120px);
+    --card-h: calc(var(--card-w) / var(--card-ratio));
+
+    /* Cartas pequeñas */
+    --card-w-small: clamp(28px, 3.8vh, 52px);
+    --card-h-small: calc(var(--card-w-small) / var(--card-ratio));
+
+    /* Baza central */
+    --card-w-baza: clamp(64px, 10vh, 120px);
+    --card-h-baza: calc(var(--card-w-baza) / var(--card-ratio));
+
+    /* Mazo */
+    /* --card-w-mazo: var(--card-w);
+    --card-h-mazo: calc(var(--card-w-mazo) / var(--card-ratio)); */
+    --card-w-mazo: clamp(60px, 8vh, 110px);
+    --card-h-mazo: calc(var(--card-w-mazo) / var(--card-ratio));
+
+    /* Sprite */
+    --card-sprite-w: calc(var(--card-w) * 12);
+    --card-sprite-h: calc(var(--card-h) * 5);
+  }
+}
+
 
 * {
   box-sizing: border-box;
@@ -265,8 +299,8 @@ body {
    ahora está agrupada en el centro. */
 .mazo-area {
   position: absolute;
-  top: 74%;
-  left: 17%;
+  top: 70%;
+  left: 15%;
   transform: translateX(-50%);
   width: calc(var(--card-h-mazo) + 8px);
   height: calc(var(--card-h-mazo) * 1.35);
@@ -330,15 +364,48 @@ body {
 /* Mesa */
 .board {
   position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr;
-  grid-template-rows: 1fr 1.2fr 1fr;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   flex: 1;
+  /* Móvil (default): el tablero llena el alto y ancho disponibles.
+     Mantiene el comportamiento anterior (rectángulo estirado) que funciona
+     bien en portrait. */
   margin: 4px;
   background: radial-gradient(ellipse at center, #1a6647 0%, #0a3d2e 80%);
   border-radius: 12px;
   border: 2px solid rgba(255,255,255,0.06);
+  /* Margen interior entre el borde del tablero y los seats, para que no
+     queden pegados al filo. */
+  padding: 8px;
   overflow: hidden;
+}
+
+/* Escritorio (>= 769 px): el tablero pasa a ser rectangular y se centra.
+   El ancho se dimensiona para que, dado el aspect-ratio 4/3, la altura
+   llene todo el alto disponible (100dvh - topbar / hand / action-bar
+   ≈ 100px). Fórmula: ancho = min(100% contenedor, alto_disp × 4/3). Así
+   no queda hueco arriba/abajo. align-self: center lo centra por si
+   el contenedor es más estrecho y limita el ancho. */
+@media (min-width: 769px) {
+  .board {
+    width: min(100%, calc((100dvh - 100px) * 4 / 3));
+    aspect-ratio: 4 / 3;
+    margin: 4px auto;
+    align-self: center;
+  }
+}
+
+/* Sub-grid que contiene seats + mazo + baza. Es el área "cuadrada"
+   del tablero. Crece con flex para llenar el espacio; el .hand abajo
+   toma su altura mínima. */
+.seats-area {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  grid-template-rows: 1fr 1.2fr 1fr;
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
 }
 
 .seat {
@@ -355,17 +422,116 @@ body {
   gap: 4px;
 }
 .seat.turn {
-  background: rgba(232, 196, 107, 0.15);
-  outline: 1px solid var(--accent);
+  /* Tinte de fondo más visible (antes 0.15) + outline exterior amarillo
+     para señalar el turno activo sin tapar el contenido. */
+  background: rgba(232, 196, 107, 0.30);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+/* Cuando el turno es de MI EQUIPO (yo o mi compañero), el amarillo cambia
+   a azul para que coincida con el color del círculo del avatar (#60). */
+.seat.you.turn,
+.seat.partner.turn {
+  background: rgba(96, 165, 250, 0.30);
+  outline: 2px solid #60a5fa;
 }
 .seat.you { color: var(--accent); }
-.seat.partner { color: var(--ok); }
 .seat-name {
-  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--fg);
+  margin-bottom: 0px;
   white-space: nowrap;
   text-overflow: ellipsis;
   max-width: 100%;
   overflow: hidden;
+  opacity: 0.7;
+}
+/* Avatar circular con la inicial del jugador. Marco amarillo por defecto;
+   el turno activo lo refuerza con un anillo + glow; el compañero lleva
+   marco azul claro. */
+.seat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+  background: rgba(6, 36, 27, 0.85);
+  border: 2px solid var(--accent);
+  color: var(--fg);
+  flex-shrink: 0;
+}
+.seat.active .seat-avatar {
+  border-color: var(--accent);
+  /* Anillo más grueso + glow más amplio + pulse animation para que el
+     turno activo sea imposible de pasar por alto. */
+  box-shadow: 0 0 0 3px var(--accent), 0 0 20px rgba(232, 196, 107, 0.7);
+  color: var(--accent);
+  animation: turn-pulse 1.4s ease-in-out infinite alternate;
+}
+@keyframes turn-pulse {
+  from { box-shadow: 0 0 0 3px var(--accent), 0 0 14px rgba(232, 196, 107, 0.5); }
+  to   { box-shadow: 0 0 0 3px var(--accent), 0 0 28px rgba(232, 196, 107, 0.95); }
+}
+/* Turno de MI EQUIPO: avatar también pulsa en azul (mismo color del
+   círculo). Necesita su propio @keyframes porque `var(--accent)` está
+   hardcoded en turn-pulse. */
+.seat.you.active .seat-avatar,
+.seat.partner.active .seat-avatar {
+  border-color: #60a5fa;
+  color: #ffffff;
+  animation-name: turn-pulse-team;
+}
+@keyframes turn-pulse-team {
+  from { box-shadow: 0 0 0 3px #60a5fa, 0 0 14px rgba(96, 165, 250, 0.5); }
+  to   { box-shadow: 0 0 0 3px #60a5fa, 0 0 28px rgba(96, 165, 250, 0.95); }
+}
+/* Fase `winnerWindow`: el "turno" es solo de responder (cantar o pasar),
+   no de jugar una carta. Suprimimos el pulse del avatar en los tres casos
+   (base / you / partner) para que no parezca que va a salir una carta. */
+.seat.winner-window.active .seat-avatar {
+  box-shadow: none;
+  animation: none;
+}
+.seat.winner-window.you.active .seat-avatar,
+.seat.winner-window.partner.active .seat-avatar {
+  box-shadow: none;
+  animation: none;
+}
+.seat.you .seat-avatar,
+.seat.partner .seat-avatar {
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+/* Resumen de cartas del oponente: pill con icono cuadrado + número.
+   El icono es un SVG (cuadrado indigo) para que se vea nítido a este
+   tamaño; el contenedor tiene fondo verde semi-transparente y bordes
+   redondeados tipo pill, con el texto del conteo en amarillo. */
+.opp-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 3px 10px 3px 5px;
+  border-radius: 15px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(66, 116, 102, 0.55);
+}
+.opp-summary .opp-icon {
+  width: 16px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.opp-count {
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: 12px;
 }
 .seat-hand {
   display: none;
@@ -420,66 +586,32 @@ body {
   );
   box-shadow: 0 2px 3px rgba(0,0,0,0.4);
 }
-.opp-card.opp-back-1 { top: 4px; left: 8px; transform: rotate(-12deg); }
-.opp-card.opp-back-2 { top: 4px; right: 8px; transform: rotate(12deg); }
-.opp-count {
-  position: relative;
-  z-index: 2;
-  min-width: 48px;
-  height: 48px;
-  padding: 0 12px;
-  border-radius: 24px;
-  background: var(--accent);
-  color: #2a1f00;
-  font-weight: 800;
-  font-size: 26px;
-  line-height: 48px;
-  text-align: center;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-}
+/* (Reglas viejas de .opp-card / .opp-count eliminadas: el nuevo diseño
+   usa .opp-summary con una sola carta + texto pequeño. El badge gigante
+   48x48 ya no se renderiza en ningún sitio.) */
 
 /* Posiciones de los asientos en la mesa (grid 3x3).
    TÚ siempre en Sur (abajo centro). Sentido del juego: el siguiente es
    el de la DERECHA (Este). Rotación antihoraria del juego = horario visual.
-   pos 0 = Sur (humano), pos 1 = Este, pos 2 = Norte, pos 3 = Oeste. */
+   pos 0 = Sur (humano), pos 1 = Este, pos 2 = Norte, pos 3 = Oeste.
+   Los laterales (Este/Oeste) están anclados a la celda del grid, no se
+   estiran con la pantalla: la celda puede ser más ancha, pero el seat
+   queda centrado en ella. */
 .seat.pos-0 { grid-column: 2; grid-row: 3; } /* Sur (abajo) — humano */
 .seat.pos-1 { grid-column: 3; grid-row: 2; } /* Este (derecha) — siguiente */
 .seat.pos-2 { grid-column: 2; grid-row: 1; } /* Norte (arriba) — el de en frente */
 .seat.pos-3 { grid-column: 1; grid-row: 2; } /* Oeste (izquierda) */
 
-/* Panel del seat activo: discreto, sin fondo grande. Solo nombre + acento. */
-.seat {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--fg);
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(13, 79, 60, 0.85);
-  border: 1px solid rgba(255,255,255,0.12);
-  animation: seat-pop 0.25s ease-out;
-  align-self: center;
-  justify-self: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
+/* El bloque original .seat (líneas 362-374) ya no tiene border ni fondo.
+   Solo el humano lleva un box-shadow como anillo de identidad; los demás
+   jugadores aparecen sin marco, y el compañero cambia el color del avatar
+   a azul claro (regla .seat.partner .seat-avatar definida arriba). */
 .seat.you {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent);
+  /* box-shadow: 0 0 0 2px var(--accent); */
   color: var(--accent);
 }
-.seat.winner {
-  border-color: var(--ok);
-}
-/* El humano ganando: oro + halo verde para distinguir "you won" del
-   verde plano que indica que el compañero/otro ganó. */
-.seat.you.winner {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent), 0 0 10px var(--ok);
-}
 .seat.pos-0 { align-self: end; padding-bottom: 8px; }
-.seat.pos-1 { justify-self: end; padding-right: 8px; }
+.seat.pos-1 { justify-self: end; padding-right: 8px; vertical-align: top; }
 .seat.pos-2 { align-self: start; padding-top: 8px; }
 .seat.pos-3 { justify-self: start; padding-left: 8px; }
 .seat-hint {
@@ -533,23 +665,43 @@ body {
    movía las cartas del CENTRO al TOP del board (porque .trick-area tiene
    align-items:center; el top:30px rompía ese centrado). Sumar al offset
    Y es el approach correcto. */
-.trick-card.pos-0 { transform: translate(0, calc(var(--card-w-baza) * 0.95 + 30px)); }    /* Sur: debajo del centro */
-.trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 0.95), 30px); }         /* Este: derecha del centro */
-.trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 30px)); }   /* Norte: encima del centro */
-.trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -0.95), 30px); }        /* Oeste: izquierda del centro */
+.trick-card.pos-0 { transform: translate(0, calc(var(--card-w-baza) * 0.95 + 25px)); }    /* Sur: debajo del centro */
+.trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 1.1), 30px); }         /* Este: derecha del centro */
+.trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 35px)); }   /* Norte: encima del centro */
+.trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -1.1), 30px); }        /* Oeste: izquierda del centro */
 
-/* Carta ganadora del truco: borde dorado + glow */
+/* Carta ganadora del truco: la elevamos al frente del stack y la
+   resaltamos con outline + glow + leve escala. El `z-index` está en el
+   propio `.trick-card.winning` (no en el .card-img interior) porque el
+   `transform` del padre crea un stacking context que aislaría el
+   z-index del hijo. */
+.trick-card.winning { z-index: 3; }
 .trick-card.winning .card-img {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
   box-shadow: 0 0 20px var(--accent), 0 0 8px var(--accent);
   filter: brightness(1.15);
+  /* Scale movido a la regla estática para que pueda transicionar al
+     perder la clase .winning (las @keyframes no "disparan" transitions;
+     necesitamos que el valor sin animar esté en la regla para que el
+     cambio a "sin clase" sea interpolable). */
+  transform: scale(1.08);
+  /* El keyframe pulsa solo el glow (box-shadow), no el transform. */
   animation: winning-pulse 1.2s ease-in-out infinite alternate;
   z-index: 2;
+  /* Transiciones suaves: cuando se quita la clase .winning, el glow,
+     el outline y la escala se desvanecen en lugar de saltar. */
+  transition:
+    transform 0.4s ease-out,
+    box-shadow 0.4s ease-out,
+    outline-color 0.4s ease-out,
+    outline-width 0.4s ease-out,
+    filter 0.4s ease-out;
 }
 @keyframes winning-pulse {
-  from { transform: scale(1); }
-  to { transform: scale(1.08); }
+  /* Solo pulsamos el glow, el scale vive en la regla estática. */
+  from { box-shadow: 0 0 16px var(--accent), 0 0 6px var(--accent); }
+  to   { box-shadow: 0 0 32px var(--accent), 0 0 14px var(--accent); }
 }
 
 /* Las cartas no ganadoras se quedan como están; solo destaca la ganadora. */
@@ -588,29 +740,30 @@ body {
   justify-content: center;
   margin-top: 2px;
 }
-.opp-back {
-  width: var(--card-w-small);
-  height: var(--card-h-small);
-  border-radius: 5px;
-  background-image: url('/cards/sprite/back.png');
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  border: 1.5px solid rgba(255,255,255,0.35);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.45);
-  margin-left: calc(-1 * var(--card-w-small) * 0.6);
-  transition: margin-left 0.2s;
-}
-.opp-back:first-child { margin-left: 0; }
+/* (.opp-back eliminado: el resumen de cartas del oponente usa ahora el
+   SVG inline .opp-icon, no una imagen raster. Las reglas viejas con
+   background-image: url('/cards/sprite/back.png') dejaban la imagen
+   pixelada a tamaño pequeño.) */
 
 /* Seats laterales (Este / Oeste): subimos el seat ENTERO (nombre + marco
    verde de activo + cartas) con transform para que no se alineen
    verticalmente con las cartas de la baza. Si solo subiéramos el
    .opp-hand, el nombre del jugador y el marco de turno se quedarían
-   abajo y habría un hueco entre ellos y las cartas. */
+   abajo y habría un hueco entre ellos y las cartas.
+
+   El valor base (-120px) cubre móvil y escritorio; el media query de
+   escritorio lo sube a -180px (mucho más arriba) para que en pantallas
+   grandes, donde la celda lateral es muy alta, los seats no queden a
+   media tabla sino cerca de la fila del compañero (Norte). */
 .seat.pos-1,
 .seat.pos-3 {
-  transform: translateY(-90px);
+  transform: translateY(-120px);
+}
+@media (min-width: 769px) {
+  .seat.pos-1,
+  .seat.pos-3 {
+    transform: translateY(0px);
+  }
 }
 /* Seats laterales: cartas en horizontal como en el asiento superior,
    con solapamiento negativo a la izquierda. La altura se limita para que
@@ -683,16 +836,19 @@ body {
 .hint-turn { font-size: 11px; font-weight: 600; }
 .action-bar.is-you { color: var(--accent); opacity: 1; }
 
-/* Mano (cartas propias, tocables) */
+/* Mano (cartas propias, tocables). Ahora vive DENTRO del .board, por eso
+   no lleva border-top ni fondo propio (lo hereda del verde del tablero). */
 .hand {
   display: flex;
   justify-content: center;
-  gap: 2px;
-  padding: 4px 4px calc(4px + var(--safe-bottom));
-  background: var(--bg-2);
-  border-top: 1px solid rgba(255,255,255,0.08);
+  gap: 6px;
+  /* padding-top 16px (antes 4px) para que las cartas "playable" con
+     translateY(-12px) no se clipping por el overflow-x:auto (que implícitamente
+     hace overflow-y:auto). 4px de aire sobre la carta levantada. */
+  padding: 16px 4px calc(4px + var(--safe-bottom));
   overflow-x: auto;
-  min-height: calc(var(--card-h) + 12px);
+  min-height: calc(var(--card-h) + 24px);
+  flex-shrink: 0;
 }
 .card-slot {
   background: transparent;
@@ -701,13 +857,23 @@ body {
   cursor: pointer;
   position: relative;
   touch-action: none; /* evita scroll horizontal del navegador durante drag */
+  border-radius: 8px; /* sigue el border-radius de la carta, para que
+                         el box-shadow del .playable forme un marco
+                         rectangular con esquinas redondeadas. */
 }
 /* Sin `transition: transform` para que al reordenar el slot no haga el
    parpadeo de "vuelve a su sitio y luego salta al nuevo". El press
    feedback (:active translateY) se aplica instantáneo, que es OK. */
-.card-slot.playable { transform: translateY(0); }
-.card-slot.playable:active { transform: translateY(4px); }
-.card-slot.disabled { cursor: not-allowed; opacity: 0.4; filter: grayscale(0.6); }
+/* Carta playable: levantada 12px + sombra de profundidad, sin marco
+   amarillo (señalamos "puedes jugar" solo con la elevación).
+   Las cartas no jugables NO se oscurecen ni se desvanecen: el feedback
+   es solo "estas levantadas son las que puedes jugar". */
+.card-slot.playable {
+  transform: translateY(-12px);
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
+}
+.card-slot.playable:active { transform: translateY(-2px); }
+.card-slot.disabled { cursor: not-allowed; }
 .card-slot.disabled:active { transform: none; }
 /* Drag activo: feedback visual para reordenar. */
 .card-slot.is-dragging {
@@ -860,5 +1026,5 @@ body {
    En ≥600 px las cartas crecen y la mesa se centra con un max-width para
    que no quede minúscula en un monitor 4K. La mano del jugador, el mazo
    y las cartas de la baza se redimensionan solas porque usan esas vars.
-   El translateY(-90px) de los seats laterales se vuelve proporcional al
+   El translateY(-120px) de los seats laterales en móvil (-180px en escritorio) se vuelve proporcional al
    tamaño de la carta de baza, si no se desalinean al crecer las cartas. */

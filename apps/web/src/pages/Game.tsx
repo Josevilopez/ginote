@@ -117,9 +117,37 @@ export function Game() {
     }
   }, [view?.version, view?.turn, view?.phase, you, myOptions.mustPass, sendAction]);
 
+  // Highlight de la carta ganadora desacoplado del timer de `justResolved`.
+  // El bug que queríamos evitar: `justResolved` se limpia por su timer de
+  // 4s, pero las cartas de la baza siguen renderizadas hasta que el
+  // servidor envíe el siguiente VIEW con la baza vacía. Eso provocaba un
+  // instante visible de "cartas en mesa pero sin highlight" entre el
+  // timer y el unmount.
+  //
+  // Solución: mantenemos el highlight mientras las cartas de la baza
+  // sigan en pantalla. Solo se limpia cuando `view.trick` se vacía.
+  const [winningKeys, setWinningKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (justResolved !== null) {
+      const keys = justResolved.plays
+        .filter((jp) => jp.seat === justResolved.winner)
+        .map((jp) => `${jp.seat}-${jp.card.id}`);
+      setWinningKeys(new Set(keys));
+    }
+    // Si `justResolved` pasa a null, NO limpiamos aquí — dejamos que el
+    // siguiente effect lo haga cuando `view.trick` se vacíe.
+  }, [justResolved]);
+  useEffect(() => {
+    if (view && view.trick.length === 0) {
+      setWinningKeys(new Set());
+    }
+  }, [view?.trick.length]);
+
   // Gestiona el ciclo de vida de customOrder cuando el servidor actualiza la mano:
-  // - Si las cartas no encajan (IDs nuevos ⇒ nueva mano) → reset a null.
-  // - Si solo desaparece 1 carta (jugada propia/aliada) → la quitamos del orden.
+  // - Si la mano creció (carta nueva) → mantenemos el orden del jugador y
+  //   añadimos la nueva al final (antes se reseteaba y perdía el orden).
+  // - Si la mano encogió (carta jugada) → quitamos esa carta del orden.
+  // - Si los IDs no encajan en absoluto (nueva mano) → reset a null.
   // - Si la mano está intacta → mantenemos el orden.
   // También cancelamos cualquier drag en curso al cambiar la mano.
   useEffect(() => {
@@ -131,17 +159,45 @@ export function Game() {
     }
     const handIds = new Set(view.hand.map((c) => c.id));
     const filtered = customOrder.filter((id) => handIds.has(id));
+
+    // Caso 1: mano creció → preservamos el orden del jugador y añadimos
+    // las cartas nuevas al final. Antes caía al else y reseteaba a null.
+    if (view.hand.length > customOrder.length) {
+      const customOrderSet = new Set(customOrder);
+      const newIds = view.hand
+        .filter((c) => !customOrderSet.has(c.id))
+        .map((c) => c.id);
+      setCustomOrder([...customOrder, ...newIds]);
+      setDragVisual(null);
+      dragRef.current = null;
+      return;
+    }
+
+    // Sin cambios
     if (filtered.length === customOrder.length && filtered.length === view.hand.length) {
       return;
     }
+    // Caso 2: mano encogió (carta jugada)
     if (filtered.length === view.hand.length) {
       setCustomOrder(filtered);
     } else {
+      // Caso 3: mano completamente nueva
       setCustomOrder(null);
     }
     setDragVisual(null);
     dragRef.current = null;
   }, [view?.hand]);
+
+  // Cartas legales de mi mano (heurística cliente). `computeLegalSet` no es
+  // un hook, así que podría declararse post-early-return, pero como abajo lo
+  // necesitamos dentro de `hasRestrictedHand` (otro hook), lo movemos aquí.
+  const legalSet = computeLegalSet(view, you);
+  // Mano restringida = al menos UNA carta no es legal. Si toda la mano es
+  // legal, no resaltamos ninguna para no sobrecargar de marcos.
+  const hasRestrictedHand = useMemo(
+    () => displayCards.some((c) => !legalSet.has(c.id)),
+    [displayCards, legalSet],
+  );
 
   if (!view || you === null) {
     return <div className="loading">Conectando a la mesa…</div>;
@@ -154,7 +210,8 @@ export function Game() {
   // Cartas legales (heurística cliente para resaltar). Como no tenemos acceso
   // al motor en el bundle, usamos la misma lógica de legalPlays. Para esta
   // primera versión, en draw todo es legal; en arrastre seguimos palo.
-  const legalSet = computeLegalSet(view, you);
+  // (Movido arriba del early return para que `hasRestrictedHand` pueda
+  //  leerlo dentro del useMemo. La función `computeLegalSet` no es un hook.)
 
   const onPlay = (card: Card) => {
     if (!isMyTurn) return;
@@ -201,29 +258,40 @@ export function Game() {
       {/* Solo se renderiza el seat activo, en la celda de su posición.
           Cuando cambia el turno, el panel "salta" a otra celda. */}
       <div className="board">
-        {/* Todos los seats muestran sus cartas boca abajo, incluido el humano.
-            El acento (borde dorado) marca quién tiene el turno. El humano no
-            muestra la baraja de dorsos porque sus cartas están en .hand. */}
+        <div className="seats-area">
+          {/* Todos los seats muestran sus cartas boca abajo, incluido el humano.
+              El acento (borde dorado) marca quién tiene el turno. El humano no
+              muestra la baraja de dorsos porque sus cartas están dentro del
+              propio tablero (no en un div separado). */}
         {([0, 1, 2, 3] as const).map((seat) => {
           const pos = ((seat - you + 4) % 4) as 0 | 1 | 2 | 3;
           const isActive = view.turn === seat;
           const count = view.handCounts[seat] ?? 0;
           const isYou = seat === you;
+          // Iniciales para el avatar: primera letra de las dos primeras
+          // palabras del nombre. "Bot 4" → "B4", "Bot 2" → "B2", "Norte" → "N".
+          // Para el humano usamos "T" de "Tú".
+          const displayName = isYou ? 'Tú' : seatNames[seat] || SEAT_LABELS[seat];
+          const parts = displayName.trim().split(/\s+/);
+          const first = (parts[0] ?? '').charAt(0);
+          const second = parts.length >= 2 ? (parts[1] ?? '').charAt(0) : '';
+          const initials = isYou ? 'T' : (first + second).toUpperCase() || '?';
           return (
             <div
               key={seat}
-              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''}`}
+              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''}`}
             >
+              <div className="seat-avatar">{initials}</div>
               <div className="seat-name">
-                {isBot[seat] && !isYou && '🤖 '}
-                {isYou ? 'Tú' : seatNames[seat] || SEAT_LABELS[seat]}
+                {displayName}
                 {view.lastWinner === seat && ' 👑'}
               </div>
               {!isYou && (
-                <div className="opp-hand">
-                  {Array.from({ length: count }).map((_, i) => (
-                    <div key={i} className="opp-back" style={{ ['--i' as string]: i } as React.CSSProperties} />
-                  ))}
+                <div className="opp-summary">
+                  <svg className="opp-icon" viewBox="0 0 24 32" aria-hidden="true">
+                    <rect x="4" y="4" width="16" height="24" rx="2" fill="#4338ca" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" />
+                  </svg>
+                  <span className="opp-count">{count} cartas</span>
                 </div>
               )}
             </div>
@@ -243,12 +311,12 @@ export function Game() {
           {view.trick.map((p) => {
             // Misma rotación que los seats: pos 0 = Sur (humano), 1 = Oeste, 2 = Norte, 3 = Este.
             const pos = ((p.seat - you + 4) % 4) as 0 | 1 | 2 | 3;
-            // Ganadora durante la pausa de la baza resuelta. Las demás se
-            // quedan como están, sin atenuar.
-            const isWinner =
-              justResolved !== null &&
-              justResolved.winner === p.seat &&
-              justResolved.plays.some((jp) => jp.card.id === p.card.id);
+            // Ganadora: depende de `winningKeys` (estado local), no de
+            // `justResolved` directamente, para que el highlight NO se
+            // quite cuando el timer de 4s limpia `justResolved` — debe
+            // persistir mientras las cartas sigan en pantalla. Las demás
+            // se quedan como están, sin atenuar.
+            const isWinner = winningKeys.has(`${p.seat}-${p.card.id}`);
             return (
               <div
                 key={`${p.seat}-${p.card.id}`}
@@ -259,161 +327,167 @@ export function Game() {
             );
           })}
         </div>
-      </div>
+        </div>
 
-      {/* Acciones: cantes, cambio del 7, o mensaje de turno (discreto) */}
-      <div className={`action-bar ${isMyTurn && view.phase !== 'finished' ? 'is-you' : ''}`}>
-        {view.phase === 'finished' ? (
-          <div className="hint-turn">Mano terminada</div>
-        ) : !isMyTurn ? (
-          <div className="hint-turn">
-            {view.turn !== null ? `esperando a ${seatNames[view.turn] ?? '…'}` : '…'}
-          </div>
-        ) : view.phase === 'winnerWindow' ? (
-          myOptions.cantes.length > 0 || myOptions.canSwapSeven ? (
-            <div className="action-buttons">
-              {myOptions.cantes.map((c) => (
-                <button
-                  key={c.suit}
-                  className="btn primary small"
-                  onClick={() => sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] })}
-                >
-                  Canto {SUIT_GLYPH[c.suit]} +{c.value}
-                </button>
-              ))}
-              {myOptions.canSwapSeven && (
-                <button
-                  className="btn primary small"
-                  onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
-                >
-                  Cambio el 7
-                </button>
-              )}
-              <button
-                className="btn small"
-                onClick={() => sendAction({ type: 'PASS' })}
-              >
-                Nada
-              </button>
-            </div>
-          ) : (
-            <div className="hint-turn">…</div>
-          )
-        ) : (
-          <div className="hint-turn">tu turno · toca una carta</div>
-        )}
-      </div>
-
-      <div className="hand" ref={handRef}>
-        {displayCards.map((c, idx) => {
-          const isDraggingThis = dragVisual?.idx === idx;
-          // Mientras arrastramos, la carta traducida no desplaza a las demás.
-          // El "snap" a la posición nueva se hace en el reorder (post-up).
-          const style: CSSProperties | undefined = isDraggingThis
-            ? {
-                transform: `translateX(${dragVisual!.offsetX}px) translateY(-6px)`,
-                zIndex: 10,
-                cursor: 'grabbing',
-              }
-            : undefined;
-          return (
-            <button
-              key={c.id}
-              ref={(el) => { slotRefs.current[idx] = el; }}
-              className={`card-slot ${isMyTurn && legalSet.has(c.id) ? 'playable' : 'disabled'} ${isDraggingThis ? 'is-dragging' : ''}`}
-              style={style}
-              aria-label={`${c.rank} de ${c.suit}`}
-              onPointerDown={(e) => {
-                // Permitimos drag-to-reorder SIEMPRE, incluso cuando no es
-                // nuestro turno: la mano es del jugador y puede organizarla
-                // cuando quiera. El click-para-jugar sigue bloqueado vía
-                // onPlay (que comprueba isMyTurn y la legalidad).
-                if (!legalSet.has(c.id)) return;
-                e.preventDefault();
-                (e.currentTarget as Element).setPointerCapture(e.pointerId);
-                dragRef.current = { idx, startX: e.clientX, pointerId: e.pointerId };
-                setDragVisual({ idx, offsetX: 0 });
-              }}
-              onPointerMove={(e) => {
-                const d = dragRef.current;
-                if (!d || d.idx !== idx) return;
-                setDragVisual({ idx, offsetX: e.clientX - d.startX });
-              }}
-              onPointerUp={(e) => {
-                const d = dragRef.current;
-                dragRef.current = null;
-                setDragVisual(null);
-                if (!d || d.idx !== idx || !handRef.current) return;
-                try { (e.currentTarget as Element).releasePointerCapture(d.pointerId); } catch { /* ignore */ }
-                const offsetX = e.clientX - d.startX;
-                const DRAG_THRESHOLD = 5;
-                if (Math.abs(offsetX) > DRAG_THRESHOLD) {
-                  // Regla con centros como ancla (simétrica izq/der):
-                  // 1) Encontrar la carta no-arrastrada cuyo CENTRO esté más
-                  //    cerca del cursor.
-                  // 2) Si `cursorX < center` → cae ANTES de esa carta.
-                  // 3) Si `cursorX >= center` → cae DESPUÉS (= antes de la
-                  //    siguiente carta, o al final si es la última).
-                  // Así, la "mitad izquierda" del slot de cada carta es zona
-                  // de "antes" y la "mitad derecha" es zona de "después":
-                  // arrastras a la izquierda y caes antes; a la derecha y
-                  // caes después, sin saltos inexplicables.
-                  const cursorX = e.clientX;
-                  type SlotInfo = { cardId: string; center: number };
-                  const slots: SlotInfo[] = [];
-                  for (let i = 0; i < slotRefs.current.length; i++) {
-                    if (i === idx) continue; // la arrastrada tiene transform
-                    const el = slotRefs.current[i];
-                    if (!el || !el.isConnected) continue;
-                    const r = el.getBoundingClientRect();
-                    slots.push({
-                      cardId: displayCards[i]!.id,
-                      center: r.left + r.width / 2,
-                    });
-                  }
-                  if (slots.length === 0) {
-                    setDragVisual(null);
-                    dragRef.current = null;
-                    return;
-                  }
-                  // Carta con centro más cercano al cursor.
-                  let bestIdx = 0;
-                  let bestDist = Math.abs(slots[0]!.center - cursorX);
-                  for (let i = 1; i < slots.length; i++) {
-                    const d = Math.abs(slots[i]!.center - cursorX);
-                    if (d < bestDist) {
-                      bestDist = d;
-                      bestIdx = i;
-                    }
-                  }
-                  // ¿Cursor a la izquierda o derecha del centro más cercano?
-                  const insertAt =
-                    cursorX < slots[bestIdx]!.center
-                      ? bestIdx // antes
-                      : bestIdx + 1; // después
-                  // Construir el nuevo orden.
-                  const movedId = displayCards[idx]!.id;
-                  const newOrder: string[] = [];
-                  for (let i = 0; i <= slots.length; i++) {
-                    if (i === insertAt) newOrder.push(movedId);
-                    if (i < slots.length) newOrder.push(slots[i]!.cardId);
-                  }
-                  setCustomOrder(newOrder);
-                } else {
-                  // Tap (sin arrastre significativo) → jugar la carta.
-                  onPlay(c);
+        {/* Las cartas del jugador humano se renderizan DENTRO del tablero
+            (no en un .hand sibling). Esto simplifica el layout: el board
+            es el único contenedor del juego. */}
+        <div className="hand" ref={handRef}>
+          {/* Solo marcamos cartas como `playable` (marco amarillo + elevación)
+              cuando la mano está RESTRINGIDA: al menos una carta no es legal.
+              Si TODAS son jugables, no marcamos ninguna para no sobrecargar
+              la mano con marcos amarillos. */}
+          {displayCards.map((c, idx) => {
+            const isDraggingThis = dragVisual?.idx === idx;
+            // Mientras arrastramos, la carta traducida no desplaza a las demás.
+            // El "snap" a la posición nueva se hace en el reorder (post-up).
+            const style: CSSProperties | undefined = isDraggingThis
+              ? {
+                  transform: `translateX(${dragVisual!.offsetX}px) translateY(-6px)`,
+                  zIndex: 10,
+                  cursor: 'grabbing',
                 }
-              }}
-              onPointerCancel={() => {
-                dragRef.current = null;
-                setDragVisual(null);
-              }}
-            >
-              <CardView card={c} />
-            </button>
-          );
-        })}
+              : undefined;
+            return (
+              <button
+                key={c.id}
+                ref={(el) => { slotRefs.current[idx] = el; }}
+                className={`card-slot ${isMyTurn && hasRestrictedHand && legalSet.has(c.id) ? 'playable' : isMyTurn && hasRestrictedHand && !legalSet.has(c.id) ? 'disabled' : ''} ${isDraggingThis ? 'is-dragging' : ''}`}
+                style={style}
+                aria-label={`${c.rank} de ${c.suit}`}
+                onPointerDown={(e) => {
+                  // Permitimos drag-to-reorder SIEMPRE, incluso cuando no es
+                  // nuestro turno: la mano es del jugador y puede organizarla
+                  // cuando quiera. El click-para-jugar sigue bloqueado vía
+                  // onPlay (que comprueba isMyTurn y la legalidad).
+                  if (!legalSet.has(c.id)) return;
+                  e.preventDefault();
+                  (e.currentTarget as Element).setPointerCapture(e.pointerId);
+                  dragRef.current = { idx, startX: e.clientX, pointerId: e.pointerId };
+                  setDragVisual({ idx, offsetX: 0 });
+                }}
+                onPointerMove={(e) => {
+                  const d = dragRef.current;
+                  if (!d || d.idx !== idx) return;
+                  setDragVisual({ idx, offsetX: e.clientX - d.startX });
+                }}
+                onPointerUp={(e) => {
+                  const d = dragRef.current;
+                  dragRef.current = null;
+                  setDragVisual(null);
+                  if (!d || d.idx !== idx || !handRef.current) return;
+                  try { (e.currentTarget as Element).releasePointerCapture(d.pointerId); } catch { /* ignore */ }
+                  const offsetX = e.clientX - d.startX;
+                  const DRAG_THRESHOLD = 5;
+                  if (Math.abs(offsetX) > DRAG_THRESHOLD) {
+                    // Regla con centros como ancla (simétrica izq/der):
+                    // 1) Encontrar la carta no-arrastrada cuyo CENTRO esté más
+                    //    cerca del cursor.
+                    // 2) Si `cursorX < center` → cae ANTES de esa carta.
+                    // 3) Si `cursorX >= center` → cae DESPUÉS (= antes de la
+                    //    siguiente carta, o al final si es la última).
+                    // Así, la "mitad izquierda" del slot de cada carta es zona
+                    // de "antes" y la "mitad derecha" es zona de "después":
+                    // arrastras a la izquierda y caes antes; a la derecha y
+                    // caes después, sin saltos inexplicables.
+                    const cursorX = e.clientX;
+                    type SlotInfo = { cardId: string; center: number };
+                    const slots: SlotInfo[] = [];
+                    for (let i = 0; i < slotRefs.current.length; i++) {
+                      if (i === idx) continue; // la arrastrada tiene transform
+                      const el = slotRefs.current[i];
+                      if (!el || !el.isConnected) continue;
+                      const r = el.getBoundingClientRect();
+                      slots.push({
+                        cardId: displayCards[i]!.id,
+                        center: r.left + r.width / 2,
+                      });
+                    }
+                    if (slots.length === 0) {
+                      setDragVisual(null);
+                      dragRef.current = null;
+                      return;
+                    }
+                    // Carta con centro más cercano al cursor.
+                    let bestIdx = 0;
+                    let bestDist = Math.abs(slots[0]!.center - cursorX);
+                    for (let i = 1; i < slots.length; i++) {
+                      const d = Math.abs(slots[i]!.center - cursorX);
+                      if (d < bestDist) {
+                        bestDist = d;
+                        bestIdx = i;
+                      }
+                    }
+                    // ¿Cursor a la izquierda o derecha del centro más cercano?
+                    const insertAt =
+                      cursorX < slots[bestIdx]!.center
+                        ? bestIdx // antes
+                        : bestIdx + 1; // después
+                    // Construir el nuevo orden.
+                    const movedId = displayCards[idx]!.id;
+                    const newOrder: string[] = [];
+                    for (let i = 0; i <= slots.length; i++) {
+                      if (i === insertAt) newOrder.push(movedId);
+                      if (i < slots.length) newOrder.push(slots[i]!.cardId);
+                    }
+                    setCustomOrder(newOrder);
+                  } else {
+                    // Tap (sin arrastre significativo) → jugar la carta.
+                    onPlay(c);
+                  }
+                }}
+                onPointerCancel={() => {
+                  dragRef.current = null;
+                  setDragVisual(null);
+                }}
+              >
+                <CardView card={c} />
+              </button>
+            );
+          })}
+        </div>
       </div>
+
+      {/* Acciones: solo se muestra el panel cuando hay decisiones que tomar
+          (cantes o cambio del 7). Se eliminaron los hint-turn
+          ("esperando a…", "tu turno · toca una carta", "Mano terminada")
+          — el turno activo ya se indica con el anillo del .seat.active en
+          el tablero, y el jugador sabe cuándo le toca porque sus cartas
+          se levantan con marco amarillo. */}
+      {isMyTurn && view.phase === 'winnerWindow' && (myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (
+        <div className={`action-bar is-you`}>
+          <div className="action-buttons">
+            {myOptions.cantes.map((c) => (
+              <button
+                key={c.suit}
+                className="btn primary small"
+                onClick={() => sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] })}
+              >
+                Canto {SUIT_GLYPH[c.suit]} +{c.value}
+              </button>
+            ))}
+            {myOptions.canSwapSeven && (
+              <button
+                className="btn primary small"
+                onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
+              >
+                Cambio el 7
+              </button>
+            )}
+            <button
+              className="btn small"
+              onClick={() => sendAction({ type: 'PASS' })}
+            >
+              Nada
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* El .hand ahora vive DENTRO del .board (más arriba). El bloque
+          antiguo se eliminó al migrar; el contenedor top-level .hand
+          ya no existe en este árbol. */}
+
 
       {matchOver && (
         <div className="match-over">
@@ -466,9 +540,10 @@ export function Game() {
 const SUIT_GLYPH = { oros: '●', copas: '♥', espadas: '♠', bastos: '♣' } as const;
 const STRENGTH = [1, 3, 12, 10, 11, 7, 6, 5, 4, 2] as const;
 
-function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you: number): Set<string> {
+function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you: number | null): Set<string> {
   const set = new Set<string>();
   if (!view) return set;
+  if (you === null) return set;
   if (view.trumpCard !== null) {
     // draw: todo legal
     for (const c of view.hand) set.add(c.id);
