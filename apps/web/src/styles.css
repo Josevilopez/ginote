@@ -742,7 +742,7 @@ body {
 }
 /* (.opp-back eliminado: el resumen de cartas del oponente usa ahora el
    SVG inline .opp-icon, no una imagen raster. Las reglas viejas con
-   background-image: url('/cards/sprite/back.png') dejaban la imagen
+   background-image: url('/cards/sprite/reverso.png') dejaban la imagen
    pixelada a tamaño pequeño.) */
 
 /* Seats laterales (Este / Oeste): subimos el seat ENTERO (nombre + marco

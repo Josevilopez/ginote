@@ -7,17 +7,19 @@ interface Props {
 }
 
 /**
- * Mapeo: rank → id de la imagen. Solo se usan 1-7, 10, 11, 12 en guiñote.
+ * Formato de los sprites: `{rank zero-padded}-{suit}.png` (p.ej. `01-oros.png`,
+ * `12-bastos.png`). El dorso es `reverso.png`. El motor solo usa ranks 1-7 y
+ * 10-12, pero los sprites 08 y 09 también están en el directorio por si se
+ * amplia el juego.
  */
-const RANK_NAME: Record<number, string> = {
-  1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7',
-  10: '10', 11: '11', 12: '12',
-};
+function spriteFileName(rank: number, suit: string): string {
+  return `${String(rank).padStart(2, '0')}-${suit}`;
+}
 
 export function CardView({ card, faceDown, small }: Props) {
   const fileName = faceDown
-    ? 'back'
-    : `${card.suit}-${RANK_NAME[card.rank] ?? card.rank}`;
+    ? 'reverso'
+    : spriteFileName(card.rank, card.suit);
   return (
     <img
       className={`card-img ${small ? 'small' : ''}`}

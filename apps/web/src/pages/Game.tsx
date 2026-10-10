@@ -609,13 +609,8 @@ function currentWinnerIndex(plays: readonly { card: Card }[], trump: string): nu
  *  - Pila de dorsos encima, tapando la otra mitad.
  * Solo se renderiza durante la fase de robo (cuando trumpCard es visible).
  */
-const RANK_FILE_NAME: Record<number, string> = {
-  1: '1', 2: '2', 3: '3', 4: '4', 5: '5', 6: '6', 7: '7',
-  10: '10', 11: '11', 12: '12',
-};
-
 function MazoArea({ trumpCard }: { trumpCard: Card }) {
-  const fileName = `${trumpCard.suit}-${RANK_FILE_NAME[trumpCard.rank] ?? trumpCard.rank}`;
+  const fileName = `${String(trumpCard.rank).padStart(2, '0')}-${trumpCard.suit}`;
   return (
     <div className="mazo-area" aria-hidden="true">
       <img
@@ -624,9 +619,9 @@ function MazoArea({ trumpCard }: { trumpCard: Card }) {
         alt={`Triunfo: ${trumpCard.rank} de ${trumpCard.suit}`}
       />
       <div className="mazo-deck">
-        <img className="mazo-deck-card" src="/cards/sprite/back.png" alt="" />
-        <img className="mazo-deck-card" src="/cards/sprite/back.png" alt="" />
-        <img className="mazo-deck-card" src="/cards/sprite/back.png" alt="" />
+        <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
+        <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
+        <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
       </div>
     </div>
   );
