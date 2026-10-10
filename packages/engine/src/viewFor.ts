@@ -17,6 +17,10 @@ export interface PlayerView {
   readonly phase: GameState['phase'];
   readonly turn: Seat | null;
   readonly leader: Seat;
+  /** Asiento que ha repartido esta mano. Necesario para que el cliente
+   *  pueda anticipar quién reparte la siguiente sin re-derivar la rotación
+   *  (el motor y la UI comparten la misma regla vía `nextDealer`). */
+  readonly dealer: Seat;
   readonly trump: GameState['trump'];
   readonly trumpCard: Card | null; // visible en draw
   readonly hand: readonly Card[]; // tu mano
@@ -24,7 +28,7 @@ export interface PlayerView {
   readonly trick: readonly Play[];
   readonly finishedTricks: readonly { winner: Seat; points: number; plays: readonly Play[] }[];
   readonly trickPoints: Record<0 | 1, number>;
-  readonly cantes: readonly { team: 0 | 1; suit: GameState['trump']; value: number }[];
+  readonly cantes: readonly { seat: Seat; team: 0 | 1; suit: GameState['trump']; value: number }[];
   readonly lastWinner: Seat | null;
   readonly partner: Seat;
   readonly lastTrickBonus: number;
@@ -50,6 +54,7 @@ export function viewFor(state: GameState, seat: Seat): PlayerView {
     phase: state.phase,
     turn: state.turn,
     leader: state.leader,
+    dealer: state.dealer,
     trump: state.trump,
     trumpCard: state.trumpCard,
     hand: state.hands[seat]!.slice(),
@@ -61,7 +66,7 @@ export function viewFor(state: GameState, seat: Seat): PlayerView {
       plays: t.plays,
     })),
     trickPoints: { ...state.trickPoints },
-    cantes: state.cantes.map((c) => ({ team: c.team, suit: c.suit, value: c.value })),
+    cantes: state.cantes.map((c) => ({ seat: c.seat, team: c.team, suit: c.suit, value: c.value })),
     lastWinner: state.lastWinner,
     partner: partnerOf(seat),
     lastTrickBonus: state.rules.lastTrickBonus,

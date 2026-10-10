@@ -1,4 +1,33 @@
-import type { Rank } from './types.js';
+import type { Card, Rank, Seat } from './types.js';
+
+/**
+ * Ranks del triunfo que SÍ permiten cambiar el 7 (carta superior a 7 en
+ * el orden de fuerza del guiñote aragonés). Si el triunfo visible es de
+ * otro rango (2, 4, 5, 6, 7), el cambio NO procede — no tiene sentido
+ * soltar el 7 (que captura la baza) a cambio de una carta peor.
+ */
+export const SWAP_ELIGIBLE_RANKS: ReadonlySet<Rank> = new Set<Rank>([
+  1, 3, 10, 11, 12,
+]);
+
+/** ¿La carta de triunfo visible permite hacer el cambio del 7? */
+export function canSwapSevenWithTrump(trumpCard: Card | null): boolean {
+  return trumpCard !== null && SWAP_ELIGIBLE_RANKS.has(trumpCard.rank);
+}
+
+/**
+ * Regla del guiñote aragonés para el dealer de la siguiente mano: el
+ * ganador de la última baza de la mano que acaba de terminar (regla típica
+ * de "el que corta, reparte"). Se aplica a TODAS las transiciones entre
+ * manos (idas → vueltas y dentro de vueltas), no rota.
+ *
+ * Si por alguna razón no hay última baza registrada (no debería ocurrir en
+ * juego real porque cada mano tiene 10 trucos), `fallbackDealer` se usa
+ * como red de seguridad.
+ */
+export function nextDealer(lastTrickWinner: Seat | null, fallbackDealer: Seat): Seat {
+  return lastTrickWinner ?? fallbackDealer;
+}
 
 /**
  * Configuración de reglas. La idea es que motor y tests carguen una `RulesConfig`

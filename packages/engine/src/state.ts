@@ -33,6 +33,8 @@ export interface FinishedTrick {
 }
 
 export interface Cante {
+  /** Asiento que cantó (necesario para anunciar "Bot X canta Y"). */
+  readonly seat: Seat;
   readonly team: 0 | 1;
   readonly suit: Suit;
   readonly pair: readonly [number, number];
@@ -109,7 +111,7 @@ export type GameEvent =
   | { type: 'HAND_DEALT'; dealer: Seat; leader: Seat; trump: Suit; trumpCard: Card }
   | { type: 'CARD_PLAYED'; seat: Seat; card: Card }
   | { type: 'TRICK_RESOLVED'; winner: Seat; points: number; isLastTrick: boolean }
-  | { type: 'CANTE_DECLARED'; team: 0 | 1; suit: Suit; pair: readonly [number, number]; value: number }
+  | { type: 'CANTE_DECLARED'; seat: Seat; team: 0 | 1; suit: Suit; pair: readonly [number, number]; value: number }
   | { type: 'SEVEN_SWAPPED'; seat: Seat; taken: Card; given: Card }
   | { type: 'CARD_DRAWN'; seat: Seat; card: Card }
   | { type: 'HAND_FINISHED'; trickPoints: Record<0 | 1, number>; cantes: Cante[]; lastTrickBonus: number; score: PartidaScore; vuelta: number }

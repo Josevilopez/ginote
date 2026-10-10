@@ -2,8 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useGame } from '../store.js';
 import { CardView } from '../components/CardView.js';
-import { SuitGlyph } from '../components/SuitGlyph.js';
-import type { Card, Suit } from '@guinote/engine';
+import { card, teamOf, nextSeat, canSwapSevenWithTrump, nextDealer } from '@guinote/engine';
+import type { Card, PlayerView, Seat, Suit } from '@guinote/engine';
+
+const SUIT_NAME: Record<Suit, string> = {
+  oros: 'Oros',
+  copas: 'Copas',
+  espadas: 'Espadas',
+  bastos: 'Bastos',
+};
 
 const SEAT_LABELS = ['Norte', 'Oeste', 'Sur', 'Este'] as const;
 
@@ -19,15 +26,20 @@ function fmtPts(pts: number): string {
 }
 
 /**
- * Formato del marcador de puntuación (suma raw de teamPts).
- * Aplica la regla del guiñote aragonés:
- *  - ≤ 50 → "X M" (rango de malas)
- *  - > 50 → "(X-50) B" (rango de buenas, exceso sobre 50)
- * 30 puntos → "30 M". 70 puntos → "20 B". 130 puntos → "80 B".
+ * Marcador del topbar (`score.buenas`): número entero directo, sin
+ * transformación. Antes leíamos `cumulativeTeamPts` (la suma raw de
+ * cartas + 10 últimas + cantes), pero esa métrica iba descaminada
+ * respecto a la condición de victoria del motor (`score.buenas > 50`):
+ * el mismo concepto de "Buenas" debe verse en la cabecera que
+ * dispara el fin de partida. Ahora ambos lados hablan el mismo idioma
+ * y "pintar 51" en el topbar implica `51 > 50` → MATCH_OVER al
+ * instante.
+ *  - score.buenas ≤ 50 → clase `in-malas` (rojo): todavía no se ha
+ *    cruzado el umbral.
+ *  - score.buenas > 50 → clase `in-buenas` (blanco): partida cerrada.
  */
 function fmtScore(value: number): string {
-  if (value > 50) return `${value - 50} B`;
-  return `${value} M`;
+  return `${value}`;
 }
 
 /** Clase CSS según el tramo (≤ 50 = malas, > 50 = buenas). */
@@ -44,6 +56,7 @@ export function Game() {
   const matchOver = useGame((s) => s.matchOver);
   const justResolved = useGame((s) => s.justResolved);
   const sendAction = useGame((s) => s.sendAction);
+  const requestNextHand = useGame((s) => s.requestNextHand);
   const leave = useGame((s) => s.leave);
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
@@ -65,23 +78,30 @@ export function Game() {
       return { phase: view?.phase ?? 'idle', plays: [], cantes: [], canSwapSeven: false, mustPass: false };
     }
     const cantes: { suit: Card['suit']; value: number }[] = [];
-    if (view.trumpCard !== null) {
-      // fase de robo: solo ganador/compañero pueden cantar
-      const can = view.lastWinner === you || view.lastWinner === view.partner;
-      if (can) {
-        const [r1, r2] = [10, 12];
-        for (const suit of ['oros', 'copas', 'espadas', 'bastos'] as Card['suit'][]) {
-          if (view.cantes.some((c) => c.suit === suit)) continue;
-          const has1 = view.hand.some((c) => c.suit === suit && c.rank === r1);
-          const has2 = view.hand.some((c) => c.suit === suit && c.rank === r2);
-          if (has1 && has2) {
-            cantes.push({ suit, value: suit === view.trump ? 40 : 20 });
-          }
+    // ¿Quién puede cantar AHORA? Igual que el motor:
+    //  - Hay que haber ganado la última baza (o ser compañero del ganador),
+    //    TANTO en winnerWindow COMO en arrastre.
+    //  - El flag `allowedInArrastre` (siempre true en guiñote aragonés)
+    //    decide si los cantes se admiten en arrastre.
+    const lastWinner = view.lastWinner;
+    const winnerOrPartner =
+      lastWinner !== null && (lastWinner === you || lastWinner === view.partner);
+    const inArrastre = view.trumpCard === null;
+    const canCanteNow =
+      winnerOrPartner && (!inArrastre || true /* allowedInArrastre: true por defecto */);
+    if (canCanteNow) {
+      const [r1, r2] = [10, 12];
+      for (const suit of ['oros', 'copas', 'espadas', 'bastos'] as Card['suit'][]) {
+        if (view.cantes.some((c) => c.suit === suit)) continue;
+        const has1 = view.hand.some((c) => c.suit === suit && c.rank === r1);
+        const has2 = view.hand.some((c) => c.suit === suit && c.rank === r2);
+        if (has1 && has2) {
+          cantes.push({ suit, value: suit === view.trump ? 40 : 20 });
         }
       }
     }
     const canSwap =
-      view.trumpCard !== null &&
+      canSwapSevenWithTrump(view.trumpCard) &&
       view.lastWinner !== null &&
       (view.lastWinner === you || view.lastWinner === view.partner) &&
       view.hand.some((c) => c.id === `${view.trump}-7`);
@@ -116,6 +136,49 @@ export function Game() {
       return () => clearTimeout(t);
     }
   }, [view?.version, view?.turn, view?.phase, you, myOptions.mustPass, sendAction]);
+
+  // ───────────── Anuncio de cante (overlay central) ─────────────
+  // Cuando se declara un cante nuevo, mostramos un overlay centrado con
+  // el nombre del jugador, el equipo y el valor (40 o 20) durante 3,5 s,
+  // para que TODOS los jugadores lo vean en su pantalla. Sustituye al
+  // toast anterior y al "Cantes" del antiguo resumen de mano, con foco en
+  // visibilidad inmediata en el centro del tablero.
+  const [canteAnnouncement, setCanteAnnouncement] = useState<{
+    uid: number;
+    seat: Seat;
+    team: 0 | 1;
+    suit: Suit;
+    value: number;
+  } | null>(null);
+  // Cuenta de cantes que ya hemos anunciado. Incrementamos solo cuando
+  // `view.cantes.length` crece; al pasar a 0 (nueva mano) reseteamos.
+  const lastCantesCountRef = useRef(0);
+  useEffect(() => {
+    if (!view) return;
+    const cur = view.cantes.length;
+    const prev = lastCantesCountRef.current;
+    if (cur > prev) {
+      const last = view.cantes[cur - 1]!;
+      setCanteAnnouncement({
+        uid: performance.now(),
+        seat: last.seat,
+        team: last.team,
+        suit: last.suit,
+        value: last.value,
+      });
+      lastCantesCountRef.current = cur;
+    } else if (cur === 0 && prev > 0) {
+      // Nueva mano: el motor resetea `state.cantes` al repartir.
+      lastCantesCountRef.current = 0;
+    }
+  }, [view?.cantes, view]);
+  // Auto-clear al cabo de 3,5 s. Si llega otro cante mientras tanto,
+  // `uid` cambia y este effect se re-ejecuta con un timer nuevo.
+  useEffect(() => {
+    if (!canteAnnouncement) return;
+    const id = window.setTimeout(() => setCanteAnnouncement(null), 3500);
+    return () => window.clearTimeout(id);
+  }, [canteAnnouncement?.uid]);
 
   // Highlight de la carta ganadora desacoplado del timer de `justResolved`.
   // El bug que queríamos evitar: `justResolved` se limpia por su timer de
@@ -225,32 +288,79 @@ export function Game() {
       {/* Header: triunfo + puntos + salir */}
       <header className="topbar">
         <div className="trump-info">
-          <span className="trump-label">Triunfo</span>
-          <span className="trump-suit" data-suit={view.trump}>
-            <SuitGlyph suit={view.trump} size={20} />
-          </span>
-          {!view.trumpCard && <span className="trump-card-gone">arrastre</span>}
-          {/* La carta de triunfo ahora se muestra en el mazo de la mesa (abajo). */}
+          {/* Solo el As del palo del triunfo, con un anillo del color del
+              palo. Los otros tres Ases no se renderizan: "marca el triunfo"
+              debe leerse como "el As del triunfo", no como "uno entre cuatro". */}
+          <div className="trump-mini" data-suit={view.trump} aria-hidden="true">
+            <CardView card={card(view.trump, 1)} small />
+          </div>
+          <div className="trump-text">
+            <span className="trump-label">Triunfo</span>
+            <span className="trump-name" data-suit={view.trump}>
+              {SUIT_NAME[view.trump]}
+            </span>
+            {!view.trumpCard && <span className="trump-card-gone">arrastre</span>}
+          </div>
         </div>
         <div className="score">
-          {/* Fase primero (Idas / Vueltas), luego marcador. */}
+          {/* Marcadores en vertical: número grande arriba, "Nosotros"/"Ellos"
+              debajo. La fase (Idas / Vueltas) queda centrada entre ambos.
+
+              Fuente del número (en vivo, escala consistente entre manos):
+              - Mano en curso (`phase !== 'finished'`): el motor aún no ha
+                sumado la mano actual al `score.buenas` del partido. El
+                marcador = `score.buenas` (lo acumulado de manos previas,
+                preservado vía `continuation` en `newHand`) + la
+                contribución viva de la mano actual, aproximada como
+                `max(0, trickPoints - 50)` con la misma fórmula que usa
+                el motor para añadir al cerrar la mano. Así el contador
+                crece baza a baza Y no se resetea al pasar de idas a
+                vueltas.
+              - Mano cerrada (`phase === 'finished'`): el motor ya sumó
+                la contribución de esta mano a `score.buenas`, así que
+                mostramos solo esa métrica. (Si sumáramos también
+                `max(0, trickPoints - 50)` aquí, lo contaríamos dos
+                veces: el bug que evita el `if`.)
+
+              Las dos ramas usan `fmtRange` con la misma regla de color:
+              ≤ 50 rojo (`in-malas`) / > 50 blanco (`in-buenas`),
+              idéntico al instante en que el motor dispara el fin de
+              partida (`score.buenas > 50`). */}
+          <div className="score-team is-mine">
+            {(() => {
+              const team = you % 2 as 0 | 1;
+              const accum = view.score.buenas[team] ?? 0;
+              const live = view.phase === 'finished'
+                ? 0
+                : Math.max(0, (view.trickPoints[team] ?? 0) - 50);
+              const value = accum + live;
+              return (
+                <b className={`score-num ${fmtRange(value)}`}>
+                  {fmtScore(value)}
+                </b>
+              );
+            })()}
+            <span className="score-label">Nosotros</span>
+          </div>
           <span className={`phase-pill phase-${view.vuelta === 1 ? 'idas' : 'vueltas'}`}>
             {view.vuelta === 1 ? 'Idas' : 'Vueltas'}
           </span>
-          <span className="score-team is-mine">
-            nosotros:{' '}
-            {/* Suma raw de teamPts a través de todas las manos (idas+vueltas).
-                Crece al cerrar cada mano. */}
-            <b className={fmtRange(view.cumulativeTeamPts[you % 2 as 0 | 1] ?? 0)}>
-              {fmtScore(view.cumulativeTeamPts[you % 2 as 0 | 1] ?? 0)}
-            </b>
-          </span>
-          <span className="score-team is-theirs">
-            ellos:{' '}
-            <b className={fmtRange(view.cumulativeTeamPts[(1 - you % 2) as 0 | 1] ?? 0)}>
-              {fmtScore(view.cumulativeTeamPts[(1 - you % 2) as 0 | 1] ?? 0)}
-            </b>
-          </span>
+          <div className="score-team is-theirs">
+            {(() => {
+              const team = (1 - you % 2) as 0 | 1;
+              const accum = view.score.buenas[team] ?? 0;
+              const live = view.phase === 'finished'
+                ? 0
+                : Math.max(0, (view.trickPoints[team] ?? 0) - 50);
+              const value = accum + live;
+              return (
+                <b className={`score-num ${fmtRange(value)}`}>
+                  {fmtScore(value)}
+                </b>
+              );
+            })()}
+            <span className="score-label">Ellos</span>
+          </div>
         </div>
         <button className="btn small" onClick={leave}>Salir</button>
       </header>
@@ -307,7 +417,6 @@ export function Game() {
 
         {/* Baza en rombo: cada carta va en la celda de su seat */}
         <div className="trick-area">
-          {view.trick.length === 0 && <div className="trick-empty">—</div>}
           {view.trick.map((p) => {
             // Misma rotación que los seats: pos 0 = Sur (humano), 1 = Oeste, 2 = Norte, 3 = Este.
             const pos = ((p.seat - you + 4) % 4) as 0 | 1 | 2 | 3;
@@ -329,9 +438,11 @@ export function Game() {
         </div>
         </div>
 
-        {/* Las cartas del jugador humano se renderizan DENTRO del tablero
-            (no en un .hand sibling). Esto simplifica el layout: el board
-            es el único contenedor del juego. */}
+        {/* Mano + acciones agrupadas en .hand-area. En móvil se apilan
+            verticalmente (mano arriba, acciones abajo); en escritorio (≥
+            769 px) se ponen en fila con la mano a la izquierda y las
+            acciones a la derecha, ambas alineadas al borde inferior. */}
+        <div className="hand-area">
         <div className="hand" ref={handRef}>
           {/* Solo marcamos cartas como `playable` (marco amarillo + elevación)
               cuando la mano está RESTRINGIDA: al menos una carta no es legal.
@@ -446,99 +557,492 @@ export function Game() {
             );
           })}
         </div>
-      </div>
 
-      {/* Acciones: solo se muestra el panel cuando hay decisiones que tomar
-          (cantes o cambio del 7). Se eliminaron los hint-turn
-          ("esperando a…", "tu turno · toca una carta", "Mano terminada")
-          — el turno activo ya se indica con el anillo del .seat.active en
-          el tablero, y el jugador sabe cuándo le toca porque sus cartas
-          se levantan con marco amarillo. */}
-      {isMyTurn && view.phase === 'winnerWindow' && (myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (
-        <div className={`action-bar is-you`}>
-          <div className="action-buttons">
-            {myOptions.cantes.map((c) => (
-              <button
-                key={c.suit}
-                className="btn primary small"
-                onClick={() => sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] })}
-              >
-                Canto {SUIT_GLYPH[c.suit]} +{c.value}
-              </button>
-            ))}
-            {myOptions.canSwapSeven && (
-              <button
-                className="btn primary small"
-                onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
-              >
-                Cambio el 7
-              </button>
-            )}
-            <button
-              className="btn small"
-              onClick={() => sendAction({ type: 'PASS' })}
-            >
-              Nada
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* El .hand ahora vive DENTRO del .board (más arriba). El bloque
-          antiguo se eliminó al migrar; el contenedor top-level .hand
-          ya no existe en este árbol. */}
-
-
-      {matchOver && (
-        <div className="match-over">
-          <h2>PARTIDA TERMINADA</h2>
-          <span className="winner">
-            {matchOver.winner === (you ?? -1) % 2
-              ? '🎉 Hemos ganado'
-              : `Gana el Equipo ${matchOver.winner}`}
-          </span>
-          <span className="score-line">
-            nosotros{' '}
-            <b className={fmtRange(matchOver.score.buenas[you % 2 as 0 | 1] ?? 0)}>
-              {fmtScore(matchOver.score.buenas[you % 2 as 0 | 1] ?? 0)}
-            </b>
-            {' · '}ellos{' '}
-            <b className={fmtRange(matchOver.score.buenas[(1 - you % 2) as 0 | 1] ?? 0)}>
-              {fmtScore(matchOver.score.buenas[(1 - you % 2) as 0 | 1] ?? 0)}
-            </b>
-          </span>
-        </div>
-      )}
-      {gameOver && !matchOver && (
-        <div className="game-over">
-          <h2>Fin de mano</h2>
-          <span className="score-line">
-            nosotros {fmtPts(gameOver.handPoints[you % 2 as 0 | 1])} · ellos {fmtPts(gameOver.handPoints[(1 - you % 2) as 0 | 1])}
-          </span>
-          {/* En vueltas mostramos el acumulado. Importante: usamos
-              gameOver.vuelta (NO view.vuelta) para que el "Acumulado" no
-              aparezca en el resumen de la primera vuelta (idas). Si
-              usamos view.vuelta, cuando llega el VIEW de vuelta 2 mientras
-              el gameOver aún muestra vuelta 1, el resumen diría "Acumulado"
-              en una mano que no lo es. */}
-          {gameOver.vuelta && gameOver.vuelta > 1 && gameOver.score && (
-            <span className="score-line score-cumulative">
-              Acumulado: nosotras {gameOver.score.buenas[you % 2 as 0 | 1] ?? 0}B · {gameOver.score.malas[you % 2 as 0 | 1] ?? 0}M
-              {' '} · ellos {gameOver.score.buenas[(1 - you % 2) as 0 | 1] ?? 0}B · {gameOver.score.malas[(1 - you % 2) as 0 | 1] ?? 0}M
-            </span>
+        {/* Acciones: dos variantes del panel.
+            - .action-bar-mobile: 3 botones en horizontal (Cantar, Cambiar,
+              Nada). Render CONDICIONAL: solo aparece en la ventana de
+              decisión del jugador cuando hay al menos un cante o un 7 que
+              cambiar. El botón "Nada" permite pasar explícitamente.
+            - .action-bar-desktop: 2 botones en vertical dentro del panel
+              con chrome (fondo + borde + pie explicativo). SIEMPRE visible
+              (los botones individuales se desactivan cuando no proceden).
+            CSS muestra uno u otro según el viewport. */}
+        <div className="action-bar-mobile">
+          {(myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (
+            <div className={`action-bar${view.phase === 'winnerWindow' && view.turn === you ? ' is-you' : ''}`}>
+              <div className="action-buttons">
+                <button
+                  className="btn primary small"
+                  disabled={myOptions.cantes.length === 0}
+                  onClick={() => {
+                    // Canta el primer cante disponible, priorizando 40
+                    // (Rey+Sota del triunfo) sobre 20 (Rey+Sota de cualquier
+                    // otro palo). El motor ya se encarga de validar el caso
+                    // del 40 y descontarlo de la lista de cantes.
+                    const c =
+                      myOptions.cantes.find((c) => c.value === 40) ??
+                      myOptions.cantes.find((c) => c.value === 20);
+                    if (c) sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] });
+                  }}
+                  title={
+                    myOptions.cantes.length === 0
+                      ? 'No tienes Rey+Sota de ningún palo'
+                      : 'Canta el primer cante disponible (40 antes que 20)'
+                  }
+                >
+                  Cantar
+                </button>
+                <button
+                  className="btn primary small"
+                  disabled={!myOptions.canSwapSeven}
+                  onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
+                  title={myOptions.canSwapSeven ? `Cambiar el 7 por el triunfo` : 'No tienes el 7 del triunfo (o no es tu turno, o el triunfo no es una carta superior)'}
+                >
+                  Cambiar el 7
+                </button>
+                <button
+                  className="btn small"
+                  onClick={() => sendAction({ type: 'PASS' })}
+                >
+                  Nada
+                </button>
+              </div>
+            </div>
           )}
         </div>
-      )}
+        <div className="action-bar-desktop">
+          <div className={`action-bar${view.phase === 'winnerWindow' && view.turn === you ? ' is-you' : ''}`}>
+            <div className="action-panel">
+              <div className="action-buttons">
+                <button
+                  className="btn primary"
+                  disabled={myOptions.cantes.length === 0}
+                  onClick={() => {
+                    const c =
+                      myOptions.cantes.find((c) => c.value === 40) ??
+                      myOptions.cantes.find((c) => c.value === 20);
+                    if (c) sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] });
+                  }}
+                  title={
+                    myOptions.cantes.length === 0
+                      ? 'No tienes Rey+Sota de ningún palo'
+                      : 'Canta el primer cante disponible (40 antes que 20)'
+                  }
+                >
+                  Cantar
+                </button>
+                <button
+                  className="btn primary"
+                  disabled={!myOptions.canSwapSeven}
+                  onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
+                  title={myOptions.canSwapSeven ? `Cambiar el 7 por el triunfo` : 'No tienes el 7 del triunfo (o no es tu turno, o el triunfo no es una carta superior)'}
+                >
+                  Cambiar el 7
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      {/* Resumen de fin de mano / partida. Se muestra cuando llega el GAME_OVER
+          (con o sin MATCH_OVER). Estructura compacta: título + cajas grandes
+          con el marcador + tabla 3 columnas con el desglose de la mano.
+          - matchOver: "Partida terminada · Hemos ganado / Ganan ellos" + sin
+            acción Continuar.
+          - gameOver sin cierre: "Resumen · vuelta N" + 🏁 "Vamos de vueltas"
+            + Continuar para repartir la siguiente. */}
+      {(gameOver || matchOver) && view && (() => {
+        const s = buildSummary(view, you);
+        const seatLabel = (seat: Seat) => seatNames[seat] || SEAT_LABELS[seat];
+        return (
+          <div className="game-over-summary">
+            <h2>
+              {matchOver
+                ? 'Partida terminada'
+                : `Resumen${s.vuelta > 1 ? ` · vuelta ${s.vuelta}` : ''}`}
+            </h2>
+
+            {/* ───────────── Resultado según escenario ───────────── */}
+            {matchOver && (
+              <section className="summary-matchover">
+                <h3 className="summary-result-title">
+                  {s.matchWinner === s.myTeam ? '🎉 Hemos ganado' : 'Ganan ellos'}
+                </h3>
+
+                {/* Cajas grandes con el marcador final de la partida.
+                    Cada caja enseña UN único marcador por equipo
+                    (`marcadorAcumulado`): si tienen buenas acumuladas, "X Buenas";
+                    si no, "Y Malas". Así el ganador sale como "X Buenas"
+                    y el perdedor como "Y Malas", sin doble lectura. */}
+                <div className="summary-score-boxes">
+                  <div className="summary-score-box is-mine">
+                    <span className="summary-score-label">Nosotros</span>
+                    {(() => {
+                      const m = marcadorAcumulado(
+                        s.despuesBuenas[s.myTeam],
+                        s.despuesMalas[s.myTeam],
+                      );
+                      return m.value > 0 ? (
+                        <>
+                          <span className="summary-score-value">{m.value}</span>
+                          <span className="summary-score-suffix">{m.label}</span>
+                        </>
+                      ) : (
+                        <span className="summary-score-value">{m.label}</span>
+                      );
+                    })()}
+                  </div>
+                  <div className="summary-score-box is-theirs">
+                    <span className="summary-score-label">Ellos</span>
+                    {(() => {
+                      const m = marcadorAcumulado(
+                        s.despuesBuenas[s.otherTeam],
+                        s.despuesMalas[s.otherTeam],
+                      );
+                      return m.value > 0 ? (
+                        <>
+                          <span className="summary-score-value">{m.value}</span>
+                          <span className="summary-score-suffix">{m.label}</span>
+                        </>
+                      ) : (
+                        <span className="summary-score-value">{m.label}</span>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Tabla con el desglose de la mano (2 columnas: puntos
+                    formateados de esta mano + quién se llevó las 10 de
+                    últimas). Quitamos la fila Diferencia porque su info ya
+                    está implícita en el título y en las cajas grandes. */}
+                <h3 className="summary-table-title">Desglose de la mano</h3>
+                <div className="summary-table">
+                  <div className="summary-table-row summary-table-header">
+                    <span className="summary-table-label" />
+                    <span className="summary-table-col">Nosotros</span>
+                    <span className="summary-table-col">Ellos</span>
+                  </div>
+                  <div className="summary-table-row">
+                    <span className="summary-table-label">Puntos</span>
+                    <span className="summary-table-col">
+                      {formatPunto(s.handTotal[s.myTeam])}
+                    </span>
+                    <span className="summary-table-col">
+                      {formatPunto(s.handTotal[s.otherTeam])}
+                    </span>
+                  </div>
+                  {view.cantes.length > 0 && (
+                    <div className="summary-table-row">
+                      <span className="summary-table-label">Cantes</span>
+                      <span className="summary-table-col">
+                        {renderCantesForTeam(view.cantes, s.myTeam)}
+                      </span>
+                      <span className="summary-table-col">
+                        {renderCantesForTeam(view.cantes, s.otherTeam)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="summary-table-row">
+                    <span className="summary-table-label">10 de últimas</span>
+                    <span className="summary-table-col">
+                      {s.lastTrickWinnerTeam === s.myTeam
+                        ? seatLabel(s.lastTrickWinnerSeat!)
+                        : '—'}
+                    </span>
+                    <span className="summary-table-col">
+                      {s.lastTrickWinnerTeam === s.otherTeam
+                        ? seatLabel(s.lastTrickWinnerSeat!)
+                        : '—'}
+                    </span>
+                  </div>
+                </div>
+
+
+              </section>
+            )}
+            {!matchOver && s.matchWinner === null && (
+              <section className="summary-matchover">
+                <h3 className="summary-result-title">🏁 Vamos de vueltas</h3>
+
+                {/* Cajas grandes con el marcador de cada equipo. Mismo criterio
+                    que en matchOver: si tienen buenas acumuladas, "X Buenas";
+                    si no, "Y Malas". Así un equipo que cierra la mano
+                    anterior queda como "X Buenas" y el que la pierde,
+                    "Y Malas". */}
+                <div className="summary-score-boxes">
+                  <div className="summary-score-box is-mine">
+                    <span className="summary-score-label">Nosotros</span>
+                    {(() => {
+                      const m = marcadorAcumulado(
+                        s.despuesBuenas[s.myTeam],
+                        s.despuesMalas[s.myTeam],
+                      );
+                      return m.value > 0 ? (
+                        <>
+                          <span className="summary-score-value">{m.value}</span>
+                          <span className="summary-score-suffix">{m.label}</span>
+                        </>
+                      ) : (
+                        <span className="summary-score-value">{m.label}</span>
+                      );
+                    })()}
+                  </div>
+                  <div className="summary-score-box is-theirs">
+                    <span className="summary-score-label">Ellos</span>
+                    {(() => {
+                      const m = marcadorAcumulado(
+                        s.despuesBuenas[s.otherTeam],
+                        s.despuesMalas[s.otherTeam],
+                      );
+                      return m.value > 0 ? (
+                        <>
+                          <span className="summary-score-value">{m.value}</span>
+                          <span className="summary-score-suffix">{m.label}</span>
+                        </>
+                      ) : (
+                        <span className="summary-score-value">{m.label}</span>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Tabla con el desglose de la mano + cuánto le falta a cada
+                    pareja para cerrar (>50). */}
+                <h3 className="summary-table-title">Desglose de la mano</h3>
+                <div className="summary-table">
+                  <div className="summary-table-row summary-table-header">
+                    <span className="summary-table-label" />
+                    <span className="summary-table-col">Nosotros</span>
+                    <span className="summary-table-col">Ellos</span>
+                  </div>
+                  <div className="summary-table-row">
+                    <span className="summary-table-label">Puntos</span>
+                    <span className="summary-table-col">{formatPunto(s.handTotal[s.myTeam])}</span>
+                    <span className="summary-table-col">{formatPunto(s.handTotal[s.otherTeam])}</span>
+                  </div>
+                  {view.cantes.length > 0 && (
+                    <div className="summary-table-row">
+                      <span className="summary-table-label">Cantes</span>
+                      <span className="summary-table-col">
+                        {renderCantesForTeam(view.cantes, s.myTeam)}
+                      </span>
+                      <span className="summary-table-col">
+                        {renderCantesForTeam(view.cantes, s.otherTeam)}
+                      </span>
+                    </div>
+                  )}
+                  <div className="summary-table-row">
+                    <span className="summary-table-label">10 de últimas</span>
+                    <span className="summary-table-col">
+                      {s.lastTrickWinnerTeam === s.myTeam
+                        ? seatLabel(s.lastTrickWinnerSeat!)
+                        : '—'}
+                    </span>
+                    <span className="summary-table-col">
+                      {s.lastTrickWinnerTeam === s.otherTeam
+                        ? seatLabel(s.lastTrickWinnerSeat!)
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="summary-table-row summary-table-difference">
+                    <span className="summary-table-label">Faltan para cerrar</span>
+                    <span className="summary-table-col">
+                      faltan <b>{faltanParaCerrar(s.despuesBuenas[s.myTeam])}</b>
+                    </span>
+                    <span className="summary-table-col">
+                      faltan <b>{faltanParaCerrar(s.despuesBuenas[s.otherTeam])}</b>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Hints contextuales: dealer, siguiente jugador, recordatorio
+                    de las reglas de las vueltas. */}
+                {s.nextDealer !== null && s.nextStarter !== null && (
+                  <p className="summary-footer">
+                    Reparte <b>{seatLabel(s.nextDealer)}</b>.
+                    {' '}Sale <b>{seatLabel(s.nextStarter)}</b>{' '}
+                    (a la derecha del dealer).
+                  </p>
+                )}
+                {s.vuelta === 1 && (
+                  <p className="summary-footer">Se juegan las vueltas.</p>
+                )}
+                {s.vuelta > 1 && (
+                  <p className="summary-footer">
+                    En vueltas se arrastran las buenas/malas de la ida.
+                    La partida termina en cuanto una pareja pase {MATCH_THRESHOLD} buenas.
+                  </p>
+                )}
+              </section>
+            )}
+
+            {/* Botón "Continuar" — reemplaza el auto-deal de 4 s del servidor.
+                El cliente decide cuándo se reparte la siguiente mano. */}
+            <div className="summary-actions">
+              {matchOver ? (
+                <span className="summary-actions-hint">
+                  La partida ha terminado.
+                </span>
+              ) : (
+                <button
+                  className="btn primary summary-continue"
+                  onClick={() => requestNextHand()}
+                >
+                  Continuar
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Truco y ganador se muestran visualmente sobre las cartas en el board;
           el badge flotante intermedio lo quitamos porque no aportaba info
           que ya no estuviera visible. */}
+
+      {/* Anuncio de cante: aparece centrado al declararse un cante nuevo
+          (SING_CANTE llega al servidor → llega al cliente → este overlay
+          lo muestra durante 3,5 s y se va solo). `key={canteAnnouncement.uid}`
+          fuerza remount para reiniciar la animación CSS cuando llega otro
+          cante antes de que el actual haya expirado. */}
+      {canteAnnouncement && (
+        <div
+          key={canteAnnouncement.uid}
+          className={
+            'cante-announcement' +
+            (you !== null && canteAnnouncement.team === (you % 2)
+              ? ' is-mine'
+              : ' is-theirs')
+          }
+          role="status"
+          aria-live="polite"
+        >
+          <div className="cante-announcement-team">
+            {you !== null && canteAnnouncement.team === (you % 2)
+              ? 'Nosotros'
+              : 'Ellos'}
+          </div>
+          <div className="cante-announcement-player">
+            {seatNames[canteAnnouncement.seat] || SEAT_LABELS[canteAnnouncement.seat]}
+          </div>
+          <div className="cante-announcement-text">
+            canta <b className="value">+{canteAnnouncement.value}</b>{' '}
+            en <b className="suit">{SUIT_NAME[canteAnnouncement.suit]}</b>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-const SUIT_GLYPH = { oros: '●', copas: '♥', espadas: '♠', bastos: '♣' } as const;
 const STRENGTH = [1, 3, 12, 10, 11, 7, 6, 5, 4, 2] as const;
+
+/** Umbral de cierre de la partida (debe coincidir con rules.ts scoring.threshold). */
+const MATCH_THRESHOLD = 50;
+
+/** Resumen numérico del game-over para el panel. */
+interface Summary {
+  myTeam: 0 | 1;
+  otherTeam: 0 | 1;
+  /** Total de la mano (= trickPoints, ya incluye cantes + 10 de últimas). */
+  handTotal: Record<0 | 1, number>;
+  /** Ganador (seat) de la última baza. null si no hay trucos. */
+  lastTrickWinnerSeat: Seat | null;
+  /** Equipo que ganó la última baza (se llevó las 10). null si no hay. */
+  lastTrickWinnerTeam: 0 | 1 | null;
+  /** Marcador acumulado DESPUÉS de esta mano (= view.score). */
+  despuesBuenas: Record<0 | 1, number>;
+  despuesMalas: Record<0 | 1, number>;
+  /** ¿Quién cierra la partida? (matchWinner) o null si no cierra nadie. */
+  matchWinner: 0 | 1 | null;
+  /** Siguiente repartidor: el elegido por la regla de rotación del motor
+   *  (en idas→vueltas no rota, dentro de vueltas rota +1). Si la partida
+   *  terminó no hay siguiente mano. */
+  nextDealer: Seat | null;
+  /** Seat que sale (primer jugador de la próxima mano): a la derecha del dealer. */
+  nextStarter: Seat | null;
+  /** Vuelta actual (1 = idas, 2+ = vueltas). */
+  vuelta: number;
+}
+
+function buildSummary(view: PlayerView, you: number): Summary {
+  const myTeam = (you % 2) as 0 | 1;
+  const otherTeam = (1 - myTeam) as 0 | 1;
+
+  const lastTrick = view.finishedTricks[view.finishedTricks.length - 1];
+  const lastTrickWinnerSeat = lastTrick ? lastTrick.winner : null;
+  const lastTrickWinnerTeam = lastTrickWinnerSeat !== null
+    ? teamOf(lastTrickWinnerSeat)
+    : null;
+
+  const handTotal: Record<0 | 1, number> = {
+    0: view.trickPoints[0] ?? 0,
+    1: view.trickPoints[1] ?? 0,
+  };
+
+  // Quien reparte la siguiente mano lo decide el motor con la regla
+  // "el que corta, reparte": el ganador de la última baza de la mano que
+  // acaba de terminar (no rota, aplica a TODAS las transiciones, incluida
+  // idas → vueltas). Si la partida terminó (matchEnded), no hay próxima
+  // mano. `view.dealer` queda como fallback ante el caso imposible de
+  // que no haya última baza.
+  const computedNextDealer = view.matchEnded
+    ? null
+    : nextDealer(lastTrickWinnerSeat, view.dealer);
+  const computedNextStarter = computedNextDealer !== null ? nextSeat(computedNextDealer) : null;
+
+  return {
+    myTeam,
+    otherTeam,
+    handTotal,
+    lastTrickWinnerSeat,
+    lastTrickWinnerTeam,
+    despuesBuenas: { 0: view.score.buenas[0] ?? 0, 1: view.score.buenas[1] ?? 0 },
+    despuesMalas: { 0: view.score.malas[0] ?? 0, 1: view.score.malas[1] ?? 0 },
+    matchWinner: view.matchEnded ? view.matchWinner : null,
+    nextDealer: computedNextDealer,
+    nextStarter: computedNextStarter,
+    vuelta: view.vuelta,
+  };
+}
+
+/** Cuántas buenas le faltan a un equipo para cerrar (> 50). */
+function faltanParaCerrar(buenas: number): number {
+  return Math.max(0, MATCH_THRESHOLD + 1 - buenas);
+}
+
+/** Puntos de la mano en formato de partida: si el equipo pasa de 50 suma a
+ *  buenas (pts − 50), si no suma a malas. value=0 → "—". */
+function formatPunto(value: number): string {
+  if (value <= 0) return '—';
+  if (value > 50) return `${value - 50} Buenas`;
+  return `${value} Malas`;
+}
+
+/** Lista compacta de cantes cantados por un equipo: "+20 Copas", "+40 Oros".
+ *  Si el equipo no cantó nada → "—". Cada cante: prefijo "+", valor y palo
+ *  con nombre completo (los nombres son cortos y encajan en la celda;
+ *  encadenados con " · " si hay varios. */
+function renderCantesForTeam(
+  cantes: readonly { team: 0 | 1; suit: Suit; value: number }[],
+  team: 0 | 1,
+): string {
+  const ours = cantes.filter((c) => c.team === team);
+  if (ours.length === 0) return '—';
+  return ours.map((c) => `+${c.value} ${SUIT_NAME[c.suit]}`).join(' · ');
+}
+
+/** Marcador compacto de una pareja en el panel de fin de mano/partida.
+ *  Devuelve un único par (número + etiqueta): se prefieren las Buenas si el
+ *  equipo ha acumulado alguna; en otro caso, las Malas; si tampoco tiene,
+ *  "—". Cada caja del panel muestra solo este marcador. */
+function marcadorAcumulado(buenas: number, malas: number): { value: number; label: string } {
+  if (buenas > 0) return { value: buenas, label: 'Buenas' };
+  if (malas > 0)  return { value: malas,  label: 'Malas' };
+  return { value: 0, label: '—' };
+}
 
 function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you: number | null): Set<string> {
   const set = new Set<string>();

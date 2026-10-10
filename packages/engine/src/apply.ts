@@ -3,6 +3,7 @@ import type { GameState, GameEvent, Cante } from './state.js';
 import type { Card, Seat, Suit, Team } from './types.js';
 import { nextSeat, partnerOf, teamOf } from './types.js';
 import { beats, currentWinner } from './legalPlays.js';
+import { canSwapSevenWithTrump } from './rules.js';
 
 const SEATS_4: readonly Seat[] = [0, 1, 2, 3] as const;
 
@@ -108,6 +109,11 @@ export function apply(state: GameState, action: Action): GameEvent[] {
         for (const c of state.cantes) cantesPuntos[c.team] += c.value;
         state.trickPoints[0] += cantesPuntos[0];
         state.trickPoints[1] += cantesPuntos[1];
+        // Suma de los cantes al acumulado raw (que el cliente muestra en
+        // la cabecera como "marcador"). Antes solo sumaba los puntos de las
+        // bazas baza a baza, así que el canto del 40 se quedaba fuera.
+        state.cumulativeTeamPts[0] = (state.cumulativeTeamPts[0] ?? 0) + cantesPuntos[0];
+        state.cumulativeTeamPts[1] = (state.cumulativeTeamPts[1] ?? 0) + cantesPuntos[1];
         state.phase = 'finished';
         state.turn = null;
         events.push({
@@ -189,6 +195,15 @@ export function apply(state: GameState, action: Action): GameEvent[] {
     if (state.trumpCard === null) {
       throw new Error('SWAP_SEVEN solo durante la fase de robo (trumpCard no visible)');
     }
+    // Regla del guiñote: el cambio del 7 solo procede si el triunfo es una
+    // carta SUPERIOR al 7 (1, 3, 10, 11, 12). Cambiar el 7 por una carta
+    // peor (2, 4, 5, 6, 7) no tiene sentido: el 7 captura la baza + vale
+    // puntos, soltarlo por una carta inferior es empeorar.
+    if (!canSwapSevenWithTrump(state.trumpCard)) {
+      throw new Error(
+        `SWAP_SEVEN no procede: el triunfo (${state.trumpCard.rank} de ${state.trumpCard.suit}) no es una carta superior al 7`,
+      );
+    }
     if (state.lastWinner === null) {
       throw new Error('SWAP_SEVEN requiere haber ganado una baza');
     }
@@ -226,9 +241,9 @@ export function apply(state: GameState, action: Action): GameEvent[] {
       }
     }
     const value = action.suit === state.trump ? state.rules.cantes.trumpValue : state.rules.cantes.value;
-    const cante: Cante = { team: teamOf(seat), suit: action.suit, pair: [a, b], value };
+    const cante: Cante = { seat, team: teamOf(seat), suit: action.suit, pair: [a, b], value };
     state.cantes = [...state.cantes, cante];
-    events.push({ type: 'CANTE_DECLARED', team: cante.team, suit: cante.suit, pair: cante.pair, value });
+    events.push({ type: 'CANTE_DECLARED', seat, team: cante.team, suit: cante.suit, pair: cante.pair, value });
   } else if (action.type === 'PASS') {
     if (state.phase !== 'winnerWindow') {
       throw new Error('PASS solo en winnerWindow');

@@ -33,6 +33,9 @@ interface State {
   // Acciones
   createRoom: () => Promise<void>;
   sendAction: (action: Action) => void;
+  /** Pide al servidor que reparta la siguiente mano. Lo dispara el botón
+   *  "Continuar" del panel de resumen tras un GAME_OVER (o MATCH_OVER). */
+  requestNextHand: () => void;
   leave: () => void;
 }
 
@@ -76,6 +79,12 @@ export const useGame = create<State>((set, get) => ({
     const cmdId = `c-${lastCmdId + 1}`;
     set({ lastCmdId: lastCmdId + 1 });
     ws.send(JSON.stringify({ type: 'ACTION', commandId: cmdId, action } satisfies ClientMessage));
+  },
+
+  requestNextHand() {
+    const { ws } = get();
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'NEXT_HAND' } satisfies ClientMessage));
   },
 
   leave() {

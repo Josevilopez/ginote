@@ -3,7 +3,7 @@ import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import { createRoomWithBots, getRoom } from './rooms.js';
-import { applyActionWithResolveEvent, emitAfterChange, stepBots } from './room.js';
+import { applyActionWithResolveEvent, emitAfterChange, stepBots, triggerNextHand } from './room.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -127,6 +127,11 @@ app.register(async (instance) => {
 
         const acted = await stepBots(room);
         if (!acted) emitAfterChange(room);
+      }
+      if (msg.type === 'NEXT_HAND') {
+        // El cliente ha pulsado "Continuar" en el panel de resumen.
+        // La sala está en phase: 'finished'; repartimos la siguiente.
+        triggerNextHand(room);
       }
     });
 

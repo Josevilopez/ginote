@@ -8,6 +8,10 @@
   --accent: #e8c46b;
   --danger: #e26d5c;
   --ok: #6ddb9b;
+  /* Azul para "Nosotros" en la cabecera. Coincide con el color del compañero
+     en el avatar (.seat.partner .seat-avatar) para que el equipo sea fácil de
+     rastrear entre header y mesa. */
+  --team-mine: #60a5fa;
   --card-oros-color: #d4a017;
   --card-copas-color: #c0392b;
   --card-espadas-color: #1e3a8a;
@@ -183,103 +187,132 @@ body {
 .trump-info {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 10px;
   font-size: 13px;
 }
+.trump-mini {
+  position: relative;
+}
+/* Tamaño fijo pequeño en el topbar para que el As del triunfo no domine la
+   cabecera junto al marcador y al botón Salir. Ratio 160:245 del sprite. */
+.trump-mini .card-img,
+.trump-mini .card-img.small {
+  width: 32px;
+  height: calc(32px / var(--card-ratio));
+}
+/* Anillo del color del palo. Usamos currentColor y fijamos el color arriba
+   para no repetir cuatro reglas de border/box-shadow. */
+.trump-mini[data-suit="oros"]    { color: #f0c54a; }
+.trump-mini[data-suit="copas"]   { color: #d9544b; }
+.trump-mini[data-suit="espadas"] { color: #c9d4d1; }
+.trump-mini[data-suit="bastos"]  { color: #88c98a; }
+.trump-mini::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 10px;
+  border: 1.5px solid currentColor;
+  box-shadow: 0 0 6px currentColor;
+  pointer-events: none;
+}
+.trump-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  line-height: 1.05;
+}
 .trump-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--fg-mute);
 }
-.trump-suit {
-  font-size: 20px;
+.trump-name {
+  font-size: 16px;
+  font-weight: 700;
   line-height: 1;
 }
-.trump-suit[data-suit="oros"] { color: #f0c54a; }
-.trump-suit[data-suit="copas"] { color: #d9544b; }
-.trump-suit[data-suit="espadas"] { color: #c9d4d1; }
-.trump-suit[data-suit="bastos"] { color: #88c98a; }
+.trump-name[data-suit="oros"]    { color: #f0c54a; }
+.trump-name[data-suit="copas"]   { color: #d9544b; }
+.trump-name[data-suit="espadas"] { color: #c9d4d1; }
+.trump-name[data-suit="bastos"]  { color: #88c98a; }
 .trump-card-gone {
-  color: var(--fg-mute);
+  font-size: 10px;
   font-style: italic;
-  font-size: 12px;
+  color: var(--fg-mute);
+  opacity: 0.7;
+}
+/* En móvil el topbar va muy justo: la etiqueta "Triunfo" y el nombre del
+   palo se ocultan y se queda solo el As (que ya lleva el anillo del color
+   del palo). En escritorio se muestra todo. El min-width coincide con el
+   breakpoint existente del proyecto (@media (min-width: 769px)). */
+@media (max-width: 768px) {
+  .trump-text { display: none; }
 }
 .score {
   flex: 1;
   display: flex;
   justify-content: center;
-  gap: 16px;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
+  min-width: 0;
 }
-.score-team.is-mine b {
-  color: var(--ok);
+.score-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  line-height: 1;
+  min-width: 0;
+}
+/* Número del marcador: grande, tabular-nums para que no se mueva al cambiar
+   entre M y B, y letter-spacing negativo para que las cifras anchas (ej.
+   "100") no rompan el ancho del bloque. */
+.score-num {
+  font-size: 22px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.3px;
 }
-.score-team.is-theirs b {
-  color: var(--fg-mute);
+/* "Nosotros" en azul (mismo tono que el compañero en la mesa).
+   "Ellos" en amarillo (mismo --accent que se usa para el turno activo y
+   la carta ganadora). El número se mantiene blanco/grayscale para no
+   competir con el color del label. */
+.score-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  opacity: 0.85;
+}
+.score-team.is-mine  .score-label { color: var(--team-mine); }
+.score-team.is-theirs .score-label { color: var(--accent); }
+/* Número en malas (≤50): rojo oscuro para señalar "estamos perdiendo /
+   en zona de malas". Sin glow — compite con el label si lo lleva.
+   Número en buenas (>50): blanco como hasta ahora, con text-shadow glow
+   para señalar "en zona de victoria". */
+.score-num.in-malas {
+  color: #E65100;
   font-weight: 700;
 }
-.score-team.is-mine {
-  color: var(--ok);
-}
-.score-team.is-theirs {
-  color: var(--fg-mute);
-}
-/* Malas en la topbar: más pequeño y tenue que las buenas, para que la B
-   (que decide el ganador) sea lo que más llame la atención. */
-.score-team .score-malas {
-  font-size: 11px;
-  opacity: 0.6;
-  font-weight: 500;
-}
-/* Marcador acumulado en la topbar. Sin sufijo "M"/"B"; el color distingue:
-   in-malas (≤50): tono normal del equipo.
-   in-buenas (>50): verde brillante — el equipo está en zona de victoria. */
-.score-team b.in-malas {
-  color: inherit;
-  font-weight: 700;
-}
-.score-team.is-mine b.in-buenas {
-  color: var(--ok);
+.score-num.in-buenas {
+  color: var(--fg);
   font-weight: 800;
-  text-shadow: 0 0 6px rgba(109, 219, 155, 0.4);
-}
-.score-team.is-theirs b.in-buenas {
-  color: var(--accent);
-  font-weight: 800;
-  text-shadow: 0 0 6px rgba(255, 200, 100, 0.4);
-}
-/* Sufijo M/B junto al número del acumulado: pequeño y sutil, indica
-   en qué tramo está el equipo. */
-.score-suffix {
-  font-size: 10px;
-  margin-left: 3px;
-  font-weight: 700;
-  opacity: 0.7;
-  vertical-align: 2px;
-}
-.score-suffix.in-buenas {
-  opacity: 1;
-}
-.score-team.is-mine .score-suffix.in-buenas { color: var(--ok); }
-.score-team.is-theirs .score-suffix.in-buenas { color: var(--accent); }
-/* Acumulado entre paréntesis: pequeño, más tenue, indica las BUENAS
-   acumuladas de la partida (se preserva entre vueltas). */
-.score-acumulado {
-  font-size: 11px;
-  opacity: 0.6;
-  font-weight: 500;
-  margin-left: 4px;
+  text-shadow: 0 0 8px rgba(245, 240, 225, 0.45);
 }
 
 /* Pill de fase: "Idas" en la primera vuelta, "Vueltas" en las siguientes.
    Compacto, integrado en el score del topbar, sin panel extra. */
 .phase-pill {
-  margin-left: 8px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 10px;
+  padding: 8px 16px;
+  border-radius: 14px;
+  font-size: 16px;
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.8px;
+  margin: 0 10px;
 }
 .phase-pill.phase-idas {
   background: rgba(232, 196, 107, 0.18);
@@ -371,13 +404,13 @@ body {
   /* Móvil (default): el tablero llena el alto y ancho disponibles.
      Mantiene el comportamiento anterior (rectángulo estirado) que funciona
      bien en portrait. */
-  margin: 4px;
-  background: radial-gradient(ellipse at center, #1a6647 0%, #0a3d2e 80%);
+  margin: 2px;
+  background: radial-gradient(ellipse at center, #1a6647 0%, #0a3d2e 70%);
   border-radius: 12px;
-  border: 2px solid rgba(255,255,255,0.06);
+  /* border: 2px solid rgba(255,255,255,0.06); */
   /* Margen interior entre el borde del tablero y los seats, para que no
      queden pegados al filo. */
-  padding: 8px;
+  padding: 0px;
   overflow: hidden;
 }
 
@@ -387,10 +420,19 @@ body {
    ≈ 100px). Fórmula: ancho = min(100% contenedor, alto_disp × 4/3). Así
    no queda hueco arriba/abajo. align-self: center lo centra por si
    el contenedor es más estrecho y limita el ancho. */
-@media (min-width: 769px) {
+@media (min-width: 1920px) {
   .board {
     width: min(100%, calc((100dvh - 100px) * 4 / 3));
     aspect-ratio: 4 / 3;
+    margin: 4px auto;
+    align-self: center;
+  }
+}
+
+@media (min-width: 720px) {
+  .board {
+    width: min(100%, calc((100dvh - 100px) * 8 / 5));
+    aspect-ratio: 8 / 5;
     margin: 4px auto;
     align-self: center;
   }
@@ -642,11 +684,6 @@ body {
   pointer-events: none;
   z-index: 1;
 }
-.trick-empty {
-  color: var(--fg-mute);
-  font-size: 36px;
-  opacity: 0.22;
-}
 .trick-card {
   position: absolute;
   filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
@@ -815,7 +852,40 @@ body {
 .card.bastos, .card-img.bastos { color: var(--card-bastos-color); }
 .card .rank, .card-img .rank { color: inherit; }
 
-/* Acción — discreto, sin reloj ni decoración */
+/* Agrupador mano + acciones. La mano se mantiene centrada horizontalmente
+   como antes; el panel de acciones se posiciona de forma absoluta a la
+   derecha en escritorio para no desplazar las cartas. En móvil el panel
+   se apila debajo de la mano en el flujo normal. */
+.hand-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;  /* mano centrada horizontalmente, como estaba antes */
+  flex-shrink: 0;
+  /* Antes se redujo a card-h + 4px al quitar la elevación. Ahora las
+     cartas "playable" se elevan translateY(-12px), así que reservamos
+     el alto extra para que las elevadas no se coman el área del tablero
+     de arriba y para que el .action-bar-desktop (position: absolute,
+     centrado verticalmente) siga cayendo sobre la fila de cartas. */
+  min-height: calc(var(--card-h) + 24px);
+  position: relative;   /* ancla para el .action-bar absoluto en escritorio */
+}
+/* Las dos variantes del panel: solo una es visible en cada viewport. */
+.action-bar-mobile  { display: block; }
+.action-bar-desktop { display: none; }
+@media (min-width: 769px) {
+  .action-bar-mobile  { display: none; }
+  .action-bar-desktop { display: block; }
+  /* El panel de escritorio sale del flujo para no empujar la mano: flota a
+     la derecha, verticalmente alineado con el centro de las cartas. */
+  .hand-area > .action-bar-desktop {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+}
+/* Acción — discreto, sin reloj ni decoración. En escritorio se convierte
+   en un panel con título + 2 botones verticales + pie explicativo. */
 .action-bar {
   padding: 4px 10px;
   text-align: center;
@@ -826,12 +896,61 @@ body {
   align-items: center;
   justify-content: center;
   opacity: 0.7;
+  flex-shrink: 0;
+}
+/* Panel: chrome (borde, fondo, esquinas) y layout vertical SOLO en escritorio.
+   En móvil los botones se quedan en horizontal sin chrome para no robar
+   altura a la mesa. */
+.action-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+@media (min-width: 769px) {
+  .action-panel {
+    /* Chrome del panel tipo "tarjeta" sobre el tapete verde. Ancho
+       responsivo: en pantallas grandes (escritorio cómodo) el panel
+       llega a 230 px, en portátiles de 13–15" se queda en 170 px para
+       no chocar con la última carta. Mínimo de 160 px para que las
+       etiquetas quepan sin envolver. */
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 14px;
+    padding: 14px 16px;
+    gap: 10px;
+    width: clamp(160px, 14vw, 400px);
+  }
 }
 .action-buttons {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
   justify-content: center;
+}
+@media (min-width: 769px) {
+  /* Vertical en escritorio: cada botón ocupa todo el ancho del panel.
+     Padding y font ajustados al ancho responsivo: si el panel se
+     queda en ~160 px (portátil 13") las etiquetas pueden envolver a 2
+     líneas sin que el botón se vea apretado. */
+  .action-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+  .action-buttons .btn {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 13px;
+    text-align: center;
+    line-height: 1.25;
+  }
+}
+/* Botones deshabilitados: más tenues que los activos para que se entienda
+   "esto existe pero ahora no puedes pulsarlo". */
+.action-buttons .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: saturate(0.6);
 }
 .hint-turn { font-size: 11px; font-weight: 600; }
 .action-bar.is-you { color: var(--accent); opacity: 1; }
@@ -842,12 +961,17 @@ body {
   display: flex;
   justify-content: center;
   gap: 6px;
-  /* padding-top 16px (antes 4px) para que las cartas "playable" con
-     translateY(-12px) no se clipping por el overflow-x:auto (que implícitamente
-     hace overflow-y:auto). 4px de aire sobre la carta levantada. */
-  padding: 16px 4px calc(4px + var(--safe-bottom));
-  overflow-x: auto;
-  min-height: calc(var(--card-h) + 24px);
+  /* Padding-top generoso para que las cartas "playable" eleven con
+     translateY sin tocar el tablero de arriba. Padding-bottom incluye
+     el safe-bottom del notch. Importante: NO overflow-x: auto. Con auto,
+     al arrastrar una carta (drag-to-reorder) el translateX del drag
+     visual se cortaba contra el borde de la mano y daba la sensación
+     de que la carta no "salía" del box. Con visible, las cartas pueden
+     extenderse libremente mientras se arrastran; el .board
+     (overflow: hidden) sigue recortando lo que salga del tablero. */
+  padding: 16px 4px calc(2px + var(--safe-bottom));
+  overflow: visible;
+  min-height: calc(var(--card-h) + 4px);
   flex-shrink: 0;
 }
 .card-slot {
@@ -857,22 +981,19 @@ body {
   cursor: pointer;
   position: relative;
   touch-action: none; /* evita scroll horizontal del navegador durante drag */
-  border-radius: 8px; /* sigue el border-radius de la carta, para que
-                         el box-shadow del .playable forme un marco
-                         rectangular con esquinas redondeadas. */
+  border-radius: 4px;
 }
 /* Sin `transition: transform` para que al reordenar el slot no haga el
    parpadeo de "vuelve a su sitio y luego salta al nuevo". El press
    feedback (:active translateY) se aplica instantáneo, que es OK. */
-/* Carta playable: levantada 12px + sombra de profundidad, sin marco
-   amarillo (señalamos "puedes jugar" solo con la elevación).
-   Las cartas no jugables NO se oscurecen ni se desvanecen: el feedback
-   es solo "estas levantadas son las que puedes jugar". */
+/* Carta playable: se eleva hacia adelante (translateY negativo) para
+   resaltar cuáles puedes jugar, sin marco de color. Sombra suave debajo
+   para dar profundidad y separar visualmente la carta del resto de la
+   fila. Es el estilo que estaba antes del anillo amarillo. */
 .card-slot.playable {
   transform: translateY(-12px);
-  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.45);
 }
-.card-slot.playable:active { transform: translateY(-2px); }
 .card-slot.disabled { cursor: not-allowed; }
 .card-slot.disabled:active { transform: none; }
 /* Drag activo: feedback visual para reordenar. */
@@ -891,81 +1012,267 @@ body {
   font-size: 14px;
 }
 
-/* Fin de mano: panel pequeño en la parte de abajo que no tapa la mesa
-   para que la última jugada (10 de últimas) siga visible detrás. */
-.game-over {
+/* Panel de resumen de fin de mano / partida. Overlay centrado sobre el
+   tablero. Tiene tres secciones:
+     1) Reparto de la mano (cartas, cantes, 10 de últimas, total).
+     2) Acumulado de la partida antes/después de esta mano.
+     3) Bloque de resultado (victoria / derrota / vamos a vueltas). */
+.game-over-summary {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 16px 28px;
-  background: rgba(13, 79, 60, 0.97);
+  gap: 12px;
+  padding: 16px 20px;
+  background: rgba(10, 61, 46, 0.97);
   border: 2px solid var(--accent);
   border-radius: 16px;
-  font-size: 14px;
-  z-index: 20;
+  color: var(--fg);
+  font-size: 13px;
+  z-index: 25;
+  /* pointer-events: none para que no bloquee toques en la mesa de abajo
+     (la 10 de últimas sigue visible y, en escritorio, sin overlay no se
+     interactúa con el panel). */
   pointer-events: none;
   animation: badge-in 0.3s ease-out;
-  text-align: center;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  max-width: min(92%, 460px);
+  max-height: 90%;
+  overflow-y: auto;
 }
-.game-over h2 {
+.game-over-summary h2 {
   margin: 0;
   color: var(--accent);
   font-size: 18px;
   font-weight: 800;
-}
-.game-over .score-line {
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 600;
-}
-.game-over .winner {
-  color: var(--ok);
-  font-weight: 700;
-  font-size: 15px;
+  text-align: center;
 }
 
-/* Overlay de fin de partida — gana quien cumpla el umbral en ambas cuentas. */
-.match-over {
+/* Anuncio de cante (centro de pantalla, debajo de la línea del "Truco"
+   resuelto). Aparece cuando alguien canta un par (40 o 20). Se queda
+   3,5 s y se va solo. `pointer-events: none` para no robar taps del
+   tablero por debajo. Borde de color del equipo que canta (azul
+   nosotros, amarillo ellos). */
+.cante-announcement {
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+  top: 30%;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 12px 28px 14px 28px;
+  background: rgba(10, 61, 46, 0.95);
+  border: 2.5px solid var(--accent);
+  border-radius: 14px;
+  color: var(--fg);
+  font-weight: 800;
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.7);
+  font-size: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-items: center;
+  max-width: 80%;
+  animation: cante-announce 3.5s ease-in-out forwards;
+}
+.cante-announcement.is-mine  { border-color: var(--team-mine); }
+.cante-announcement.is-theirs { border-color: var(--accent); }
+.cante-announcement .cante-announcement-team {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-mute);
+}
+.cante-announcement .cante-announcement-player {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+}
+.cante-announcement.is-mine .cante-announcement-player { color: var(--team-mine); }
+.cante-announcement.is-theirs .cante-announcement-player { color: var(--accent); }
+.cante-announcement .cante-announcement-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-mute);
+}
+.cante-announcement b.value { color: var(--accent); font-weight: 900; }
+.cante-announcement b.suit  { color: #fff; font-weight: 800; }
+@keyframes cante-announce {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(-12px) scale(0.92); }
+  10%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1.04); }
+  16%  { transform: translateX(-50%) translateY(0)                 scale(1);    }
+  88%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1);    }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-4px)  scale(1);    }
+}
+
+/* Pantalla de "Partida terminada": dos cajas grandes con el resultado final
+   + tabla con el desglose de la mano. Layout inspirado en el mockup. */
+.summary-matchover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.summary-result-title {
+  margin: 0;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+/* Cajas grandes con el marcador final por equipo. */
+.summary-score-boxes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.summary-score-box {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding: 24px 36px;
-  background: rgba(13, 79, 60, 0.97);
-  border: 3px solid var(--accent);
-  border-radius: 16px;
-  font-size: 14px;
-  z-index: 25;
-  pointer-events: none;
-  animation: badge-in 0.3s ease-out;
-  text-align: center;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
+  padding: 10px 8px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1.5px solid transparent;
 }
-.match-over h2 {
-  margin: 0;
-  color: var(--accent);
-  font-size: 22px;
+.summary-score-box.is-mine {
+  border-color: var(--team-mine);
+}
+.summary-score-box.is-theirs {
+  border-color: var(--accent);
+}
+.summary-score-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+.summary-score-value {
+  font-size: 32px;
   font-weight: 800;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
-.match-over .winner {
-  color: var(--ok);
-  font-weight: 800;
-  font-size: 18px;
+.summary-score-box.is-mine .summary-score-value { color: var(--team-mine); }
+.summary-score-box.is-theirs .summary-score-value { color: var(--accent); }
+.summary-score-suffix {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-mute);
 }
-.match-over .score-line {
-  color: var(--fg);
+/* Tabla con el desglose de la mano (3 columnas). */
+.summary-table-title {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+.summary-table {
+  display: flex;
+  flex-direction: column;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.summary-table-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: center;
+  padding: 6px 10px;
   font-size: 13px;
-  opacity: 0.85;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.summary-table-row:last-child { border-bottom: 0; }
+.summary-table-row.summary-table-header {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+  font-weight: 700;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.summary-table-row.summary-table-difference {
+  background: rgba(255, 255, 255, 0.05);
+  font-weight: 700;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+}
+.summary-table-label {
+  color: var(--fg);
+}
+.summary-table-col {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.summary-table-row.summary-table-header .summary-table-col {
+  color: var(--fg-mute);
+  text-align: right;
+}
+.summary-table-row.summary-table-header .summary-table-label {
+  /* Columna vacía del header: sin contenido visible */
+  display: block;
+}
+/* Colores por equipo en la fila destacada (cierre/diferencia): Nosotros
+   columna 1, Ellos columna 2. Sin importar quién gane la partida, cada
+   celda mantiene su color de equipo para que se identifique rápido. */
+.summary-table-row.summary-table-difference .summary-table-col:nth-of-type(2) {
+  color: var(--team-mine);
+}
+.summary-table-row.summary-table-difference .summary-table-col:nth-of-type(3) {
+  color: var(--accent);
+}
+.summary-footer {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--fg-mute);
+  text-align: center;
+  line-height: 1.4;
+}
+/* Botón de continuar al final del panel. Necesita pointer-events: auto
+   porque el panel entero los tiene en none (para no robar taps de la mesa
+   que se ve por debajo). */
+.summary-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 4px;
+  pointer-events: auto;
+}
+.summary-continue {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 800;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.summary-actions-hint {
+  font-size: 12px;
+  color: var(--fg-mute);
+  font-style: italic;
+  text-align: center;
+  line-height: 1.4;
+}
+/* En móvil: el panel ocupa casi toda la pantalla para que las dos cajas
+   + tabla del desglose quepan sin scroll horizontal. Reducimos padding
+   lateral y fuente del título. */
+@media (max-width: 768px) {
+  .game-over-summary {
+    width: 90%;
+    max-width: 98%;
+    padding: 12px 10px;
+    font-size: 12px;
+  }
+  .game-over-summary h2 { font-size: 16px; }
 }
 
 /* Badge pequeño con ganador + puntos (sin panel grande).

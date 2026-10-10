@@ -43,6 +43,9 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('PING'),
   }),
+  z.object({
+    type: z.literal('NEXT_HAND'),
+  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;

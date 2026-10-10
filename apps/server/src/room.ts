@@ -3,6 +3,7 @@ import {
   GUINOTE_ARAGONES,
   legalActions,
   newHand,
+  nextDealer,
   type GameState,
   type Seat,
   type Play,
@@ -216,31 +217,39 @@ export async function stepBots(
  * a todos. Si la mano terminó, también emite GAME_OVER (a menos que el
  * caller pase `skipGameOver: true` para emitirlo él mismo más tarde).
  *
- * Si la partida de vueltas sigue viva y la mano terminó, arranca la
- * siguiente vuelta tras una pausa. Si la partida terminó (alguien
- * alcanzó el umbral en ambas cuentas), incluye `matchWinner` en el GAME_OVER.
+ * La siguiente mano NO se reparte automáticamente: la dispara el cliente
+ * con un mensaje NEXT_HAND (típicamente al pulsar "Continuar" en el panel
+ * de resumen). Si la partida terminó (alguien alcanzó el umbral), incluye
+ * `matchWinner` en el GAME_OVER y MATCH_OVER para el overlay de victoria.
  */
 export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {}): void {
   broadcastView(room);
   if (room.state.phase === 'finished' && !opts.skipGameOver) {
     broadcastGameOver(room);
-    // Si la partida NO terminó, programar la siguiente vuelta.
-    if (!room.state.matchEnded) {
-      setTimeout(() => {
-        // Re-comprobar por si el cliente se desconectó mientras tanto.
-        startNextHand(room);
-        if (!room.state.matchEnded) {
-          broadcastView(room);
-          // Si el turno cae en un bot, arrancar automáticamente.
-          void stepBots(room).catch(() => undefined);
-        }
-      }, 4000); // 4s para que el cliente vea el game-over
-    } else {
+    if (room.state.matchEnded) {
       // Partida terminada — enviamos también MATCH_OVER para que el cliente
       // pueda mostrar un overlay dedicado de victoria.
       broadcastMatchOver(room);
     }
+    // Si NO terminó la partida, la sala queda en pausa hasta que algún
+    // cliente envíe NEXT_HAND. Ver `triggerNextHand`.
   }
+}
+
+/**
+ * Dispara la siguiente mano: reparte, emite VIEW y, si el primer turno
+ * cae en un bot, arranca el ciclo de bots. Llamado desde el handler del
+ * mensaje NEXT_HAND. No-op si la partida ya terminó o no estamos en
+ * `phase: 'finished'`.
+ */
+export function triggerNextHand(room: Room): void {
+  if (room.state.matchEnded) return;
+  if (room.state.phase !== 'finished') return;
+  startNextHand(room);
+  if (room.state.matchEnded) return;
+  broadcastView(room);
+  // Si el turno cae en un bot, arrancar automáticamente.
+  void stepBots(room).catch(() => undefined);
 }
 
 function broadcastGameOver(room: Room): void {
@@ -265,12 +274,19 @@ function broadcastMatchOver(room: Room): void {
 }
 
 /**
- * Siguiente mano: baraja de nuevo y empieza con dealer+1, conservando la
+ * Siguiente mano: baraja de nuevo y reparte la siguiente, conservando la
  * puntuación de la partida. Si la partida ya terminó, es un no-op.
+ *
+ * Regla del guiñote aragonés ("el que corta, reparte"): el dealer de la
+ * siguiente mano es el ganador de la última baza de la mano anterior. La
+ * regla vive en `nextDealer` del motor para que el cliente muestre el mismo
+ * dealer en su hint.
  */
 export function startNextHand(room: Room): void {
   if (room.state.matchEnded) return;
-  const newDealer = (((room.state.dealer + 1) % 4) as Seat);
+  const lastHandLastTrick = room.state.finishedTricks[room.state.finishedTricks.length - 1];
+  const lastTrickWinner = lastHandLastTrick ? lastHandLastTrick.winner : null;
+  const newDealer = nextDealer(lastTrickWinner, room.state.dealer);
   const newVuelta = room.state.vuelta + 1;
   room.state = newHand({
     id: `g-${room.code}-v${newVuelta}`,
