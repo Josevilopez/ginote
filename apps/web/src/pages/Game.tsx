@@ -26,23 +26,19 @@ function fmtPts(pts: number): string {
 }
 
 /**
- * Marcador del topbar (`score.buenas`): número entero directo, sin
- * transformación. Antes leíamos `cumulativeTeamPts` (la suma raw de
- * cartas + 10 últimas + cantes), pero esa métrica iba descaminada
- * respecto a la condición de victoria del motor (`score.buenas > 50`):
- * el mismo concepto de "Buenas" debe verse en la cabecera que
- * dispara el fin de partida. Ahora ambos lados hablan el mismo idioma
- * y "pintar 51" en el topbar implica `51 > 50` → MATCH_OVER al
- * instante.
- *  - score.buenas ≤ 50 → clase `in-malas` (rojo): todavía no se ha
- *    cruzado el umbral.
- *  - score.buenas > 50 → clase `in-buenas` (blanco): partida cerrada.
+ * Marcador del topbar (valor a pintar): el motor solo maneja puntos
+ * raw (`view.cumulativeTeamPts`); la noción de Buenas/Malas es PURAMENTE
+ * presentación. Se pinta como "Buenas" el tramo de arriba (≥ 51 raw
+ * ⇒ +(raw-50) en el número) y como "Malas" el tramo de abajo. Lo
+ * importante: el corte "51 en pantalla ↔ 101 raw" es lo que dispara
+ * `MATCH_OVER`, idéntico al motor (`cumulativeTeamPts > threshold(100)`).
  */
 function fmtScore(value: number): string {
+  if (value > 50) return `${value - 50}`;
   return `${value}`;
 }
 
-/** Clase CSS según el tramo (≤ 50 = malas, > 50 = buenas). */
+/** Clase CSS según el tramo: > 50 ⇒ "in-buenas" (blanco), si no "in-malas" (rojo). */
 function fmtRange(value: number): string {
   return value > 50 ? 'in-buenas' : 'in-malas';
 }
@@ -306,34 +302,25 @@ export function Game() {
           {/* Marcadores en vertical: número grande arriba, "Nosotros"/"Ellos"
               debajo. La fase (Idas / Vueltas) queda centrada entre ambos.
 
-              Fuente del número (en vivo, escala consistente entre manos):
-              - Mano en curso (`phase !== 'finished'`): el motor aún no ha
-                sumado la mano actual al `score.buenas` del partido. El
-                marcador = `score.buenas` (lo acumulado de manos previas,
-                preservado vía `continuation` en `newHand`) + la
-                contribución viva de la mano actual, aproximada como
-                `max(0, trickPoints - 50)` con la misma fórmula que usa
-                el motor para añadir al cerrar la mano. Así el contador
-                crece baza a baza Y no se resetea al pasar de idas a
-                vueltas.
-              - Mano cerrada (`phase === 'finished'`): el motor ya sumó
-                la contribución de esta mano a `score.buenas`, así que
-                mostramos solo esa métrica. (Si sumáramos también
-                `max(0, trickPoints - 50)` aquí, lo contaríamos dos
-                veces: el bug que evita el `if`.)
+              Fuente del número: `view.cumulativeTeamPts[team]`. Es la
+              suma raw de cartas + 10 de últimas + cantes a lo largo
+              de toda la partida. El motor la incrementa baza a baza y
+              al cantarse un cante, y la preserva entre manos vía
+              `continuation` en `newHand`, así que:
+              - Crece tras cada tirada, sin esperar al cierre de mano.
+              - Vueltas parte del resultado de idas, no se resetea.
+              - Cruza 100 (raw) ⇒ `MATCH_OVER` por el motor y el
+                color de la cifra pasa a blanco (visible a la vez).
 
-              Las dos ramas usan `fmtRange` con la misma regla de color:
-              ≤ 50 rojo (`in-malas`) / > 50 blanco (`in-buenas`),
-              idéntico al instante en que el motor dispara el fin de
-              partida (`score.buenas > 50`). */}
+              La noción "Buenas/Malas" es PURAMENTE presentación del
+              cliente: `fmtScore` pinta el tramo de arriba
+              (raw > 50 ⇒ "(raw-50)") en blanco, y el de abajo en
+              rojo. Eso es lo que el usuario llama "51 Buenas" cuando
+              raw = 101 — y dispara MATCH_OVER inmediatamente. */}
           <div className="score-team is-mine">
             {(() => {
               const team = you % 2 as 0 | 1;
-              const accum = view.score.buenas[team] ?? 0;
-              const live = view.phase === 'finished'
-                ? 0
-                : Math.max(0, (view.trickPoints[team] ?? 0) - 50);
-              const value = accum + live;
+              const value = view.cumulativeTeamPts[team] ?? 0;
               return (
                 <b className={`score-num ${fmtRange(value)}`}>
                   {fmtScore(value)}
@@ -348,11 +335,7 @@ export function Game() {
           <div className="score-team is-theirs">
             {(() => {
               const team = (1 - you % 2) as 0 | 1;
-              const accum = view.score.buenas[team] ?? 0;
-              const live = view.phase === 'finished'
-                ? 0
-                : Math.max(0, (view.trickPoints[team] ?? 0) - 50);
-              const value = accum + live;
+              const value = view.cumulativeTeamPts[team] ?? 0;
               return (
                 <b className={`score-num ${fmtRange(value)}`}>
                   {fmtScore(value)}
@@ -672,18 +655,15 @@ export function Game() {
                 </h3>
 
                 {/* Cajas grandes con el marcador final de la partida.
-                    Cada caja enseña UN único marcador por equipo
-                    (`marcadorAcumulado`): si tienen buenas acumuladas, "X Buenas";
-                    si no, "Y Malas". Así el ganador sale como "X Buenas"
-                    y el perdedor como "Y Malas", sin doble lectura. */}
+                    Presentación pura: a partir del `cumulative` raw del
+                    equipo pintamos (raw-50) como "Buenas" si raw > 50, o
+                    raw como "Malas" si raw ≤ 50. Sin gestión de dos
+                    contadores separados en el motor. */}
                 <div className="summary-score-boxes">
                   <div className="summary-score-box is-mine">
                     <span className="summary-score-label">Nosotros</span>
                     {(() => {
-                      const m = marcadorAcumulado(
-                        s.despuesBuenas[s.myTeam],
-                        s.despuesMalas[s.myTeam],
-                      );
+                      const m = marcadorAcumulado(s.cumulative[s.myTeam]);
                       return m.value > 0 ? (
                         <>
                           <span className="summary-score-value">{m.value}</span>
@@ -697,10 +677,7 @@ export function Game() {
                   <div className="summary-score-box is-theirs">
                     <span className="summary-score-label">Ellos</span>
                     {(() => {
-                      const m = marcadorAcumulado(
-                        s.despuesBuenas[s.otherTeam],
-                        s.despuesMalas[s.otherTeam],
-                      );
+                      const m = marcadorAcumulado(s.cumulative[s.otherTeam]);
                       return m.value > 0 ? (
                         <>
                           <span className="summary-score-value">{m.value}</span>
@@ -766,19 +743,15 @@ export function Game() {
               <section className="summary-matchover">
                 <h3 className="summary-result-title">🏁 Vamos de vueltas</h3>
 
-                {/* Cajas grandes con el marcador de cada equipo. Mismo criterio
-                    que en matchOver: si tienen buenas acumuladas, "X Buenas";
-                    si no, "Y Malas". Así un equipo que cierra la mano
-                    anterior queda como "X Buenas" y el que la pierde,
-                    "Y Malas". */}
+                {/* Cajas grandes con el marcador de cada equipo. La noción de
+                    Buenas/Malas es presentación: el motor solo acumula
+                    puntos raw (`cumulative`) y el cliente los traduce al
+                    pintar (raw > 50 ⇒ "(raw-50) Buenas", si no "raw Malas"). */}
                 <div className="summary-score-boxes">
                   <div className="summary-score-box is-mine">
                     <span className="summary-score-label">Nosotros</span>
                     {(() => {
-                      const m = marcadorAcumulado(
-                        s.despuesBuenas[s.myTeam],
-                        s.despuesMalas[s.myTeam],
-                      );
+                      const m = marcadorAcumulado(s.cumulative[s.myTeam]);
                       return m.value > 0 ? (
                         <>
                           <span className="summary-score-value">{m.value}</span>
@@ -792,10 +765,7 @@ export function Game() {
                   <div className="summary-score-box is-theirs">
                     <span className="summary-score-label">Ellos</span>
                     {(() => {
-                      const m = marcadorAcumulado(
-                        s.despuesBuenas[s.otherTeam],
-                        s.despuesMalas[s.otherTeam],
-                      );
+                      const m = marcadorAcumulado(s.cumulative[s.otherTeam]);
                       return m.value > 0 ? (
                         <>
                           <span className="summary-score-value">{m.value}</span>
@@ -849,10 +819,10 @@ export function Game() {
                   <div className="summary-table-row summary-table-difference">
                     <span className="summary-table-label">Faltan para cerrar</span>
                     <span className="summary-table-col">
-                      faltan <b>{faltanParaCerrar(s.despuesBuenas[s.myTeam])}</b>
+                      faltan <b>{faltanParaCerrar(s.cumulative[s.myTeam])}</b>
                     </span>
                     <span className="summary-table-col">
-                      faltan <b>{faltanParaCerrar(s.despuesBuenas[s.otherTeam])}</b>
+                      faltan <b>{faltanParaCerrar(s.cumulative[s.otherTeam])}</b>
                     </span>
                   </div>
                 </div>
@@ -872,7 +842,7 @@ export function Game() {
                 {s.vuelta > 1 && (
                   <p className="summary-footer">
                     En vueltas se arrastran las buenas/malas de la ida.
-                    La partida termina en cuanto una pareja pase {MATCH_THRESHOLD} buenas.
+                    La partida termina en cuanto una pareja pase {MATCH_THRESHOLD} puntos.
                   </p>
                 )}
               </section>
@@ -939,8 +909,12 @@ export function Game() {
 
 const STRENGTH = [1, 3, 12, 10, 11, 7, 6, 5, 4, 2] as const;
 
-/** Umbral de cierre de la partida (debe coincidir con rules.ts scoring.threshold). */
-const MATCH_THRESHOLD = 50;
+/** Umbral de cierre de la partida sobre `cumulativeTeamPts` (raw puntos
+ *  acumulados). Debe coincidir con `rules.ts scoring.threshold`. La
+ *  representación visual (topbar, score boxes) pinta el tramo de arriba
+ *  con la misma regla de "Buenas" (raw > 50 ⇒ raw - 50), por lo que
+ *  nuestra "X Buenas" en pantalla > 50 equivale a raw > 100. */
+const MATCH_THRESHOLD = 100;
 
 /** Resumen numérico del game-over para el panel. */
 interface Summary {
@@ -948,18 +922,18 @@ interface Summary {
   otherTeam: 0 | 1;
   /** Total de la mano (= trickPoints, ya incluye cantes + 10 de últimas). */
   handTotal: Record<0 | 1, number>;
+  /** Acumulado raw de la partida (= view.cumulativeTeamPts). El motor
+   *  actualiza este campo en vivo y lo preserva entre manos. La
+   *  noción de Buenas/Malas se deriva en el cliente al pintar. */
+  cumulative: Record<0 | 1, number>;
   /** Ganador (seat) de la última baza. null si no hay trucos. */
   lastTrickWinnerSeat: Seat | null;
   /** Equipo que ganó la última baza (se llevó las 10). null si no hay. */
   lastTrickWinnerTeam: 0 | 1 | null;
-  /** Marcador acumulado DESPUÉS de esta mano (= view.score). */
-  despuesBuenas: Record<0 | 1, number>;
-  despuesMalas: Record<0 | 1, number>;
   /** ¿Quién cierra la partida? (matchWinner) o null si no cierra nadie. */
   matchWinner: 0 | 1 | null;
-  /** Siguiente repartidor: el elegido por la regla de rotación del motor
-   *  (en idas→vueltas no rota, dentro de vueltas rota +1). Si la partida
-   *  terminó no hay siguiente mano. */
+  /** Siguiente repartidor: el ganador de la última baza (regla "el que
+   *  corta, reparte"). Si la partida terminó no hay siguiente mano. */
   nextDealer: Seat | null;
   /** Seat que sale (primer jugador de la próxima mano): a la derecha del dealer. */
   nextStarter: Seat | null;
@@ -983,11 +957,8 @@ function buildSummary(view: PlayerView, you: number): Summary {
   };
 
   // Quien reparte la siguiente mano lo decide el motor con la regla
-  // "el que corta, reparte": el ganador de la última baza de la mano que
-  // acaba de terminar (no rota, aplica a TODAS las transiciones, incluida
-  // idas → vueltas). Si la partida terminó (matchEnded), no hay próxima
-  // mano. `view.dealer` queda como fallback ante el caso imposible de
-  // que no haya última baza.
+  // "el que corta, reparte". Si la partida terminó (matchEnded), no
+  // hay próxima mano.
   const computedNextDealer = view.matchEnded
     ? null
     : nextDealer(lastTrickWinnerSeat, view.dealer);
@@ -997,10 +968,12 @@ function buildSummary(view: PlayerView, you: number): Summary {
     myTeam,
     otherTeam,
     handTotal,
+    cumulative: {
+      0: view.cumulativeTeamPts[0] ?? 0,
+      1: view.cumulativeTeamPts[1] ?? 0,
+    },
     lastTrickWinnerSeat,
     lastTrickWinnerTeam,
-    despuesBuenas: { 0: view.score.buenas[0] ?? 0, 1: view.score.buenas[1] ?? 0 },
-    despuesMalas: { 0: view.score.malas[0] ?? 0, 1: view.score.malas[1] ?? 0 },
     matchWinner: view.matchEnded ? view.matchWinner : null,
     nextDealer: computedNextDealer,
     nextStarter: computedNextStarter,
@@ -1008,9 +981,13 @@ function buildSummary(view: PlayerView, you: number): Summary {
   };
 }
 
-/** Cuántas buenas le faltan a un equipo para cerrar (> 50). */
-function faltanParaCerrar(buenas: number): number {
-  return Math.max(0, MATCH_THRESHOLD + 1 - buenas);
+/** Cuántas unidades del display (por encima del piso de 50) le faltan
+ *  a un equipo para alcanzar el cierre. Trabaja sobre el TRAMO de
+ *  arriba: raw > 50 ⇒ "raw - 50" es el valor en Buenas que se pinta.
+ *  Para raw = 101 (`raw - 50 = 51`) el equipo ha cerrado la partida. */
+function faltanParaCerrar(cumulativeRaw: number): number {
+  const aboveRaw = Math.max(0, cumulativeRaw - 50);
+  return Math.max(0, 51 - aboveRaw);
 }
 
 /** Puntos de la mano en formato de partida: si el equipo pasa de 50 suma a
@@ -1035,12 +1012,13 @@ function renderCantesForTeam(
 }
 
 /** Marcador compacto de una pareja en el panel de fin de mano/partida.
- *  Devuelve un único par (número + etiqueta): se prefieren las Buenas si el
- *  equipo ha acumulado alguna; en otro caso, las Malas; si tampoco tiene,
- *  "—". Cada caja del panel muestra solo este marcador. */
-function marcadorAcumulado(buenas: number, malas: number): { value: number; label: string } {
-  if (buenas > 0) return { value: buenas, label: 'Buenas' };
-  if (malas > 0)  return { value: malas,  label: 'Malas' };
+ *  Recibe el acumulado raw (`s.cumulative[team]`) y decide cómo pintarlo:
+ *  - raw > 50 → "(raw-50) Buenas" (zona de arriba).
+ *  - 0 < raw ≤ 50 → "raw Malas" (zona de abajo, sin cruzar el piso).
+ *  - raw = 0 → "—" (equipo no ha puntuado nada). */
+function marcadorAcumulado(cumRaw: number): { value: number; label: string } {
+  if (cumRaw > 50) return { value: cumRaw - 50, label: 'Buenas' };
+  if (cumRaw > 0)  return { value: cumRaw,      label: 'Malas'  };
   return { value: 0, label: '—' };
 }
 

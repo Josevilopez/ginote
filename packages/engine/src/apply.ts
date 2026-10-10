@@ -52,6 +52,39 @@ function draw(state: GameState, winner: Seat): GameEvent[] {
 }
 
 /**
+ * Comprueba si tras un cambio de `cumulativeTeamPts` algún equipo ha
+ * cruzado el umbral de cierre de partida y emite `MATCH_OVER`. Es
+ * idempotente: una vez `matchEnded` es `true`, no emite más aunque se
+ * llame otra vez.
+ *
+ * Decisión de diseño: NO se gestionan "Buenas" y "Malas" como contadores
+ * separados en el estado (eso era un intento anterior que añadía
+ * complejidad sin valor). El motor solo suma puntos raw en
+ * `cumulativeTeamPts`, preservado entre manos vía `continuation`. La
+ * noción de "Buenas" / "Malas" es PURAMENTE presentación — el cliente
+ * pinta rojo (≤ threshold) o blanco (> threshold) en función del valor
+ * raw, y dispara MATCH_OVER con el mismo corte.
+ */
+function maybeEndMatch(state: GameState, events: GameEvent[]): void {
+  if (state.matchEnded) return;
+  if (!state.rules.scoring) return;
+  const t = state.rules.scoring.threshold;
+  for (const team of [0, 1] as const) {
+    if ((state.cumulativeTeamPts[team] ?? 0) > t) {
+      state.matchEnded = true;
+      state.matchWinner = team;
+      events.push({
+        type: 'MATCH_OVER',
+        winner: team,
+        score: { ...state.score },
+        vuelta: state.vuelta,
+      });
+      break;
+    }
+  }
+}
+
+/**
  * Aplica una acción al estado. Devuelve los eventos generados.
  *
  * Lanza `Error` si la acción no es legal. El servidor debe haber validado con
@@ -87,11 +120,17 @@ export function apply(state: GameState, action: Action): GameEvent[] {
       const isLastTrick = allHandsEmpty && state.deck.length === 0 && state.trumpCard === null;
       const effectivePoints = isLastTrick ? trickPoints + state.rules.lastTrickBonus : trickPoints;
       const team: Team = teamOf(winner);
+      // Sumar al running trickPoints (esta mano).
       state.trickPoints[team] = (state.trickPoints[team] ?? 0) + effectivePoints;
-      // Suma raw al acumulado del match: crece POR BAZA y se preserva
-      // entre vueltas (vía continuation). Es la "puntuación actual" que
-      // muestra la topbar.
+      // Sumar al acumulado raw de la partida (lo que ve el cliente en
+      // la cabecera). Crece baza a baza Y se preserva entre manos
+      // vía `continuation` en `newHand`. No diferenciamos Buenas/Malas
+      // aquí: la noción es puramente visual y vive en la UI.
       state.cumulativeTeamPts[team] = (state.cumulativeTeamPts[team] ?? 0) + effectivePoints;
+      // Comprobar fin de partida con el raw, mismo corte que pinta el
+      // cliente (cualquier valor > threshold termina la partida).
+      maybeEndMatch(state, events);
+
       state.finishedTricks = [
         ...state.finishedTricks,
         {
@@ -105,15 +144,6 @@ export function apply(state: GameState, action: Action): GameEvent[] {
 
       if (isLastTrick) {
         // Mano terminada.
-        const cantesPuntos: Record<Team, number> = { 0: 0, 1: 0 };
-        for (const c of state.cantes) cantesPuntos[c.team] += c.value;
-        state.trickPoints[0] += cantesPuntos[0];
-        state.trickPoints[1] += cantesPuntos[1];
-        // Suma de los cantes al acumulado raw (que el cliente muestra en
-        // la cabecera como "marcador"). Antes solo sumaba los puntos de las
-        // bazas baza a baza, así que el canto del 40 se quedaba fuera.
-        state.cumulativeTeamPts[0] = (state.cumulativeTeamPts[0] ?? 0) + cantesPuntos[0];
-        state.cumulativeTeamPts[1] = (state.cumulativeTeamPts[1] ?? 0) + cantesPuntos[1];
         state.phase = 'finished';
         state.turn = null;
         events.push({
@@ -124,61 +154,6 @@ export function apply(state: GameState, action: Action): GameEvent[] {
           score: state.score,
           vuelta: state.vuelta,
         });
-
-        // Puntuación de la partida de vueltas. Se acumula desde la primera
-        // mano (idas). Si la partida ya terminó, no se sigue sumando.
-        //
-        // Regla del guiñote aragonés:
-        //  - En cada mano, el equipo que saca > 50 puntos suma (puntos - 50)
-        //    a sus buenas; el que saca ≤ 50 suma sus puntos a sus malas.
-        //  - La partida termina en cuanto un equipo acumula > 50 buenas
-        //    (sin esperar a que también supere 50 en malas — la condición
-        //    anterior exigía ambas, lo que hacía imposible ganar a un
-        //    equipo que siempre ganara la mano).
-        if (state.rules.scoring && !state.matchEnded) {
-          // cumulativeTeamPts ya se actualizó por baza arriba (no hace
-          // falta sumar otra vez aquí).
-          const nuevasBuenas: Record<0 | 1, number> = {
-            0: state.score.buenas[0] ?? 0,
-            1: state.score.buenas[1] ?? 0,
-          };
-          const nuevasMalas: Record<0 | 1, number> = {
-            0: state.score.malas[0] ?? 0,
-            1: state.score.malas[1] ?? 0,
-          };
-          for (const team of [0, 1] as const) {
-            const teamPts = state.trickPoints[team] ?? 0;
-            if (teamPts > 50) {
-              nuevasBuenas[team] = (nuevasBuenas[team] ?? 0) + (teamPts - 50);
-            } else if (teamPts > 0) {
-              nuevasMalas[team] = (nuevasMalas[team] ?? 0) + teamPts;
-            }
-          }
-          const nextScore = { buenas: nuevasBuenas, malas: nuevasMalas };
-          state.score = nextScore;
-
-          // Comprobar condición de victoria: cualquier equipo con
-          // buenas > threshold gana y la partida termina. Si en idas
-          // (vuelta 1) ya se supera el umbral, no se llega a jugar
-          // vueltas; si en vueltas se supera, termina anticipadamente.
-          const scoring = state.rules.scoring;
-          if (scoring && scoring.mode === 'vueltas') {
-            const t = scoring.threshold;
-            for (const team of [0, 1] as const) {
-              if ((nextScore.buenas[team] ?? 0) > t) {
-                state.matchEnded = true;
-                state.matchWinner = team;
-                events.push({
-                  type: 'MATCH_OVER',
-                  winner: team,
-                  score: nextScore,
-                  vuelta: state.vuelta,
-                });
-                break;
-              }
-            }
-          }
-        }
       } else {
         state.phase = 'winnerWindow';
         state.turn = winner;
@@ -243,6 +218,13 @@ export function apply(state: GameState, action: Action): GameEvent[] {
     const value = action.suit === state.trump ? state.rules.cantes.trumpValue : state.rules.cantes.value;
     const cante: Cante = { seat, team: teamOf(seat), suit: action.suit, pair: [a, b], value };
     state.cantes = [...state.cantes, cante];
+    // El cante suma raw a `cumulativeTeamPts` (lo que ve el cliente) y a
+    // `trickPoints` de la mano en curso. NO gestionamos Buenas/Malas
+    // en el motor — solo puntos raw que se van sumando.
+    const canteTeam: Team = teamOf(seat);
+    state.trickPoints[canteTeam] = (state.trickPoints[canteTeam] ?? 0) + value;
+    state.cumulativeTeamPts[canteTeam] = (state.cumulativeTeamPts[canteTeam] ?? 0) + value;
+    maybeEndMatch(state, events);
     events.push({ type: 'CANTE_DECLARED', seat, team: cante.team, suit: cante.suit, pair: cante.pair, value });
   } else if (action.type === 'PASS') {
     if (state.phase !== 'winnerWindow') {

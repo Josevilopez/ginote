@@ -101,25 +101,26 @@ export interface RulesConfig {
 
 /**
  * Sistema de puntuación por vueltas (guiñote aragonés):
- *  - Cada equipo lleva dos contadores: BUENAS (cuando gana la vuelta, suma
- *    puntos - 50) y MALAS (cuando pierde, suma puntos, 0-50).
- *  - La partida termina en cuanto un equipo acumula buenas > threshold.
- *    Las malas NO son condición: un equipo que siempre gana la mano
- *    tendrá buenas creciendo y malas en 0, y debe poder terminar.
- *  - La puntuación se acumula desde la primera mano (idas). Si en idas
- *    ya se supera el threshold, no se llega a jugar vueltas; si en
- *    vueltas se supera, termina anticipadamente.
  *
- * Ejemplo con threshold = 50:
- *  - Vuelta 1 (idas): A saca 70, B saca 30 → A.buenas = 20, B.malas = 30.
- *    No se llega a >50 → se juega vueltas.
- *  - Vuelta 2 (vueltas): A saca 80, B saca 20 → A.buenas = 50, B.malas = 50.
- *    50 NO es >50 → no termina.
- *  - Vuelta 3: A saca 60, B saca 40 → A.buenas = 60 (>50). Match Over: A gana.
+ * Decisión de diseño: NO se gestionan contadores separados de "Buenas" y
+ * "Malas" en el motor — el motor solo suma `state.cumulativeTeamPts` (raw
+ * puntos de cartas + cantes + 10 de últimas). La partida termina cuando
+ * un equipo cruza `threshold` puntos raw. La noción de "Buenas / Malas"
+ * es PURAMENTE presentación: el cliente pinta rojo/negro en función de
+ * `cumulativeTeamPts > threshold`, y MATCH_OVER dispara con el mismo
+ * corte. Eso elimina el lío de gestionar dos contadores paralelos y
+ * mantiene el estado del juego simple.
+ *
+ * Ejemplo con threshold = 100 sobre `cumulativeTeamPts` (la pantalla
+ * pinta como "Malas" lo que esté ≤ 100 y como "Buenas" lo que esté >):
+ *  - Vuelta 1 (idas): A suma 70, B suma 30 → cumulative { A: 70, B: 30 }.
+ *    No se llega a >100 → se juega vueltas.
+ *  - Vuelta 2: A suma 80, B suma 20 → cumulative { A: 150, B: 50 }.
+ *    A > 100 → MATCH_OVER: A gana.
  */
 export interface VueltasScoring {
   readonly mode: 'vueltas';
-  /** Umbral por contador. Un equipo gana cuando sus buenas > threshold. */
+  /** Umbral raw: un equipo gana cuando su `cumulativeTeamPts > threshold`. */
   readonly threshold: number;
 }
 
@@ -156,5 +157,5 @@ export const GUINOTE_ARAGONES: RulesConfig = {
     allowedInArrastre: true,
     requireTrickWonByTeam: true,
   },
-  scoring: { mode: 'vueltas', threshold: 50 },
+  scoring: { mode: 'vueltas', threshold: 100 },
 };
