@@ -67,6 +67,12 @@ app.register(async (instance) => {
       isBot: room.players.map((p) => p.token === null),
     });
     emitAfterChange(room);
+    // Si el primer turno (o cualquier turno) cae en un bot al conectar
+    // (p. ej. mesa recién creada donde el dealer aleatorio deja a un bot
+    // como primer jugador, o un reconnect a media partida), hay que
+    // arrancar el ciclo de bots. Sin esto la partida se queda colgada
+    // silenciosamente hasta que un humano intente tirar carta.
+    void stepBots(room).catch(() => undefined);
 
     socket.on('message', async (raw: unknown) => {
       const text = raw instanceof Buffer ? raw.toString() : String(raw);
@@ -112,7 +118,8 @@ app.register(async (instance) => {
 
         if (trickJustResolved) {
           // Pausa para que se vea la baza resuelta, sea la última o no.
-          await new Promise<void>((r) => setTimeout(r, 4000));
+          // Reducida a 2,5 s para que la "carta ganadora" no se eternice.
+          await new Promise<void>((r) => setTimeout(r, 2500));
         } else {
           // Pausa para que el humano vea su carta antes de que el siguiente
           // bot actúe (como en una partida real).
@@ -122,6 +129,11 @@ app.register(async (instance) => {
         if (wasLastTrick) {
           // Ahora sí, emitimos el GAME_OVER después de la pausa.
           emitAfterChange(room, { skipGameOver: false });
+          // Auto-cadencia: repartimos la siguiente mano tras una pausa
+          // más larga (4,5 s) para que el jugador lea el panel de
+          // resumen — sobre todo en los saltos entre idas/vueltas y
+          // entre partidas, donde hay más info que procesar.
+          setTimeout(() => triggerNextHand(room), 4500);
           return;
         }
 

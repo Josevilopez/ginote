@@ -65,6 +65,17 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('VIEW'),
     view: z.unknown(), // PlayerView (definido en el motor, se valida en runtime)
     version: z.number().int(),
+    // Estado de la progresión partida → coto → match. El servidor
+    // lo envía siempre para que el cliente pueda pintar el marcador
+    // y decidir qué panel mostrar al acabar una mano. `partidas` y
+    // `cotos` son records indexados por team (0/1). El motor
+    // solo rastrea la partida actual; el resto lo lleva el servidor.
+    partidas: z.object({ '0': z.number(), '1': z.number() }).optional(),
+    cotos: z.object({ '0': z.number(), '1': z.number() }).optional(),
+    partidaEnCoto: z.number().int().optional(),
+    cotoEnMatch: z.number().int().optional(),
+    matchFinished: z.boolean().optional(),
+    matchChampion: z.union([z.literal(0), z.literal(1)]).nullable().optional(),
   }),
   z.object({
     type: z.literal('ERROR'),

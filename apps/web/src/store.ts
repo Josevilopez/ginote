@@ -25,10 +25,28 @@ interface State {
     vuelta?: number | undefined;
     matchWinner?: 0 | 1 | null | undefined;
   } | null;
-  /** Resultado final de la partida (cuando un equipo cumple el umbral). */
+  /** Resultado final del coto (cuando un equipo cruza 100 raw). En la
+   *  jerarquía match → coto → juego, "match" aquí significa coto. */
   matchOver: { winner: 0 | 1; score: PartidaScore; vuelta: number } | null;
   error: string | null;
   lastCmdId: number;
+
+  // Progresión partida → coto → match (gestionada por el servidor).
+  // Usamos Record<0 | 1, number> en vez de `{ '0': ..., '1': ... }` para
+  // poder indexar con `team` (que es `0 | 1`) sin casts feos. En
+  // runtime son objetos idénticos (las keys se serializan a '0'/'1').
+  /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
+  partidas: Record<0 | 1, number>;
+  /** Cotos (sets de 4 partidas) ganados en el match, por equipo. */
+  cotos: Record<0 | 1, number>;
+  /** Partida actual dentro del coto (1..4). */
+  partidaEnCoto: number;
+  /** Coto actual dentro del match (1..2). */
+  cotoEnMatch: number;
+  /** El match entero ha terminado (alguien hizo 2 cotos). */
+  matchFinished: boolean;
+  /** Ganador del match (0 o 1). */
+  matchChampion: 0 | 1 | null;
 
   // Acciones
   createRoom: () => Promise<void>;
@@ -54,6 +72,15 @@ export const useGame = create<State>((set, get) => ({
   matchOver: null,
   error: null,
   lastCmdId: 0,
+
+  // Estado de progresión partida → coto → match (lo envía el servidor
+  // en cada VIEW). Inicializado a "1ª partida del 1er coto, todo a 0".
+  partidas: { 0: 0, 1: 0 },
+  cotos: { 0: 0, 1: 0 },
+  partidaEnCoto: 1,
+  cotoEnMatch: 1,
+  matchFinished: false,
+  matchChampion: null,
 
   async createRoom() {
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null });
@@ -130,9 +157,20 @@ function connect(
         view: newView,
         gameOver: isNewHand ? null : get().gameOver,
         matchOver: isNewHand ? null : get().matchOver,
+        // Estado de progresión partida → coto → match. Si el servidor
+        // aún no lo manda (cliente viejo, sin el nuevo campo), nos
+        // quedamos con el estado anterior.
+        partidas: msg.partidas ?? get().partidas,
+        cotos: msg.cotos ?? get().cotos,
+        partidaEnCoto: msg.partidaEnCoto ?? get().partidaEnCoto,
+        cotoEnMatch: msg.cotoEnMatch ?? get().cotoEnMatch,
+        matchFinished: msg.matchFinished ?? get().matchFinished,
+        matchChampion: msg.matchChampion ?? get().matchChampion,
       });
     } else if (msg.type === 'TRICK_JUST_RESOLVED') {
-      // Mostrar el overlay durante 1.5s. Si llega otro antes, se resetea.
+      // Mostrar el overlay durante 2,5 s. Si llega otro antes, se resetea.
+      // Ajustado para que la "carta ganadora" no se eternice — el jugador
+      // ya tiene el truco visible en la mesa, el overlay solo resalta.
       if (justResolvedTimer) clearTimeout(justResolvedTimer);
       set({
         justResolved: {
@@ -145,7 +183,7 @@ function connect(
       justResolvedTimer = setTimeout(() => {
         set({ justResolved: null });
         justResolvedTimer = null;
-      }, 4000);
+      }, 2500);
     } else if (msg.type === 'GAME_OVER') {
       set({ gameOver: msg });
       // Si la partida terminó, ocultar el gameOver de "Fin de mano" para que

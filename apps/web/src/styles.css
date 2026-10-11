@@ -200,21 +200,9 @@ body {
   width: 32px;
   height: calc(32px / var(--card-ratio));
 }
-/* Anillo del color del palo. Usamos currentColor y fijamos el color arriba
-   para no repetir cuatro reglas de border/box-shadow. */
-.trump-mini[data-suit="oros"]    { color: #f0c54a; }
-.trump-mini[data-suit="copas"]   { color: #d9544b; }
-.trump-mini[data-suit="espadas"] { color: #c9d4d1; }
-.trump-mini[data-suit="bastos"]  { color: #88c98a; }
-.trump-mini::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 10px;
-  border: 1.5px solid currentColor;
-  box-shadow: 0 0 6px currentColor;
-  pointer-events: none;
-}
+/* (Marco de color + glow eliminados del .trump-mini: el As del triunfo
+   en el topbar ya no lleva el anillo ni la sombra del color del palo.
+   Solo se conserva el tamaño fijo y la posición relative.) */
 .trump-text {
   display: flex;
   flex-direction: column;
@@ -289,18 +277,20 @@ body {
 }
 .score-team.is-mine  .score-label { color: var(--team-mine); }
 .score-team.is-theirs .score-label { color: var(--accent); }
-/* Número en malas (≤50): rojo oscuro para señalar "estamos perdiendo /
-   en zona de malas". Sin glow — compite con el label si lo lleva.
-   Número en buenas (>50): blanco como hasta ahora, con text-shadow glow
-   para señalar "en zona de victoria". */
+/* Número en malas (≤50): naranja para señalar "estamos en zona de malas".
+   Número en buenas (>50): verde (mismo --ok que ahora también usa el
+   pill de "Buenas" en las cajas grandes), con un glow suave para
+   reforzar la zona de victoria. Antes era blanco; el blanco se
+   confundía con el texto neutro y no se distinguía bien la zona
+   caliente. */
 .score-num.in-malas {
   color: #E65100;
   font-weight: 700;
 }
 .score-num.in-buenas {
-  color: var(--fg);
+  color: var(--ok);
   font-weight: 800;
-  text-shadow: 0 0 8px rgba(245, 240, 225, 0.45);
+  text-shadow: 0 0 8px rgba(109, 219, 155, 0.45);
 }
 
 /* Pill de fase: "Idas" en la primera vuelta, "Vueltas" en las siguientes.
@@ -319,10 +309,115 @@ body {
   color: var(--accent);
   border: 1px solid var(--accent);
 }
+/* "Vueltas" usa el mismo color que "Idas" (--accent, amarillo) para que
+   la cabecera no cambie de tono entre fases. El verde que antes vivía
+   aquí se reasignó al tramo de "Buenas" (ver .score-num.in-buenas). */
 .phase-pill.phase-vueltas {
-  background: rgba(109, 219, 155, 0.18);
-  color: var(--ok);
-  border: 1px solid var(--ok);
+  background: rgba(232, 196, 107, 0.18);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+/* Scoreboard "estilo tenis" en la esquina superior derecha del tablero.
+   Dos cuadros (COTOS y PARTIDAS), cada uno con 2 filas (Nosotros / Ellos)
+   y un número grande: cotos/partidas ganados por cada equipo. Flota con
+   absolute respecto a `.board` (que es `position: relative`). */
+.match-tennis {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  z-index: 4;
+  pointer-events: none; /* No bloquea clicks sobre los seats de detrás */
+}
+.match-tennis-board {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  min-width: 64px;
+  pointer-events: auto;
+}
+.match-tennis-label {
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--fg-mute);
+  text-align: center;
+  font-weight: 700;
+}
+.match-tennis-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+.match-tennis-row.is-mine   { color: var(--team-mine); }
+.match-tennis-row.is-theirs { color: var(--accent); }
+.match-tennis-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+/* Separador entre "Nosotros" y "Ellos" que solo se muestra en móvil,
+   cuando el layout horizontal del scoreboard aplana los dos números en
+   una fila con forma "0-3". En escritorio el dash está oculto porque
+   las dos cifras viven en filas apiladas. */
+.match-tennis-dash {
+  display: none;
+  color: var(--fg-mute);
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+}
+/* Orden visual: Partidas a la izquierda, Cotos a la derecha. El DOM
+   ya los pone en ese orden (Partidas primero en Game.tsx), pero lo
+   dejamos explícito para que un cambio futuro (flex-direction:
+   row-reverse, reorder del JSX, etc.) no invierta el marcador sin
+   querer. Cambiar este mapeo si más adelante se quiere otra
+   distribución. */
+.match-tennis > .match-tennis-board:nth-of-type(1) { order: 1; }  /* Partidas → izquierda */
+.match-tennis > .match-tennis-board:nth-of-type(2) { order: 2; }  /* Cotos → derecha */
+
+/* Móvil: el scoreboard se estira de borde a borde del tablero
+   (Cotos pegado al borde izquierdo, Partidas al derecho), en la
+   parte superior — encima del jugador Norte. Cada caja se aplana a
+   una fila "0-3" para no comer la poca altura disponible en
+   pantallas estrechas. */
+@media (max-width: 768px) {
+  .match-tennis {
+    top: 8px;
+    left: 12px;
+    right: 12px;
+    transform: none;
+    gap: 6px;
+    justify-content: space-between;
+  }
+  .match-tennis-board {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 4px;
+    padding: 4px 8px;
+    min-width: 0;
+  }
+  .match-tennis-label {
+    font-size: 9px;
+  }
+  .match-tennis-row {
+    font-size: 13px;
+  }
+  .match-tennis-dash {
+    display: inline;
+    margin: 0 1px;
+  }
 }
 
 /* Mazo de la mesa: triunfo vertical boca arriba arriba, con la pila
@@ -684,38 +779,28 @@ body {
 .trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 35px)); }   /* Norte: encima del centro */
 .trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -1.1), 30px); }        /* Oeste: izquierda del centro */
 
-/* Carta ganadora del truco: la elevamos al frente del stack y la
-   resaltamos con outline + glow + leve escala. El `z-index` está en el
-   propio `.trick-card.winning` (no en el .card-img interior) porque el
-   `transform` del padre crea un stacking context que aislaría el
-   z-index del hijo. */
+/* Carta ganadora del truco: la elevamos un poco sobre el resto y la
+   traemos al frente con z-index. Sin outline, sin glow, sin pulse:
+   el usuario ve claramente cuál es la ganadora por tamaño y posición,
+   sin necesidad de un marco que distrae del resto del truco. */
 .trick-card.winning { z-index: 3; }
 .trick-card.winning .card-img {
-  outline: 3px solid var(--accent);
-  outline-offset: 2px;
-  box-shadow: 0 0 20px var(--accent), 0 0 8px var(--accent);
-  filter: brightness(1.15);
-  /* Scale movido a la regla estática para que pueda transicionar al
-     perder la clase .winning (las @keyframes no "disparan" transitions;
-     necesitamos que el valor sin animar esté en la regla para que el
-     cambio a "sin clase" sea interpolable). */
-  transform: scale(1.08);
-  /* El keyframe pulsa solo el glow (box-shadow), no el transform. */
-  animation: winning-pulse 1.2s ease-in-out infinite alternate;
-  z-index: 2;
-  /* Transiciones suaves: cuando se quita la clase .winning, el glow,
-     el outline y la escala se desvanecen en lugar de saltar. */
-  transition:
-    transform 0.4s ease-out,
-    box-shadow 0.4s ease-out,
-    outline-color 0.4s ease-out,
-    outline-width 0.4s ease-out,
-    filter 0.4s ease-out;
+  transform: scale(1.25);
+  transition: transform 0.4s ease-out;
 }
-@keyframes winning-pulse {
-  /* Solo pulsamos el glow, el scale vive en la regla estática. */
-  from { box-shadow: 0 0 16px var(--accent), 0 0 6px var(--accent); }
-  to   { box-shadow: 0 0 32px var(--accent), 0 0 14px var(--accent); }
+
+/* Carta recién ROBADA del mazo por el jugador. Highlight breve (1,5s)
+   para que el jugador vea qué carta le ha tocado. Verde (var(--ok)) en
+   línea con el color de "Buenas" que ya usamos como semántica positiva.
+   La animación va sobre .card-img (no sobre .card-slot) para no chocar
+   con el `transform` que aplica drag-to-reorder sobre el botón. */
+@keyframes new-card-glow {
+  0%   { box-shadow: 0 0 14px 3px var(--ok); }
+  60%  { box-shadow: 0 0 14px 3px var(--ok); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.card-slot.is-newly-drawn .card-img {
+  animation: new-card-glow 1.5s ease-out forwards;
 }
 
 /* Las cartas no ganadoras se quedan como están; solo destaca la ganadora. */
@@ -1176,6 +1261,16 @@ body {
   font-size: 22px;
   font-weight: 800;
   letter-spacing: 0.01em;
+}
+/* Subtítulo bajo el título del panel: indica el nivel al que se ha
+   llegado (coto / partida / match) en la jerarquía del marcador. */
+.summary-result-subtitle {
+  margin: 0 0 4px 0;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-mute);
+  letter-spacing: 0.02em;
 }
 /* Cajas grandes con el marcador final por equipo. */
 .summary-score-boxes {

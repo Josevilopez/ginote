@@ -53,8 +53,15 @@ export function Game() {
   const matchOver = useGame((s) => s.matchOver);
   const justResolved = useGame((s) => s.justResolved);
   const sendAction = useGame((s) => s.sendAction);
-  const requestNextHand = useGame((s) => s.requestNextHand);
   const leave = useGame((s) => s.leave);
+  // Progresión partida → coto → match (servidor). Necesitamos varios
+  // en el render del marcador y de los paneles de fin de mano.
+  const partidas = useGame((s) => s.partidas);
+  const cotos = useGame((s) => s.cotos);
+  const partidaEnCoto = useGame((s) => s.partidaEnCoto);
+  const cotoEnMatch = useGame((s) => s.cotoEnMatch);
+  const matchFinished = useGame((s) => s.matchFinished);
+  const matchChampion = useGame((s) => s.matchChampion);
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
   // IDs en el orden actual; `null` = orden por defecto (palo + fuerza).
@@ -122,17 +129,19 @@ export function Game() {
     return map;
   }, [view?.cantes]);
 
-  // Mano del jugador, en el orden por defecto (palo + fuerza) o el personalizado.
+  // Mano del jugador, en el orden de reparto del motor o el personalizado.
+  // NO auto-ordenamos por palo+fuerza: cada jugador (incluido el humano) se
+  // ordena sus cartas como quiera. El motor reparte en orden de barajadura
+  // y nos lo pasa tal cual en `view.hand`. Si el jugador hace drag-drop,
+  // se guarda en `customOrder` y se respeta; si nunca reordena, ve las
+  // cartas tal como salieron.
   // El reorder solo afecta a la visualización; las IDs y el envío de jugadas
   // siguen siendo las mismas del servidor. Vive ANTES del early return para
   // no violar las Rules of Hooks.
   const displayCards = useMemo(() => {
     if (!view) return [];
     if (customOrder === null) {
-      return [...view.hand].sort((a, b) => {
-        if (a.suit !== b.suit) return a.suit.localeCompare(b.suit);
-        return STRENGTH.indexOf(a.rank) - STRENGTH.indexOf(b.rank);
-      });
+      return view.hand.slice();
     }
     const map = new Map(view.hand.map((c) => [c.id, c]));
     return customOrder
@@ -218,6 +227,40 @@ export function Game() {
       setWinningKeys(new Set());
     }
   }, [view?.trick.length]);
+
+  // Highlight breve (1,5s) en la carta recién ROBADA del mazo por el
+  // jugador. Distinguimos "robo" (1 carta nueva tras un truco) del
+  // "reparto inicial" (6 cartas nuevas al empezar mano), porque en el
+  // segundo caso no tiene sentido destacar una sola.
+  //
+  // Mecánica: comparamos el set de IDs de la mano actual con el que
+  // recordamos del render anterior. Si hay exactamente 1 ID nuevo y
+  // provenía de un "robo" (mano creció de 5 a 6 o de N a N+1 dentro
+  // de la misma mano), marcamos ese ID para el highlight.
+  const prevHandIdsRef = useRef<string | null>(null);
+  const [newlyDrawnId, setNewlyDrawnId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!view) return;
+    const currentIds = view.hand.map((c) => c.id).join('|');
+    const prev = prevHandIdsRef.current;
+    if (prev === null) {
+      // Primera vez: inicializamos sin highlight (mano recién repartida).
+      prevHandIdsRef.current = currentIds;
+      return;
+    }
+    if (prev === currentIds) return; // sin cambios
+    const prevSet = new Set(prev.split('|'));
+    const newIds = view.hand.filter((c) => !prevSet.has(c.id));
+    prevHandIdsRef.current = currentIds;
+    if (newIds.length === 1) {
+      // Caso típico: 1 carta nueva → highlight de 1,5s
+      const newId = newIds[0]!.id;
+      setNewlyDrawnId(newId);
+      const t = setTimeout(() => setNewlyDrawnId(null), 1500);
+      return () => clearTimeout(t);
+    }
+    // 0 cartas nuevas (mano encogió) o 6+ nuevas (nueva mano): sin highlight
+  }, [view?.hand]);
 
   // Gestiona el ciclo de vida de customOrder cuando el servidor actualiza la mano:
   // - Si la mano creció (carta nueva) → mantenemos el orden del jugador y
@@ -368,6 +411,48 @@ export function Game() {
       {/* Solo se renderiza el seat activo, en la celda de su posición.
           Cuando cambia el turno, el panel "salta" a otra celda. */}
       <div className="board">
+        {/* Marcador "estilo tenis" flotante en la esquina superior derecha
+            del tablero en escritorio. En móvil (`@media max-width: 768px`)
+            se recoloca centrado arriba del jugador Norte con las dos cifras
+            en una fila "0-3" — ver `.match-tennis-dash` y la media query
+            asociada en styles.css. Posicionado en absolute respecto a
+            `.board`. */}
+        {(() => {
+          const myTeam = (you % 2) as 0 | 1;
+          const otherTeam = (1 - (you % 2)) as 0 | 1;
+          return (
+            <div className="match-tennis">
+              {/* Caja "Partidas" (idas/vueltas individuales ganadas). En el
+                  DOM va PRIMERO para que con el `order` del CSS la saquemos
+                  a la izquierda. */}
+              <div className="match-tennis-board">
+                <div className="match-tennis-label">Partidas</div>
+                <div className="match-tennis-row is-mine">
+                  <span className="match-tennis-count">{partidas[myTeam]}</span>
+                </div>
+                {/* El guion solo se ve en móvil (display: none por defecto).
+                    Lo añadimos al DOM para no duplicar el render según el
+                    viewport. */}
+                <span className="match-tennis-dash" aria-hidden="true">-</span>
+                <div className="match-tennis-row is-theirs">
+                  <span className="match-tennis-count">{partidas[otherTeam]}</span>
+                </div>
+              </div>
+              {/* Caja "Cotos" (sets de 4 partidas ganados). Va segunda en
+                  el DOM y el CSS la coloca a la derecha. */}
+              <div className="match-tennis-board">
+                <div className="match-tennis-label">Cotos</div>
+                <div className="match-tennis-row is-mine">
+                  <span className="match-tennis-count">{cotos[myTeam]}</span>
+                </div>
+                <span className="match-tennis-dash" aria-hidden="true">-</span>
+                <div className="match-tennis-row is-theirs">
+                  <span className="match-tennis-count">{cotos[otherTeam]}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         <div className="seats-area">
           {/* Todos los seats muestran sus cartas boca abajo, incluido el humano.
               El acento (borde dorado) marca quién tiene el turno. El humano no
@@ -473,7 +558,7 @@ export function Game() {
               <button
                 key={c.id}
                 ref={(el) => { slotRefs.current[idx] = el; }}
-                className={`card-slot ${isMyTurn && hasRestrictedHand && legalSet.has(c.id) ? 'playable' : isMyTurn && hasRestrictedHand && !legalSet.has(c.id) ? 'disabled' : ''} ${isDraggingThis ? 'is-dragging' : ''}`}
+                className={`card-slot ${isMyTurn && hasRestrictedHand && legalSet.has(c.id) ? 'playable' : isMyTurn && hasRestrictedHand && !legalSet.has(c.id) ? 'disabled' : ''} ${isDraggingThis ? 'is-dragging' : ''} ${newlyDrawnId === c.id ? 'is-newly-drawn' : ''}`}
                 style={style}
                 aria-label={`${c.rank} de ${c.suit}`}
                 onPointerDown={(e) => {
@@ -656,13 +741,13 @@ export function Game() {
         </div>
       </div>
 
-      {/* Resumen de fin de mano / partida. Se muestra cuando llega el GAME_OVER
-          (con o sin MATCH_OVER). Estructura compacta: título + cajas grandes
-          con el marcador + tabla 3 columnas con el desglose de la mano.
-          - matchOver: "Partida terminada · Hemos ganado / Ganan ellos" + sin
-            acción Continuar.
-          - gameOver sin cierre: "Resumen · vuelta N" + 🏁 "Vamos de vueltas"
-            + Continuar para repartir la siguiente. */}
+      {/* Resumen de fin de partida (ida/vuelta). Se muestra cuando llega el
+          GAME_OVER (con o sin MATCH_OVER). Estructura compacta: título +
+          cajas grandes con el marcador + tabla 3 columnas con el desglose.
+          - matchOver: "Partida terminada · Hemos ganado / Ganan ellos" +
+            sin acción Continuar (auto-cadencia del servidor).
+          - gameOver sin cierre: "Resumen · vuelta N" + 🏁 "Vamos de
+            vueltas" + (sin botón, los servidores reparten al siguiente). */}
       {(gameOver || matchOver) && view && (() => {
         const s = buildSummary(view, you);
         const seatLabel = (seat: Seat) => seatNames[seat] || SEAT_LABELS[seat];
@@ -680,6 +765,17 @@ export function Game() {
                 <h3 className="summary-result-title">
                   {s.matchWinner === s.myTeam ? '🎉 Hemos ganado' : 'Ganan ellos'}
                 </h3>
+                {/* Subtítulo que indica el nivel en el que estamos:
+                    - matchFinished: el match entero ha terminado.
+                    - partidas[winner] == 4 && !matchFinished: coto ganado.
+                    - en otro caso: solo partida ganada (panel normal). */}
+                {matchFinished ? (
+                  <p className="summary-result-subtitle">🏆 Match terminado</p>
+                ) : s.matchWinner !== null && partidas[s.matchWinner] >= 4 ? (
+                  <p className="summary-result-subtitle">Coto ganado — empezamos el siguiente</p>
+                ) : (
+                  <p className="summary-result-subtitle">Partida {partidaEnCoto} de 4 ganada</p>
+                )}
 
                 {/* Cajas grandes con el marcador final de la partida.
                     Presentación pura: a partir del `cumulative` raw del
@@ -720,48 +816,58 @@ export function Game() {
                 {/* Tabla con el desglose de la mano (2 columnas: puntos
                     formateados de esta mano + quién se llevó las 10 de
                     últimas). Quitamos la fila Diferencia porque su info ya
-                    está implícita en el título y en las cajas grandes. */}
-                <h3 className="summary-table-title">Desglose de la mano</h3>
-                <div className="summary-table">
-                  <div className="summary-table-row summary-table-header">
-                    <span className="summary-table-label" />
-                    <span className="summary-table-col">Nosotros</span>
-                    <span className="summary-table-col">Ellos</span>
-                  </div>
-                  <div className="summary-table-row">
-                    <span className="summary-table-label">Puntos</span>
-                    <span className="summary-table-col">
-                      {formatPunto(s.handTotal[s.myTeam])}
-                    </span>
-                    <span className="summary-table-col">
-                      {formatPunto(s.handTotal[s.otherTeam])}
-                    </span>
-                  </div>
-                  {view.cantes.length > 0 && (
-                    <div className="summary-table-row">
-                      <span className="summary-table-label">Cantes</span>
-                      <span className="summary-table-col">
-                        {renderCantesForTeam(view.cantes, s.myTeam)}
-                      </span>
-                      <span className="summary-table-col">
-                        {renderCantesForTeam(view.cantes, s.otherTeam)}
-                      </span>
+                    está implícita en el título y en las cajas grandes.
+
+                    Se muestra SOLO cuando la partida termina en IDAS
+                    (vuelta === 1). En vueltas 2+ las cajas grandes con
+                    Buenas/Malas ya cuentan toda la historia y la tabla
+                    resulta redundante — el cliente solo ve el marcador
+                    final. */}
+                {s.vuelta === 1 && (
+                  <>
+                    <h3 className="summary-table-title">Desglose de la mano</h3>
+                    <div className="summary-table">
+                      <div className="summary-table-row summary-table-header">
+                        <span className="summary-table-label" />
+                        <span className="summary-table-col">Nosotros</span>
+                        <span className="summary-table-col">Ellos</span>
+                      </div>
+                      <div className="summary-table-row">
+                        <span className="summary-table-label">Puntos</span>
+                        <span className="summary-table-col">
+                          {formatPunto(s.handTotal[s.myTeam])}
+                        </span>
+                        <span className="summary-table-col">
+                          {formatPunto(s.handTotal[s.otherTeam])}
+                        </span>
+                      </div>
+                      {view.cantes.length > 0 && (
+                        <div className="summary-table-row">
+                          <span className="summary-table-label">Cantes</span>
+                          <span className="summary-table-col">
+                            {renderCantesForTeam(view.cantes, s.myTeam)}
+                          </span>
+                          <span className="summary-table-col">
+                            {renderCantesForTeam(view.cantes, s.otherTeam)}
+                          </span>
+                        </div>
+                      )}
+                      <div className="summary-table-row">
+                        <span className="summary-table-label">10 de últimas</span>
+                        <span className="summary-table-col">
+                          {s.lastTrickWinnerTeam === s.myTeam
+                            ? seatLabel(s.lastTrickWinnerSeat!)
+                            : '—'}
+                        </span>
+                        <span className="summary-table-col">
+                          {s.lastTrickWinnerTeam === s.otherTeam
+                            ? seatLabel(s.lastTrickWinnerSeat!)
+                            : '—'}
+                        </span>
+                      </div>
                     </div>
-                  )}
-                  <div className="summary-table-row">
-                    <span className="summary-table-label">10 de últimas</span>
-                    <span className="summary-table-col">
-                      {s.lastTrickWinnerTeam === s.myTeam
-                        ? seatLabel(s.lastTrickWinnerSeat!)
-                        : '—'}
-                    </span>
-                    <span className="summary-table-col">
-                      {s.lastTrickWinnerTeam === s.otherTeam
-                        ? seatLabel(s.lastTrickWinnerSeat!)
-                        : '—'}
-                    </span>
-                  </div>
-                </div>
+                  </>
+                )}
 
 
               </section>
@@ -769,6 +875,26 @@ export function Game() {
             {!matchOver && s.matchWinner === null && (
               <section className="summary-matchover">
                 <h3 className="summary-result-title">🏁 Vamos de vueltas</h3>
+                {/* Subtítulo con el progreso de partidas en el coto actual:
+                    "Llevas X de 4 partidas, faltan N" o "¡Has ganado
+                    el coto!" si partidas[myTeam] == 4. */}
+                {(() => {
+                  const myPartidas = partidas[s.myTeam];
+                  const faltan = 4 - myPartidas;
+                  if (myPartidas >= 4) {
+                    return (
+                      <p className="summary-result-subtitle">
+                        ¡Has ganado el coto!
+                      </p>
+                    );
+                  }
+                  return (
+                    <p className="summary-result-subtitle">
+                      Llevas <b>{myPartidas}</b> de 4 partidas
+                      {faltan === 1 ? ' · falta 1' : ` · faltan ${faltan}`}
+                    </p>
+                  );
+                })()}
 
                 {/* Cajas grandes con el marcador de cada equipo. La noción de
                     Buenas/Malas es presentación: el motor solo acumula
@@ -866,20 +992,21 @@ export function Game() {
               </section>
             )}
 
-            {/* Botón "Continuar" — reemplaza el auto-deal de 4 s del servidor.
-                El cliente decide cuándo se reparte la siguiente mano. */}
+            {/* Pie del panel de resumen. Con la auto-cadencia del servidor,
+                ya no hay botón "Continuar": 4 partidas forman un coto, 2
+                cotos forman un match, y el siguiente juego se reparte solo
+                ~3 s después de este panel. Cuando el match entero ha
+                terminado, lo decimos en texto para que el usuario sepa que
+                tiene que crear una sala nueva. */}
             <div className="summary-actions">
-              {matchOver ? (
+              {matchFinished ? (
                 <span className="summary-actions-hint">
-                  La partida ha terminado.
+                  🏆 El match ha terminado. Crea una sala nueva para volver a jugar.
                 </span>
               ) : (
-                <button
-                  className="btn primary summary-continue"
-                  onClick={() => requestNextHand()}
-                >
-                  Continuar
-                </button>
+                <span className="summary-actions-hint">
+                  Repartiendo siguiente mano…
+                </span>
               )}
             </div>
           </div>
@@ -916,8 +1043,14 @@ export function Game() {
             {seatNames[canteAnnouncement.seat] || SEAT_LABELS[canteAnnouncement.seat]}
           </div>
           <div className="cante-announcement-text">
-            canta <b className="value">+{canteAnnouncement.value}</b>{' '}
-            en <b className="suit">{SUIT_NAME[canteAnnouncement.suit]}</b>
+            canta <b className="value">+{canteAnnouncement.value}</b>
+            {/* Cuando el cante es de 40, el palo es siempre el del triunfo
+                (regla del motor: `value = suit === trump ? 40 : 20`), así
+                que decirlo es redundante. Solo mostramos el palo en los
+                cantes de 20, donde sí puede ser cualquier palo. */}
+            {canteAnnouncement.value !== 40 && (
+              <> en <b className="suit">{SUIT_NAME[canteAnnouncement.suit]}</b></>
+            )}
           </div>
         </div>
       )}

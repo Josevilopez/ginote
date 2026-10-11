@@ -12,7 +12,7 @@ import {
   type Card,
   type GameEvent,
 } from '@guinote/engine';
-import { stepBot } from '@guinote/bots';
+import { stepHeuristicBot } from '@guinote/bots';
 import type { ServerMessage } from '@guinote/protocol';
 
 export interface PlayerSlot {
@@ -32,6 +32,34 @@ export interface Room {
   seenCommandIds: Set<string>;
   /** Eventos pendientes para el log. */
   log: GameEvent[];
+
+  // ─── Estructura del match completo (coto → partida → juego) ───
+  // Terminología usada en este código (alineada con el cliente y el
+  // dominio del juego):
+  //   - partida: una ida o vuelta individual. Gana el equipo que cruza
+  //     los 100 puntos raw del coto (lo que el motor llama
+  //     `state.matchEnded`). Aquí se cuentan como `partidas[team]`.
+  //   - coto: un set de 4 partidas consecutivas ganadas. Se cuentan
+  //     como `cotos[team]`.
+  //   - match: la serie entera. Lo gana el primer equipo que suma
+  //     2 cotos (`cotos[team] >= 2`).
+  //
+  // El motor solo rastrea el coto actual. La capa del servidor
+  // (Room) lleva la cuenta de partidas/cotos/match y orquesta las
+  // transiciones en `triggerNextHand`.
+
+  /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
+  partidas: { 0: number; 1: number };
+  /** Cotos (sets de 4 partidas) ganados en el match, por equipo. */
+  cotos: { 0: number; 1: number };
+  /** Partida actual dentro del coto (1..4). */
+  partidaEnCoto: number;
+  /** Coto actual dentro del match (1..2). */
+  cotoEnMatch: number;
+  /** El match entero ha terminado (una pareja ha hecho 2 cotos). */
+  matchFinished: boolean;
+  /** Equipo ganador del match (0 o 1), null mientras no haya terminado. */
+  matchChampion: 0 | 1 | null;
 }
 
 /**
@@ -57,7 +85,12 @@ export function createRoom(opts: {
     id: `g-${opts.code}`,
     seed: cryptoToken(),
     rules: GUINOTE_ARAGONES,
-    dealer: 3,
+    // Sorteo inicial: el dealer de la primera mano se elige al azar entre
+    // los 4 asientos. A partir de ahí se aplica la regla del guiñote
+    // aragonés: "el que corta, reparte" (winner of last trick → next dealer),
+    // y siempre tira el de la derecha del dealer. Implementado en
+    // `startNextHand` + `nextDealer` del motor.
+    dealer: Math.floor(Math.random() * 4) as Seat,
   });
 
   return {
@@ -66,6 +99,12 @@ export function createRoom(opts: {
     state,
     seenCommandIds: new Set(),
     log: [],
+    partidas: { 0: 0, 1: 0 },
+    cotos: { 0: 0, 1: 0 },
+    partidaEnCoto: 1,
+    cotoEnMatch: 1,
+    matchFinished: false,
+    matchChampion: null,
   };
 }
 
@@ -92,7 +131,20 @@ function broadcastView(room: Room): void {
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1) {
       const view: PlayerView = viewFor(room.state, p.seat);
-      p.ws.send(JSON.stringify({ type: 'VIEW', view, version: room.state.version } satisfies ServerMessage));
+      p.ws.send(JSON.stringify({
+        type: 'VIEW',
+        view,
+        version: room.state.version,
+        // Estado de la progresión partida → coto → match, gestionado
+        // por el servidor. El cliente lo lee para mostrar el marcador
+        // y decidir qué panel de fin de mano enseñar.
+        partidas: room.partidas,
+        cotos: room.cotos,
+        partidaEnCoto: room.partidaEnCoto,
+        cotoEnMatch: room.cotoEnMatch,
+        matchFinished: room.matchFinished,
+        matchChampion: room.matchChampion,
+      } satisfies ServerMessage));
     }
   }
 }
@@ -178,7 +230,7 @@ function sameAction(
 export async function stepBots(
   room: Room,
   delayMs = 1000,
-  trickPauseMs = 4000,
+  trickPauseMs = 2500,
 ): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   let acted = false;
@@ -190,7 +242,7 @@ export async function stepBots(
     const player = room.players[turn]!;
     if (player.token !== null) return acted;
     const before = room.state.finishedTricks.length;
-    if (!stepBot(room.state, turn)) return acted;
+    if (!stepHeuristicBot(room.state, turn)) return acted;
     acted = true;
     const after = room.state.finishedTricks.length;
     if (after > before) {
@@ -202,6 +254,12 @@ export async function stepBots(
       await sleep(trickPauseMs);
       if (last.hadLastTrick) {
         emitAfterChange(room); // ahora sí, con GAME_OVER
+        // Auto-cadencia: repartimos la siguiente mano tras una pausa
+        // más larga (4,5 s) para que el jugador lea el panel de
+        // resumen — sobre todo en los saltos entre idas/vueltas y
+        // entre partidas, donde hay más info que procesar. Ver
+        // comentario equivalente en `apps/server/src/index.ts`.
+        setTimeout(() => triggerNextHand(room), 4500);
         return acted;
       }
     } else {
@@ -237,14 +295,59 @@ export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {
 }
 
 /**
- * Dispara la siguiente mano: reparte, emite VIEW y, si el primer turno
- * cae en un bot, arranca el ciclo de bots. Llamado desde el handler del
- * mensaje NEXT_HAND. No-op si la partida ya terminó o no estamos en
+ * Dispara la siguiente mano: procesa la partida que acaba de terminar
+ * (si matchEnded), actualiza el contador de partidas y posiblemente de
+ * cotos, y luego reparte. Llamado desde el handler del mensaje NEXT_HAND
+ * y desde la auto-cadencia del servidor.
+ *
+ * Reglas de progresión (partida → coto → match):
+ *  - Si la partida actual terminó (matchEnded + matchWinner), el ganador
+ *    recibe +1 partida. Si llega a 4 → gana el coto: +1 coto, reset
+ *    partidas, siguiente coto. Si llega a 2 → matchFinished.
+ *  - Si la partida NO terminó (falsa alarma) o seguimos en la misma
+ *    partida, simplemente se reparte la siguiente mano con vuelta
+ *    incrementada.
+ *
+ * No-op si el match ya terminó (matchFinished) o si no estamos en
  * `phase: 'finished'`.
  */
 export function triggerNextHand(room: Room): void {
-  if (room.state.matchEnded) return;
+  if (room.matchFinished) return;
   if (room.state.phase !== 'finished') return;
+
+  // 1. Procesar la partida recién terminada, si la hay.
+  if (room.state.matchEnded && room.state.matchWinner !== null) {
+    const partidaWinner = room.state.matchWinner;
+    room.partidas[partidaWinner]++;
+
+    if (room.partidas[partidaWinner] >= 4) {
+      // Coto ganado por partidaWinner
+      room.cotos[partidaWinner]++;
+      room.partidas = { 0: 0, 1: 0 };
+      room.partidaEnCoto = 1;
+      room.cotoEnMatch++;
+
+      if (room.cotos[partidaWinner] >= 2) {
+        // Match terminado: no se reparten más juegos. El cliente
+        // mostrará el panel de "Match terminado" sin botón de continuar.
+        room.matchFinished = true;
+        room.matchChampion = partidaWinner;
+        broadcastView(room);
+        return;
+      }
+      // Coto ganado pero match no: cae al reparto de abajo (cae
+      // sin return), para que el nuevo coto arranque sin click
+      // del usuario.
+    } else {
+      // Siguiente partida del mismo coto
+      room.partidaEnCoto++;
+    }
+  }
+
+  // 2. Repartir la siguiente mano (siguiente vuelta del mismo juego, o
+  // vuelta 1 del siguiente juego si el coto terminó por match end, o
+  // vuelta 1 de la siguiente partida si la anterior la acaba de ganar
+  // el mismo equipo).
   startNextHand(room);
   if (room.state.matchEnded) return;
   broadcastView(room);
@@ -281,13 +384,26 @@ function broadcastMatchOver(room: Room): void {
  * siguiente mano es el ganador de la última baza de la mano anterior. La
  * regla vive en `nextDealer` del motor para que el cliente muestre el mismo
  * dealer en su hint.
+ *
+ * Vuelta: dentro de un mismo juego, la vuelta incrementa (ida → vuelta 1
+ * → vuelta 2 …). Al cruzar el umbral, el juego termina y el siguiente
+ * juego empieza en vuelta 1 (otra ida). Esto preserva la regla del
+ * motor: cierre anticipado solo aplica con `vuelta > 1`.
+ *
+ * IMPORTANTE: esta función SIEMPRE reparte. Antes tenía un
+ * `if (room.state.matchEnded) return;` que la bloqueaba cuando el juego
+ * terminaba por match end. Con la nueva estructura (coto → partida →
+ match), después de un coto el `triggerNextHand` ya decidió si repartir o
+ * no; si llamó aquí, hay que repartir. El `triggerNextHand` se ocupa del
+ * "no repartir más" cuando el match entero ha terminado (`room.matchFinished`).
  */
 export function startNextHand(room: Room): void {
-  if (room.state.matchEnded) return;
   const lastHandLastTrick = room.state.finishedTricks[room.state.finishedTricks.length - 1];
   const lastTrickWinner = lastHandLastTrick ? lastHandLastTrick.winner : null;
   const newDealer = nextDealer(lastTrickWinner, room.state.dealer);
-  const newVuelta = room.state.vuelta + 1;
+  // Si el juego anterior terminó por match end → reset vuelta a 1.
+  // Si fue una mano normal dentro del mismo juego → incrementa.
+  const newVuelta = room.state.matchEnded ? 1 : room.state.vuelta + 1;
   room.state = newHand({
     id: `g-${room.code}-v${newVuelta}`,
     seed: cryptoToken(),
@@ -296,9 +412,13 @@ export function startNextHand(room: Room): void {
     continuation: {
       vuelta: newVuelta,
       score: room.state.score,
-      cumulativeTeamPts: room.state.cumulativeTeamPts,
-      matchEnded: room.state.matchEnded,
-      matchWinner: room.state.matchWinner,
+      // cumulativeTeamPts también se resetea: cada juego empieza con 0/0
+      // (un coto = un juego = 0..100 raw, sin acumular entre cotos).
+      cumulativeTeamPts: room.state.matchEnded
+        ? { 0: 0, 1: 0 }
+        : room.state.cumulativeTeamPts,
+      matchEnded: false,
+      matchWinner: null,
     },
   });
   room.seenCommandIds.clear();

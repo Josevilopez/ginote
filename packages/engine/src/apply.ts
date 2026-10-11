@@ -131,19 +131,36 @@ export function apply(state: GameState, action: Action): GameEvent[] {
       // cliente (cualquier valor > threshold termina la partida).
       maybeEndMatch(state, events);
 
+      // Regla del guiñote aragonés (vueltas 2+): en cuanto un equipo cruza
+      // el umbral de cierre (cumulativeTeamPts > threshold), la mano
+      // termina INMEDIATAMENTE. No se juegan las bazas restantes: las
+      // cartas que queden en las manos se descartan y sus puntos NO
+      // cuentan. La baza recién resuelta se registra como la última para
+      // mantener coherencia con finishedTricks y TRICK_RESOLVED.
+      //
+      // Excepción: en IDAS (vuelta 1) NO hay cierre anticipado. Se juegan
+      // las 10 cartas enteras aunque un equipo cruce 100 durante la mano;
+      // el match sigue marcado como terminado en `state.matchEnded`, pero
+      // el MATCH_OVER solo se difunde al final natural de la mano (lo hace
+      // el servidor en `emitAfterChange` cuando phase='finished'). Esto
+      // preserva la tradición de "en idas se va a la mesa completa".
+      const matchCutShort = state.matchEnded && state.vuelta > 1;
+      const handEnds = isLastTrick || matchCutShort;
+
       state.finishedTricks = [
         ...state.finishedTricks,
         {
           winner,
           plays: state.trick.plays,
           trickPoints: effectivePoints,
-          hadLastTrick: isLastTrick,
+          hadLastTrick: handEnds,
         },
       ];
-      events.push({ type: 'TRICK_RESOLVED', winner, points: effectivePoints, isLastTrick });
+      events.push({ type: 'TRICK_RESOLVED', winner, points: effectivePoints, isLastTrick: handEnds });
 
-      if (isLastTrick) {
-        // Mano terminada.
+      if (handEnds) {
+        // Mano terminada — bien porque era la última baza, bien porque
+        // el match se cerró anticipadamente y hay que parar ya.
         state.phase = 'finished';
         state.turn = null;
         events.push({
@@ -226,6 +243,25 @@ export function apply(state: GameState, action: Action): GameEvent[] {
     state.cumulativeTeamPts[canteTeam] = (state.cumulativeTeamPts[canteTeam] ?? 0) + value;
     maybeEndMatch(state, events);
     events.push({ type: 'CANTE_DECLARED', seat, team: cante.team, suit: cante.suit, pair: cante.pair, value });
+    // Si el cante fue el que cruzó el umbral (o ya estábamos en matchEnded
+    // por una suma anterior) Y estamos en vueltas 2+, cerramos la mano
+    // aquí. Las bazas que falten no se juegan y los puntos de las cartas
+    // restantes se descartan. En idas (vuelta 1) NO se cierra: la mano
+    // sigue hasta que se jueguen las 10 bazas.
+    // Importante: NO devolvemos; el flujo del apply debe seguir para que
+    // se incremente `state.version` y se persistan los eventos en el log.
+    if (state.matchEnded && state.vuelta > 1) {
+      state.phase = 'finished';
+      state.turn = null;
+      events.push({
+        type: 'HAND_FINISHED',
+        trickPoints: { ...state.trickPoints },
+        cantes: state.cantes,
+        lastTrickBonus: state.rules.lastTrickBonus,
+        score: state.score,
+        vuelta: state.vuelta,
+      });
+    }
   } else if (action.type === 'PASS') {
     if (state.phase !== 'winnerWindow') {
       throw new Error('PASS solo en winnerWindow');
