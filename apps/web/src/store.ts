@@ -28,6 +28,9 @@ interface State {
   /** Resultado final del coto (cuando un equipo cruza 100 raw). En la
    *  jerarquía match → coto → juego, "match" aquí significa coto. */
   matchOver: { winner: 0 | 1; score: PartidaScore; vuelta: number } | null;
+  /** Overlay de swap del 7 por el triunfo. Lo emite el servidor tras
+   *  aplicar SWAP_SEVEN; dura 3,5 s en pantalla igual que el cante. */
+  swapAnnouncement: { uid: number; seat: number; taken: Card; given: Card } | null;
   error: string | null;
   lastCmdId: number;
 
@@ -37,9 +40,9 @@ interface State {
   // runtime son objetos idénticos (las keys se serializan a '0'/'1').
   /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
   partidas: Record<0 | 1, number>;
-  /** Cotos (sets de 4 partidas) ganados en el match, por equipo. */
+  /** Cotos (sets de 3 partidas) ganados en el match, por equipo. */
   cotos: Record<0 | 1, number>;
-  /** Partida actual dentro del coto (1..4). */
+  /** Partida actual dentro del coto (1..3). */
   partidaEnCoto: number;
   /** Coto actual dentro del match (1..2). */
   cotoEnMatch: number;
@@ -59,6 +62,7 @@ interface State {
 
 let wsRef: WebSocket | null = null;
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
+let swapTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useGame = create<State>((set, get) => ({
   ws: null,
@@ -70,6 +74,7 @@ export const useGame = create<State>((set, get) => ({
   justResolved: null,
   gameOver: null,
   matchOver: null,
+  swapAnnouncement: null,
   error: null,
   lastCmdId: 0,
 
@@ -83,7 +88,7 @@ export const useGame = create<State>((set, get) => ({
   matchChampion: null,
 
   async createRoom() {
-    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null });
+    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null });
     try {
       const resp = await fetch('/api/rooms', {
         method: 'POST',
@@ -120,7 +125,7 @@ export const useGame = create<State>((set, get) => ({
       wsRef.close();
       wsRef = null;
     }
-    set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null });
+    set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null, swapAnnouncement: null });
   },
 }));
 
@@ -191,6 +196,22 @@ function connect(
       // Lo gestionamos desde el componente Game comparando con matchOver.
     } else if (msg.type === 'MATCH_OVER') {
       set({ matchOver: msg });
+    } else if (msg.type === 'SWAP_HAPPENED') {
+      // Mostrar el overlay del swap 3,5 s. Si llega otro swap mientras,
+      // `uid` cambia y el effect en Game.tsx resetea el timer.
+      if (swapTimer) clearTimeout(swapTimer);
+      set({
+        swapAnnouncement: {
+          uid: performance.now(),
+          seat: msg.seat,
+          taken: msg.taken as Card,
+          given: msg.given as Card,
+        },
+      });
+      swapTimer = setTimeout(() => {
+        set({ swapAnnouncement: null });
+        swapTimer = null;
+      }, 3500);
     } else if (msg.type === 'ERROR') {
       set({ error: msg.message });
     }

@@ -318,14 +318,17 @@ body {
   border: 1px solid var(--accent);
 }
 
-/* Scoreboard "estilo tenis" en la esquina superior derecha del tablero.
-   Dos cuadros (COTOS y PARTIDAS), cada uno con 2 filas (Nosotros / Ellos)
-   y un número grande: cotos/partidas ganados por cada equipo. Flota con
-   absolute respecto a `.board` (que es `position: relative`). */
+/* Scoreboard "estilo tenis" anclado a la esquina superior IZQUIERDA
+   de la pantalla en escritorio. Dos cuadros (PARTIDAS y COTOS), cada
+   uno con 2 filas (Nosotros / Ellos) y un número grande: cotos/partidas
+   ganados por cada equipo. Flota con `position: absolute` respecto a
+   `.game` (que ocupa toda la pantalla) — NO respecto a `.board`, porque
+   en escritorio el board está centrado y queremos llegar al borde real
+   de la pantalla. */
 .match-tennis {
   position: absolute;
   top: 12px;
-  right: 12px;
+  left: 12px;
   display: flex;
   gap: 8px;
   align-items: stretch;
@@ -346,7 +349,7 @@ body {
   pointer-events: auto;
 }
 .match-tennis-label {
-  font-size: 8px;
+  font-size: 12px;   /* "PARTIDAS" / "COTOS" — subir si quieres más grande */
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--fg-mute);
@@ -357,15 +360,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 800;
   line-height: 1;
 }
 .match-tennis-row.is-mine   { color: var(--team-mine); }
 .match-tennis-row.is-theirs { color: var(--accent); }
 .match-tennis-count {
   font-variant-numeric: tabular-nums;
-  font-weight: 800;
+  font-weight: 600;
 }
 /* Separador entre "Nosotros" y "Ellos" que solo se muestra en móvil,
    cuando el layout horizontal del scoreboard aplana los dos números en
@@ -409,7 +412,7 @@ body {
     min-width: 0;
   }
   .match-tennis-label {
-    font-size: 9px;
+    font-size: 12px;   /* override móvil — subir si quieres más grande */
   }
   .match-tennis-row {
     font-size: 13px;
@@ -775,9 +778,22 @@ body {
    align-items:center; el top:30px rompía ese centrado). Sumar al offset
    Y es el approach correcto. */
 .trick-card.pos-0 { transform: translate(0, calc(var(--card-w-baza) * 0.95 + 25px)); }    /* Sur: debajo del centro */
-.trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 1.1), 30px); }         /* Este: derecha del centro */
-.trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 35px)); }   /* Norte: encima del centro */
-.trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -1.1), 30px); }        /* Oeste: izquierda del centro */
+.trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 1.1), 30px) rotate(12deg); }   /* Este: derecha + tilt horario */
+.trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 35px)); }          /* Norte: encima del centro */
+.trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -1.1), 30px) rotate(-12deg); } /* Oeste: izquierda + tilt antihorario */
+
+/* Móvil: las cartas laterales se acercan un poco más al centro (offsets
+   más cortos) y bajamos el mazo para que no tape las cartas del truco.
+   La rotación ya vive en la regla base — aplica también en escritorio.
+   La carta ganadora del truco mantiene su scale(1.25) interno porque
+   ese transform va en .card-img, no en .trick-card. */
+@media (max-width: 768px) {
+  .mazo-area {
+    top: 80%;   /* antes 70% */
+  }
+  .trick-card.pos-1 { transform: translate(calc(var(--card-w-baza) * 0.7), 24px) rotate(12deg); }
+  .trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -0.7), 24px) rotate(-12deg); }
+}
 
 /* Carta ganadora del truco: la elevamos un poco sobre el resto y la
    traemos al frente con z-index. Sin outline, sin glow, sin pulse:
@@ -1166,6 +1182,76 @@ body {
 .cante-announcement b.value { color: var(--accent); font-weight: 900; }
 .cante-announcement b.suit  { color: #fff; font-weight: 800; }
 @keyframes cante-announce {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(-12px) scale(0.92); }
+  10%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1.04); }
+  16%  { transform: translateX(-50%) translateY(0)                 scale(1);    }
+  88%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1);    }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-4px)  scale(1);    }
+}
+
+/* Anuncio de SWAP del 7: aparece centrado cuando alguien cambia el 7 por
+   la carta de triunfo. Misma estructura y duración que .cante-announcement
+   para que los dos se sientan del mismo tipo. Borde y color según equipo
+   (azul nosotros, amarillo ellos). */
+.swap-announcement {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  z-index: 30;
+  pointer-events: none;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: rgba(6, 36, 27, 0.92);
+  border: 2px solid var(--accent);
+  color: #fff;
+  text-align: center;
+  min-width: 220px;
+  max-width: 80%;
+  animation: swap-announce 3.5s ease-in-out forwards;
+}
+.swap-announcement.is-mine   { border-color: var(--team-mine); }
+.swap-announcement.is-theirs { border-color: var(--accent); }
+.swap-announcement .swap-announcement-team {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--fg-mute);
+}
+.swap-announcement .swap-announcement-player {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--fg);
+  letter-spacing: 0.01em;
+}
+.swap-announcement.is-mine .swap-announcement-player   { color: var(--team-mine); }
+.swap-announcement.is-theirs .swap-announcement-player { color: var(--accent); }
+.swap-announcement .swap-announcement-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: center;
+}
+.swap-announcement b.value { color: var(--accent); font-weight: 900; }
+/* Chip inline de la carta recibida en el swap. Toma el color del palo vía
+   data-suit para que el glifo SVG (que usa currentColor) se tiña. */
+.swap-announcement .swap-announcement-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 700;
+  color: var(--fg);
+}
+.swap-announcement .swap-announcement-card[data-suit='oros']    { color: var(--suit-oros); }
+.swap-announcement .swap-announcement-card[data-suit='copas']   { color: var(--suit-copas); }
+.swap-announcement .swap-announcement-card[data-suit='espadas'] { color: var(--suit-espadas); }
+.swap-announcement .swap-announcement-card[data-suit='bastos']  { color: var(--suit-bastos); }
+@keyframes swap-announce {
   0%   { opacity: 0; transform: translateX(-50%) translateY(-12px) scale(0.92); }
   10%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1.04); }
   16%  { transform: translateX(-50%) translateY(0)                 scale(1);    }

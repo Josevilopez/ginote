@@ -13,6 +13,44 @@ import {
   type GameEvent,
 } from '@guinote/engine';
 import { stepHeuristicBot } from '@guinote/bots';
+
+/**
+ * Nombres típicos aragoneses para los bots de la sala. Pensado para
+ * ambientar el guiñote aragonés: en lugar de "Bot 2 / Bot 3 / Bot 4",
+ * el rival lleva un nombre de la tierra. La fuente son listas de nombres
+ * frecuentes en Aragón (gente mayor, pueblos) que pidió el usuario.
+ * Se mezclan hombres y mujeres para evitar presuponer el género del
+ * jugador humano: la sala los elige al azar y el humano, al unirse,
+ * sobrescribe el nombre del slot que ocupa con el suyo (HELLO).
+ */
+const ARAGON_BOT_NAMES_MALE = [
+  'José', 'Jorge', 'Miguel', 'Antonio', 'Joaquín', 'Manuel',
+  'Pascual', 'Vicente', 'Ramiro', 'Sancho',
+] as const;
+const ARAGON_BOT_NAMES_FEMALE = [
+  'Pilar', 'María', 'Carmen', 'Pilarín', 'Dolores', 'Josefa',
+  'Engracia', 'Pascuala', 'Rosario', 'Orosia',
+] as const;
+
+/**
+ * Sortea `n` nombres únicos del pool combinado (hombres + mujeres)
+ * usando un Fisher–Yates parcial. Garantiza que nunca se repita un
+ * nombre en la misma sala y que el orden sea aleatorio.
+ */
+function pickAragonBotNames(n: number): string[] {
+  const pool: string[] = [
+    ...ARAGON_BOT_NAMES_MALE,
+    ...ARAGON_BOT_NAMES_FEMALE,
+  ];
+  // Shuffle in place (Fisher–Yates) y nos quedamos con los primeros n.
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = pool[i]!;
+    pool[i] = pool[j]!;
+    pool[j] = tmp;
+  }
+  return pool.slice(0, Math.min(n, pool.length));
+}
 import type { ServerMessage } from '@guinote/protocol';
 
 export interface PlayerSlot {
@@ -39,7 +77,7 @@ export interface Room {
   //   - partida: una ida o vuelta individual. Gana el equipo que cruza
   //     los 100 puntos raw del coto (lo que el motor llama
   //     `state.matchEnded`). Aquí se cuentan como `partidas[team]`.
-  //   - coto: un set de 4 partidas consecutivas ganadas. Se cuentan
+  //   - coto: un set de 3 partidas consecutivas ganadas. Se cuentan
   //     como `cotos[team]`.
   //   - match: la serie entera. Lo gana el primer equipo que suma
   //     2 cotos (`cotos[team] >= 2`).
@@ -50,9 +88,9 @@ export interface Room {
 
   /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
   partidas: { 0: number; 1: number };
-  /** Cotos (sets de 4 partidas) ganados en el match, por equipo. */
+  /** Cotos (sets de 3 partidas) ganados en el match, por equipo. */
   cotos: { 0: number; 1: number };
-  /** Partida actual dentro del coto (1..4). */
+  /** Partida actual dentro del coto (1..3). */
   partidaEnCoto: number;
   /** Coto actual dentro del match (1..2). */
   cotoEnMatch: number;
@@ -73,9 +111,15 @@ export function createRoom(opts: {
 }): Room {
   const fill = opts.fillWithBots !== false;
   const players: PlayerSlot[] = [];
+  // Sorteo de nombres aragoneses para los bots. Hay 20 nombres en el
+  // pool (10 masculinos + 10 femeninos), así que con 4 slots iniciales
+  // nunca se repite. Cuando un humano se une y se asigna a un slot,
+  // su HELLO sobrescribe este nombre con el suyo — los bots restantes
+  // conservan los suyos.
+  const botNames = pickAragonBotNames(4);
   for (let s = 0 as Seat; s < 4; s = (s + 1) as Seat) {
     if (fill) {
-      players.push({ seat: s, name: `Bot ${s + 1}`, token: null, ws: null });
+      players.push({ seat: s, name: botNames[s]!, token: null, ws: null });
     } else {
       players.push({ seat: s, name: '?', token: null, ws: null });
     }
@@ -170,7 +214,10 @@ function broadcastTrickResolved(room: Room, trick: { winner: Seat; plays: readon
 
 /**
  * Aplica una acción y, si resuelve una baza, emite el evento
- * `TRICK_JUST_RESOLVED` justo después. Devuelve `true` si la acción era legal.
+ * `TRICK_JUST_RESOLVED` justo después. Si la acción era un
+ * `SWAP_SEVEN`, emite también `SWAP_HAPPENED` con las cartas
+ * intercambiadas para que el cliente muestre el overlay centrado.
+ * Devuelve `true` si la acción era legal.
  *
  * El caller debe emitir la VIEW después (con `emitAfterChange`).
  */
@@ -186,6 +233,33 @@ export function applyActionWithResolveEvent(
   if (after > before) {
     const last = room.state.finishedTricks[after - 1]!;
     broadcastTrickResolved(room, last);
+  }
+  // Swap del 7: el motor ya intercambió `state.trumpCard` ↔
+  // `state.hands[seat]`, así que `state.trumpCard` ahora es el 7 que
+  // soltó el jugador y podemos sacar su nueva carta mirando lo que
+  // tiene en la mano. Para no recalcular el diff, emitimos ambas
+  // cartas que el motor conoce: el 7 que soltó (que ahora es el
+  // trumpCard visible) y la carta del triunfo que acaba de recibir
+  // (el motor aún la expone en su `log` — pero como alternativa
+  // robusta usamos el diff de la mano + trumpCard).
+  if (action.type === 'SWAP_SEVEN' && room.state.trumpCard !== null) {
+    const sevenNowInDeck = room.state.trumpCard; // rank 7 del palo de triunfo
+    // La carta del triunfo que recibió el jugador es la que tiene
+    // rank !== 7 y suit === trump. La buscamos en su mano.
+    const takenCard = room.state.hands[seat]!.find(
+      (c) => c.suit === sevenNowInDeck.suit && c.rank !== 7,
+    );
+    if (takenCard) {
+      const msg = {
+        type: 'SWAP_HAPPENED',
+        seat,
+        taken: takenCard,
+        given: sevenNowInDeck,
+      } satisfies ServerMessage;
+      for (const p of room.players) {
+        if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg));
+      }
+    }
   }
   return true;
 }
@@ -302,7 +376,7 @@ export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {
  *
  * Reglas de progresión (partida → coto → match):
  *  - Si la partida actual terminó (matchEnded + matchWinner), el ganador
- *    recibe +1 partida. Si llega a 4 → gana el coto: +1 coto, reset
+ *    recibe +1 partida. Si llega a 3 → gana el coto: +1 coto, reset
  *    partidas, siguiente coto. Si llega a 2 → matchFinished.
  *  - Si la partida NO terminó (falsa alarma) o seguimos en la misma
  *    partida, simplemente se reparte la siguiente mano con vuelta
@@ -320,7 +394,7 @@ export function triggerNextHand(room: Room): void {
     const partidaWinner = room.state.matchWinner;
     room.partidas[partidaWinner]++;
 
-    if (room.partidas[partidaWinner] >= 4) {
+    if (room.partidas[partidaWinner] >= 3) {
       // Coto ganado por partidaWinner
       room.cotos[partidaWinner]++;
       room.partidas = { 0: 0, 1: 0 };

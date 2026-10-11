@@ -52,6 +52,7 @@ export function Game() {
   const gameOver = useGame((s) => s.gameOver);
   const matchOver = useGame((s) => s.matchOver);
   const justResolved = useGame((s) => s.justResolved);
+  const swapAnnouncement = useGame((s) => s.swapAnnouncement);
   const sendAction = useGame((s) => s.sendAction);
   const leave = useGame((s) => s.leave);
   // Progresión partida → coto → match (servidor). Necesitamos varios
@@ -411,48 +412,6 @@ export function Game() {
       {/* Solo se renderiza el seat activo, en la celda de su posición.
           Cuando cambia el turno, el panel "salta" a otra celda. */}
       <div className="board">
-        {/* Marcador "estilo tenis" flotante en la esquina superior derecha
-            del tablero en escritorio. En móvil (`@media max-width: 768px`)
-            se recoloca centrado arriba del jugador Norte con las dos cifras
-            en una fila "0-3" — ver `.match-tennis-dash` y la media query
-            asociada en styles.css. Posicionado en absolute respecto a
-            `.board`. */}
-        {(() => {
-          const myTeam = (you % 2) as 0 | 1;
-          const otherTeam = (1 - (you % 2)) as 0 | 1;
-          return (
-            <div className="match-tennis">
-              {/* Caja "Partidas" (idas/vueltas individuales ganadas). En el
-                  DOM va PRIMERO para que con el `order` del CSS la saquemos
-                  a la izquierda. */}
-              <div className="match-tennis-board">
-                <div className="match-tennis-label">Partidas</div>
-                <div className="match-tennis-row is-mine">
-                  <span className="match-tennis-count">{partidas[myTeam]}</span>
-                </div>
-                {/* El guion solo se ve en móvil (display: none por defecto).
-                    Lo añadimos al DOM para no duplicar el render según el
-                    viewport. */}
-                <span className="match-tennis-dash" aria-hidden="true">-</span>
-                <div className="match-tennis-row is-theirs">
-                  <span className="match-tennis-count">{partidas[otherTeam]}</span>
-                </div>
-              </div>
-              {/* Caja "Cotos" (sets de 4 partidas ganados). Va segunda en
-                  el DOM y el CSS la coloca a la derecha. */}
-              <div className="match-tennis-board">
-                <div className="match-tennis-label">Cotos</div>
-                <div className="match-tennis-row is-mine">
-                  <span className="match-tennis-count">{cotos[myTeam]}</span>
-                </div>
-                <span className="match-tennis-dash" aria-hidden="true">-</span>
-                <div className="match-tennis-row is-theirs">
-                  <span className="match-tennis-count">{cotos[otherTeam]}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
         <div className="seats-area">
           {/* Todos los seats muestran sus cartas boca abajo, incluido el humano.
               El acento (borde dorado) marca quién tiene el turno. El humano no
@@ -463,7 +422,9 @@ export function Game() {
           const isActive = view.turn === seat;
           const isYou = seat === you;
           // Iniciales para el avatar: primera letra de las dos primeras
-          // palabras del nombre. "Bot 4" → "B4", "Bot 2" → "B2", "Norte" → "N".
+          // palabras del nombre. Los bots ahora llevan nombres aragoneses
+          // ("Pilar", "Ramiro", etc.) generados en el servidor; los que
+          // aún no tienen nombre muestran la inicial de su seat label.
           // Para el humano usamos "T" de "Tú".
           const displayName = isYou ? 'Tú' : seatNames[seat] || SEAT_LABELS[seat];
           const parts = displayName.trim().split(/\s+/);
@@ -517,7 +478,7 @@ export function Game() {
             const pos = ((p.seat - you + 4) % 4) as 0 | 1 | 2 | 3;
             // Ganadora: depende de `winningKeys` (estado local), no de
             // `justResolved` directamente, para que el highlight NO se
-            // quite cuando el timer de 4s limpia `justResolved` — debe
+            // quite cuando el timer de 2,5 s limpia `justResolved` — debe
             // persistir mientras las cartas sigan en pantalla. Las demás
             // se quedan como están, sin atenuar.
             const isWinner = winningKeys.has(`${p.seat}-${p.card.id}`);
@@ -532,6 +493,50 @@ export function Game() {
           })}
         </div>
         </div>
+
+        {/* Marcador "estilo tenis" — fuera del tablero (dentro de `.game`)
+            para que su `position: absolute` se refiera a la pantalla y no
+            al board. En escritorio va anclado a la izquierda de la pantalla
+            (esquina superior izquierda). En móvil (`@media max-width: 768px`)
+            se estira de borde a borde del board (que en móvil ocupa todo el
+            ancho) con las dos cifras en una fila "0-3" — ver
+            `.match-tennis-dash` y la media query asociada en styles.css. */}
+        {(() => {
+          const myTeam = (you % 2) as 0 | 1;
+          const otherTeam = (1 - (you % 2)) as 0 | 1;
+          return (
+            <div className="match-tennis">
+              {/* Caja "Partidas" (idas/vueltas individuales ganadas). En el
+                  DOM va PRIMERO para que con el `order` del CSS la saquemos
+                  a la izquierda. */}
+              <div className="match-tennis-board">
+                <div className="match-tennis-label">Partidas</div>
+                <div className="match-tennis-row is-mine">
+                  <span className="match-tennis-count">{partidas[myTeam]}</span>
+                </div>
+                {/* El guion solo se ve en móvil (display: none por defecto).
+                    Lo añadimos al DOM para no duplicar el render según el
+                    viewport. */}
+                <span className="match-tennis-dash" aria-hidden="true">-</span>
+                <div className="match-tennis-row is-theirs">
+                  <span className="match-tennis-count">{partidas[otherTeam]}</span>
+                </div>
+              </div>
+              {/* Caja "Cotos" (sets de 3 partidas ganados). Va segunda en
+                  el DOM y el CSS la coloca a la derecha. */}
+              <div className="match-tennis-board">
+                <div className="match-tennis-label">Cotos</div>
+                <div className="match-tennis-row is-mine">
+                  <span className="match-tennis-count">{cotos[myTeam]}</span>
+                </div>
+                <span className="match-tennis-dash" aria-hidden="true">-</span>
+                <div className="match-tennis-row is-theirs">
+                  <span className="match-tennis-count">{cotos[otherTeam]}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Mano + acciones agrupadas en .hand-area. En móvil se apilan
             verticalmente (mano arriba, acciones abajo); en escritorio (≥
@@ -771,10 +776,10 @@ export function Game() {
                     - en otro caso: solo partida ganada (panel normal). */}
                 {matchFinished ? (
                   <p className="summary-result-subtitle">🏆 Match terminado</p>
-                ) : s.matchWinner !== null && partidas[s.matchWinner] >= 4 ? (
+                ) : s.matchWinner !== null && partidas[s.matchWinner] >= 3 ? (
                   <p className="summary-result-subtitle">Coto ganado — empezamos el siguiente</p>
                 ) : (
-                  <p className="summary-result-subtitle">Partida {partidaEnCoto} de 4 ganada</p>
+                  <p className="summary-result-subtitle">Partida {partidaEnCoto} de 3 ganada</p>
                 )}
 
                 {/* Cajas grandes con el marcador final de la partida.
@@ -876,12 +881,12 @@ export function Game() {
               <section className="summary-matchover">
                 <h3 className="summary-result-title">🏁 Vamos de vueltas</h3>
                 {/* Subtítulo con el progreso de partidas en el coto actual:
-                    "Llevas X de 4 partidas, faltan N" o "¡Has ganado
-                    el coto!" si partidas[myTeam] == 4. */}
+                    "Llevas X de 3 partidas, faltan N" o "¡Has ganado
+                    el coto!" si partidas[myTeam] == 3. */}
                 {(() => {
                   const myPartidas = partidas[s.myTeam];
-                  const faltan = 4 - myPartidas;
-                  if (myPartidas >= 4) {
+                  const faltan = 3 - myPartidas;
+                  if (myPartidas >= 3) {
                     return (
                       <p className="summary-result-subtitle">
                         ¡Has ganado el coto!
@@ -890,7 +895,7 @@ export function Game() {
                   }
                   return (
                     <p className="summary-result-subtitle">
-                      Llevas <b>{myPartidas}</b> de 4 partidas
+                      Llevas <b>{myPartidas}</b> de 3 partidas
                       {faltan === 1 ? ' · falta 1' : ` · faltan ${faltan}`}
                     </p>
                   );
@@ -993,7 +998,7 @@ export function Game() {
             )}
 
             {/* Pie del panel de resumen. Con la auto-cadencia del servidor,
-                ya no hay botón "Continuar": 4 partidas forman un coto, 2
+                ya no hay botón "Continuar": 3 partidas forman un coto, 2
                 cotos forman un match, y el siguiente juego se reparte solo
                 ~3 s después de este panel. Cuando el match entero ha
                 terminado, lo decimos en texto para que el usuario sepa que
@@ -1054,11 +1059,65 @@ export function Game() {
           </div>
         </div>
       )}
+
+      {/* Anuncio de SWAP del 7: aparece centrado cuando alguien cambia su 7
+          por la carta de triunfo. Mismo patrón que el cante: lo emite el
+          servidor, vive 3,5 s en pantalla y se va solo. `key={swapAnnouncement.uid}`
+          fuerza remount para reiniciar la animación si llega otro swap antes
+          de que el actual haya expirado. */}
+      {swapAnnouncement && (
+        <div
+          key={swapAnnouncement.uid}
+          className={
+            'swap-announcement' +
+            (you !== null && (swapAnnouncement.seat % 2) === (you % 2)
+              ? ' is-mine'
+              : ' is-theirs')
+          }
+          role="status"
+          aria-live="polite"
+        >
+          <div className="swap-announcement-team">
+            {you !== null && (swapAnnouncement.seat % 2) === (you % 2)
+              ? 'Nosotros'
+              : 'Ellos'}
+          </div>
+          <div className="swap-announcement-player">
+            {seatNames[swapAnnouncement.seat] || SEAT_LABELS[swapAnnouncement.seat]}
+          </div>
+          <div className="swap-announcement-text">
+            cambia el <b className="value">7</b> por{' '}
+            <SwapCardInline card={swapAnnouncement.taken} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 const STRENGTH = [1, 3, 12, 10, 11, 7, 6, 5, 4, 2] as const;
+
+/**
+ * Mini-chip inline que pinta la carta que un jugador acaba de recibir
+ * tras un SWAP_SEVEN. Lo usamos en el overlay `.swap-announcement`.
+ * Como las cartas que entran siempre son SUPERIORES al 7 (el motor ya
+ * filtra que el triunfo sea 1, 3, 10, 11 o 12), mostramos el nombre
+ * completo (As/Tres/Sota/Caballo/Rey) en vez del dígito.
+ */
+function SwapCardInline({ card }: { card: Card }) {
+  const rankLabel =
+    card.rank === 1 ? 'As' :
+    card.rank === 3 ? 'Tres' :
+    card.rank === 10 ? 'Sota' :
+    card.rank === 11 ? 'Caballo' :
+    card.rank === 12 ? 'Rey' :
+    `${card.rank}`;
+  return (
+    <span className="swap-announcement-card" data-suit={card.suit}>
+      {rankLabel} de <SuitGlyph suit={card.suit} size={14} />
+    </span>
+  );
+}
 
 /** Umbral de cierre de la partida sobre `cumulativeTeamPts` (raw puntos
  *  acumulados). Debe coincidir con `rules.ts scoring.threshold`. La

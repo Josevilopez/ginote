@@ -115,6 +115,17 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     }),
     vuelta: z.number().int(),
   }),
+  /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
+   *  El cliente lo usa para mostrar el overlay centrado (igual que el
+   *  cante). `taken` es la carta del triunfo que el jugador ha cogido
+   *  (ahora en su poder) y `given` es el 7 que ha soltado (ahora en
+   *  el mazo como trumpCard). */
+  z.object({
+    type: z.literal('SWAP_HAPPENED'),
+    seat: z.number().int().min(0).max(3),
+    taken: z.unknown(), // Card (recibida del motor, validada en runtime)
+    given: z.unknown(), // Card
+  }),
 ]);
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;
