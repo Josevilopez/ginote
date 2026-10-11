@@ -549,32 +549,9 @@ body {
   border-color: #60a5fa;
   color: #ffffff;
 }
-/* Resumen de cartas del oponente: pill con icono cuadrado + número.
-   El icono es un SVG (cuadrado indigo) para que se vea nítido a este
-   tamaño; el contenedor tiene fondo verde semi-transparente y bordes
-   redondeados tipo pill, con el texto del conteo en amarillo. */
-.opp-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  padding: 3px 10px 3px 5px;
-  border-radius: 15px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-  background: rgba(66, 116, 102, 0.55);
-}
-.opp-summary .opp-icon {
-  width: 16px;
-  height: 24px;
-  flex-shrink: 0;
-}
-.opp-count {
-  font-weight: 600;
-  white-space: nowrap;
-  font-size: 12px;
-}
+/* (El bloque .opp-summary / .opp-icon / .opp-count se eliminó: el contador
+   de cartas en mano del oponente ya no se muestra. Si quieres reintroducirlo,
+   restaura las reglas desde git.) */
 .seat-hand {
   display: none;
 }
@@ -1111,6 +1088,81 @@ body {
   100% { opacity: 0; transform: translateX(-50%) translateY(-4px)  scale(1);    }
 }
 
+/* Cantes fijos por jugador: una fila de chips pequeños bajo el nombre de
+   cada seat, visibles durante toda la mano. El contenedor se sitúa al final
+   del bloque .seat (después del nombre);
+   se oculta automáticamente cuando el jugador no ha cantado (no se renderiza
+   el contenedor, no se usa display:none). El chip se colorea por suit para
+   reforzar visualmente de qué palo fue el cante; el borde toma el color del
+   suit y el fondo es oscuro para que el texto blanco destaque. */
+.seat-cantes {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 4px;
+  /* max-width pequeño: evita que 3-4 chipsformen una sola fila que desborde
+     el seat lateral (pos-1 / pos-3) cuando el viewport es estrecho. Con
+     ~130px caben ~2 chips por línea; el resto wrappea debajo. */
+  max-width: 130px;
+}
+/* Layout de cantes según la posición del seat en la mesa:
+   - pos-0 (tú, Sur) y pos-2 (compañero, Norte): una sola línea horizontal
+     sin wrap. Los dos viven en la columna central (1.2fr) y el board es
+     ancho, así que 3-4 chips caben sin overflow.
+   - pos-1 (Este) y pos-3 (Oeste): columna vertical, un chip debajo de
+     otro. Los laterales están en columnas estrechas (1fr) y un chip ya
+     ocupa casi todo el ancho; apilarlos en columna es lo único que no
+     desborda el cell. */
+.seat.pos-0 .seat-cantes,
+.seat.pos-2 .seat-cantes {
+  flex-wrap: nowrap;
+  max-width: none;
+}
+.seat.pos-1 .seat-cantes,
+.seat.pos-3 .seat-cantes {
+  flex-direction: column;
+  align-items: center;
+  max-width: none;
+}
+.cante-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 11px;
+  background: rgba(6, 36, 27, 0.85);
+  border: 2px solid currentColor;
+  /* `color` lo pone data-suit; el SVG SuitGlyph usa currentColor para el
+     trazo/relleno, así que el glifo del canto sale del color del palo. */
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  /* Animación sutil al aparecer: un mini pop al insertarse en el DOM para
+     que el cante se "note" además del popup central. Mismo `seat-pop` del
+     avatar — duration corta para no marear. */
+  animation: cante-chip-pop 0.35s ease-out both;
+}
+.cante-chip[data-suit="oros"]    { color: #f0c84a; }
+.cante-chip[data-suit="copas"]   { color: #e8553d; }
+.cante-chip[data-suit="espadas"] { color: #6b8aff; }
+.cante-chip[data-suit="bastos"]  { color: #5fbf76; }
+.cante-chip b {
+  font-weight: 900;
+  color: #ffffff;
+}
+.cante-chip svg {
+  /* SuitGlyph renderiza a 12px; sin flex-shrink para que el icono no se
+     aplaste si el chip se queda sin ancho. */
+  flex-shrink: 0;
+}
+@keyframes cante-chip-pop {
+  from { transform: scale(0.7); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+
 /* Pantalla de "Partida terminada": dos cajas grandes con el resultado final
    + tabla con el desglose de la mano. Layout inspirado en el mockup. */
 .summary-matchover {
@@ -1200,11 +1252,8 @@ body {
   padding: 4px 10px;
   background: rgba(255, 255, 255, 0.04);
 }
-.summary-table-row.summary-table-difference {
-  background: rgba(255, 255, 255, 0.05);
-  font-weight: 700;
-  border-top: 1px solid rgba(255, 255, 255, 0.10);
-}
+/* (Reglas .summary-table-difference eliminadas: la fila "Faltan para
+   cerrar" del resumen de "Vamos de vueltas" ya no se renderiza.) */
 .summary-table-label {
   color: var(--fg);
 }
@@ -1220,15 +1269,8 @@ body {
   /* Columna vacía del header: sin contenido visible */
   display: block;
 }
-/* Colores por equipo en la fila destacada (cierre/diferencia): Nosotros
-   columna 1, Ellos columna 2. Sin importar quién gane la partida, cada
-   celda mantiene su color de equipo para que se identifique rápido. */
-.summary-table-row.summary-table-difference .summary-table-col:nth-of-type(2) {
-  color: var(--team-mine);
-}
-.summary-table-row.summary-table-difference .summary-table-col:nth-of-type(3) {
-  color: var(--accent);
-}
+/* (Reglas .summary-table-difference eliminadas: ya no se usa la fila de
+   diferencia/cierre en el resumen.) */
 .summary-footer {
   margin: 6px 0 0 0;
   font-size: 12px;

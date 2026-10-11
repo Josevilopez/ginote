@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useGame } from '../store.js';
 import { CardView } from '../components/CardView.js';
+import { SuitGlyph } from '../components/SuitGlyph.js';
 import { card, teamOf, nextSeat, canSwapSevenWithTrump, nextDealer } from '@guinote/engine';
 import type { Card, PlayerView, Seat, Suit } from '@guinote/engine';
 
@@ -104,6 +105,22 @@ export function Game() {
     const mustPass = cantes.length === 0 && !canSwap;
     return { phase: view.phase, plays: [], cantes, canSwapSeven: canSwap, mustPass };
   }, [view, you]);
+
+  // Cantes agrupados por seat para mostrarlos como chips fijos junto a cada
+  // jugador (no efímero como el popup de cante-announcement). Se preserva el
+  // orden de declaración; `view.cantes` resetea a [] al repartirse la siguiente
+  // mano (engine/src/state.ts:235), así que los chips aparecen al cantar y
+  // desaparecen solos al inicio de la siguiente. Vive ANTES del early return.
+  const cantesBySeat = useMemo(() => {
+    const map: Record<Seat, { suit: Suit; value: number; team: 0 | 1 }[]> = {
+      0: [], 1: [], 2: [], 3: [],
+    };
+    if (!view) return map;
+    for (const c of view.cantes) {
+      map[c.seat].push({ suit: c.suit, value: c.value, team: c.team });
+    }
+    return map;
+  }, [view?.cantes]);
 
   // Mano del jugador, en el orden por defecto (palo + fuerza) o el personalizado.
   // El reorder solo afecta a la visualización; las IDs y el envío de jugadas
@@ -359,7 +376,6 @@ export function Game() {
         {([0, 1, 2, 3] as const).map((seat) => {
           const pos = ((seat - you + 4) % 4) as 0 | 1 | 2 | 3;
           const isActive = view.turn === seat;
-          const count = view.handCounts[seat] ?? 0;
           const isYou = seat === you;
           // Iniciales para el avatar: primera letra de las dos primeras
           // palabras del nombre. "Bot 4" → "B4", "Bot 2" → "B2", "Norte" → "N".
@@ -379,12 +395,23 @@ export function Game() {
                 {displayName}
                 {view.lastWinner === seat && ' 👑'}
               </div>
-              {!isYou && (
-                <div className="opp-summary">
-                  <svg className="opp-icon" viewBox="0 0 24 32" aria-hidden="true">
-                    <rect x="4" y="4" width="16" height="24" rx="2" fill="#4338ca" stroke="rgba(255,255,255,0.55)" strokeWidth="1.2" />
-                  </svg>
-                  <span className="opp-count">{count} cartas</span>
+              {/* Cantes fijos de este jugador durante la mano actual: chips
+                  pequeños con el valor y el palo, coloreados por suit. Yacen al
+                  final del seat para no chocar con avatar/nombre. Si el
+                  jugador no ha cantado nada, no se renderiza el contenedor. */}
+              {cantesBySeat[seat].length > 0 && (
+                <div className="seat-cantes" aria-label={`Cantes de ${displayName}`}>
+                  {cantesBySeat[seat].map((c, i) => (
+                    <span
+                      key={`${c.suit}-${i}`}
+                      className="cante-chip"
+                      data-suit={c.suit}
+                      title={`${c.value === 40 ? 'Cuarenta' : 'Veinte'} en ${SUIT_NAME[c.suit]}`}
+                    >
+                      <SuitGlyph suit={c.suit} size={15} />
+                      <b>+{c.value}</b>
+                    </span>
+                  ))}
                 </div>
               )}
             </div>
@@ -816,15 +843,6 @@ export function Game() {
                         : '—'}
                     </span>
                   </div>
-                  <div className="summary-table-row summary-table-difference">
-                    <span className="summary-table-label">Faltan para cerrar</span>
-                    <span className="summary-table-col">
-                      faltan <b>{faltanParaCerrar(s.cumulative[s.myTeam])}</b>
-                    </span>
-                    <span className="summary-table-col">
-                      faltan <b>{faltanParaCerrar(s.cumulative[s.otherTeam])}</b>
-                    </span>
-                  </div>
                 </div>
 
                 {/* Hints contextuales: dealer, siguiente jugador, recordatorio
@@ -979,15 +997,6 @@ function buildSummary(view: PlayerView, you: number): Summary {
     nextStarter: computedNextStarter,
     vuelta: view.vuelta,
   };
-}
-
-/** Cuántas unidades del display (por encima del piso de 50) le faltan
- *  a un equipo para alcanzar el cierre. Trabaja sobre el TRAMO de
- *  arriba: raw > 50 ⇒ "raw - 50" es el valor en Buenas que se pinta.
- *  Para raw = 101 (`raw - 50 = 51`) el equipo ha cerrado la partida. */
-function faltanParaCerrar(cumulativeRaw: number): number {
-  const aboveRaw = Math.max(0, cumulativeRaw - 50);
-  return Math.max(0, 51 - aboveRaw);
 }
 
 /** Puntos de la mano en formato de partida: si el equipo pasa de 50 suma a
