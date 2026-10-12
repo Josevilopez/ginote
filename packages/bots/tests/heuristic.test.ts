@@ -476,4 +476,151 @@ describe('heuristic — último jugador con compañero ganando (donar puntos)', 
       expect(action!.cardId).toBe('bastos-10'); // Sota, 3 pts (la save más barata)
     }
   });
+
+  it('siendo el 4º y con el compañero ganando, dona el par save si YA está cantado', () => {
+    // Misma idea que el test anterior, pero con el cante de bastos YA
+    // registrado en `state.cantes`. El bot ya cobró los 20 pts de ese
+    // cante, así que no hay cante futuro que proteger y debe donar las
+    // cartas del par (3 o 4 pts) en lugar de las libres de 0 pts.
+    //
+    // Importante: el bot NO tiene copas (palo de salida). Así
+    // `partnerWinningExemptsTrump` le permite descartar lo que quiera
+    // en vez de fallar con triunfo, abriendo la puerta a donar las
+    // cartas del par de bastos.
+    const s = makeState({
+      trump: 'oros',
+      cantes: [
+        { seat: 0, team: 0, suit: 'bastos', pair: [10, 12], value: 20 },
+      ],
+      hands: {
+        0: [C.bastos12, C.bastos10, C.espadas7, C.espadas6, C.bastos6, C.oros5],
+        1: [C.copas3, C.espadas3, C.espadas1, C.bastos1, C.copas1, C.bastos3],
+        2: [C.copas1, C.copas10, C.espadas12, C.espadas6, C.oros6, C.bastos2],
+        3: [C.bastos7, C.espadas10, C.espadas6, C.bastos10, C.oros1, C.oros3],
+      },
+    });
+    s.trick.plays = [
+      { seat: 1, card: C.copas7 },
+      { seat: 2, card: C.copas1 },
+      { seat: 3, card: C.copas3 },
+    ];
+    s.turn = 0;
+    s.phase = 'follow';
+    s.deck = [];
+    s.trumpCard = C.oros4;
+
+    const action = heuristicBotAction(s, 0);
+    expect(action).not.toBeNull();
+    expect(action!.type).toBe('PLAY_CARD');
+    if (action!.type === 'PLAY_CARD') {
+      // El cante de bastos YA está cantado: las cartas del par son
+      // donables. La más cara (4 pts) gana.
+      expect(action!.cardId).toBe('bastos-12');
+      expect(action!.cardId).not.toMatch(/^espadas-/);
+      expect(action!.cardId).not.toMatch(/^oros-/);
+    }
+  });
+});
+
+describe('heuristic — no matar con triunfo en bazas pobres', () => {
+  it('rival gana, baza pobre (3 pts), triunfo As (11 pts) → NO mata, descarta', () => {
+    // El caso que describe el usuario: en fase de robo (trumpCard
+    // visible) el bot tiene todas las cartas como legales. Rival gana
+    // con copas-10 (3 pts). El bot tiene triunfo As (valioso, 11 pts)
+    // y otras no-triunfo. Como 3 < 11, NO compensa gastar el As:
+    // descarta otra carta y conserva el triunfo.
+    //
+    // Setup en fase de robo (trumpCard !== null): todas las cartas son
+    // legales, así que el bot puede descartar lo que quiera sin
+    // restricciones de fallo/palo. Esto aísla la regla de "no matar
+    // con triunfo" de las obligaciones de `mustFollowSuit` /
+    // `mustTrumpIfVoid`.
+    const s = makeState({
+      trump: 'oros',
+      hands: {
+        0: [C.oros1, C.copas7, C.espadas7, C.espadas6, C.bastos6, C.bastos2],
+        1: [C.copas10, C.espadas3, C.espadas1, C.bastos1, C.copas3, C.bastos3],
+        2: [C.oros6, C.oros10, C.copas12, C.espadas6, C.bastos3, C.espadas3],
+        3: [C.copas3, C.copas10, C.espadas12, C.bastos10, C.bastos2, C.espadas3],
+      },
+    });
+    s.trick.plays = [
+      { seat: 1, card: C.copas10 }, // 3 pts, gana (única carta)
+    ];
+    s.turn = 0;
+    s.phase = 'follow';
+    s.deck = [];
+    s.trumpCard = C.oros3; // fase de robo → todas las cartas son legales
+
+    const action = heuristicBotAction(s, 0);
+    expect(action).not.toBeNull();
+    expect(action!.type).toBe('PLAY_CARD');
+    if (action!.type === 'PLAY_CARD') {
+      // Baza = 3 pts. Triunfo As = 11 pts. 3 < 11 → NO mato. El bot
+      // descarta una no-triunfo.
+      expect(action!.cardId).not.toBe('oros-1');
+      expect(action!.cardId).not.toMatch(/^oros-/);
+    }
+  });
+
+  it('rival gana, baza rica (11 pts), triunfo As (11 pts) → SÍ mata', () => {
+    // Complemento: si la baza vale lo mismo o más que el triunfo a
+    // gastar, sí compensa.
+    const s = makeState({
+      trump: 'oros',
+      hands: {
+        0: [C.oros1, C.copas7, C.espadas7, C.espadas6, C.bastos6, C.bastos2],
+        1: [C.copas1, C.espadas3, C.espadas1, C.bastos1, C.copas3, C.bastos3],
+        2: [C.oros6, C.oros10, C.copas12, C.espadas6, C.bastos3, C.espadas3],
+        3: [C.copas3, C.copas10, C.espadas12, C.bastos10, C.bastos2, C.espadas3],
+      },
+    });
+    s.trick.plays = [
+      { seat: 1, card: C.copas1 }, // rival: As, 11 pts — gana
+    ];
+    s.turn = 0;
+    s.phase = 'follow';
+    s.deck = [];
+    s.trumpCard = C.oros3;
+
+    const action = heuristicBotAction(s, 0);
+    expect(action).not.toBeNull();
+    expect(action!.type).toBe('PLAY_CARD');
+    if (action!.type === 'PLAY_CARD') {
+      // Baza = 11 pts. Triunfo As = 11 pts. 11 < 11 falso → SÍ mata
+      // con oros-1.
+      expect(action!.cardId).toBe('oros-1');
+    }
+  });
+
+  it('rival gana, baza pobre (3 pts), triunfo barato (0 pts) → SÍ mata (es gratis)', () => {
+    // El caso "gratis": triunfo de 0 pts (7 de triunfo) no cuesta
+    // nada, así que siempre vale la pena matarlo.
+    const s = makeState({
+      trump: 'oros',
+      hands: {
+        0: [C.oros7, C.copas7, C.espadas7, C.espadas6, C.bastos6, C.bastos2],
+        1: [C.copas10, C.espadas3, C.espadas1, C.bastos1, C.copas3, C.bastos3],
+        2: [C.oros6, C.oros10, C.copas12, C.espadas6, C.bastos3, C.espadas3],
+        3: [C.copas3, C.copas10, C.espadas12, C.bastos10, C.bastos2, C.espadas3],
+      },
+    });
+    s.trick.plays = [
+      { seat: 1, card: C.copas10 }, // 3 pts
+    ];
+    s.turn = 0;
+    s.phase = 'follow';
+    s.deck = [];
+    s.trumpCard = C.oros3;
+
+    const action = heuristicBotAction(s, 0);
+    expect(action).not.toBeNull();
+    expect(action!.type).toBe('PLAY_CARD');
+    if (action!.type === 'PLAY_CARD') {
+      // trumpCost = 0 (oros-7 vale 0). La condición
+      // `trumpCost > 0 && ...` es falsa → NO entra en "no matar" →
+      // mata con oros-7.
+      expect(action!.cardId).toBe('oros-7');
+    }
+  });
 });

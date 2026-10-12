@@ -214,7 +214,10 @@ export function apply(state: GameState, action: Action): GameEvent[] {
     state.trumpCard = taken;
     events.push({ type: 'SEVEN_SWAPPED', seat, taken, given: state.trumpCard });
   } else if (action.type === 'SING_CANTE') {
-    if (state.phase !== 'winnerWindow' && !(state.phase === 'follow' && state.trumpCard === null)) {
+    const canCanteInArrastre =
+      (state.phase === 'lead' || state.phase === 'follow' || state.phase === 'arrastre') &&
+      state.trumpCard === null;
+    if (state.phase !== 'winnerWindow' && !canCanteInArrastre) {
       throw new Error('SING_CANTE solo en winnerWindow o arrastre');
     }
     const [a, b] = state.rules.cantes.pair;

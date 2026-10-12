@@ -60,7 +60,7 @@ export function legalActions(state: GameState, seat: Seat): Action[] {
   const actions: Action[] = [];
   const hand = state.hands[seat]!;
 
-  if (state.phase === 'lead' || state.phase === 'follow') {
+  if (state.phase === 'lead' || state.phase === 'follow' || state.phase === 'arrastre') {
     for (const card of legalPlays(state, seat)) {
       actions.push({ type: 'PLAY_CARD', cardId: card.id });
     }

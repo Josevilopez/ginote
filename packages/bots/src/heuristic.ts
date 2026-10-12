@@ -7,6 +7,7 @@ import {
   type Action,
   type Card,
   type GameState,
+  type Play,
   type Seat,
 } from '@guinote/engine';
 
@@ -40,8 +41,11 @@ import {
  *        cantable (esos se reservan para futuras "veintes"). Si no te
  *        queda nada donable, el no-triunfo más barato; en último caso,
  *        triunfo más barato.
- *      - Rival ganando, PUEDO ganar: no-triunfo ganador más barato;
- *        si solo puedes ganar con triunfo, el triunfo más barato.
+ *      - Rival ganando, PUEDO ganar: no-triunfo ganador más barato.
+ *        Si SOLO me sirve un triunfo, evalúo coste/beneficio: si la
+ *        baza ya jugada vale MENOS puntos que el triunfo más barato
+ *        que puedo gastar, NO mato — descarto la no-triunfo más barata
+ *        y conservo el triunfo. Si vale más, mato con el más barato.
  *      - Rival ganando, NO puedo ganar: no-triunfo más barato;
  *        si solo te quedan triunfos, el más barato.
  *
@@ -98,6 +102,20 @@ function cheapestCard(cards: readonly Card[], rules: GameState['rules']): Card {
     }
   }
   return best;
+}
+
+/**
+ * Suma los puntos de las cartas ya jugadas en la baza actual (sin
+ * contar el bonus de "10 de últimas"). Útil para decidir si vale la
+ * pena gastar un triunfo en matar.
+ */
+function pointsOnTrick(trick: readonly Play[], rules: GameState['rules']): number {
+  let total = 0;
+  for (const p of trick) {
+    const pts = rules.cardPoints[p.card.rank as keyof typeof rules.cardPoints];
+    total += pts ?? 0;
+  }
+  return total;
 }
 
 /**
@@ -170,9 +188,13 @@ function pickPlayCard(state: GameState, seat: Seat, legalCards: readonly Card[])
         if (c.rank === 12) reySuits.add(c.suit);
       }
       // Un suit entra en `saveSuits` solo si tengo AMBAS cartas (Sota y
-      // Rey). Esos son los pares que se reservan para futuras "veintes".
+      // Rey) Y ese par aún NO se ha cantado. Si ya se cantó, no hay
+      // cante futuro del que proteger esas cartas — donarlas le da
+      // puntos extra al equipo.
+      const cantedSuits = new Set<string>();
+      for (const cante of state.cantes) cantedSuits.add(cante.suit);
       for (const s of sotaSuits) {
-        if (reySuits.has(s)) saveSuits.add(s);
+        if (reySuits.has(s) && !cantedSuits.has(s)) saveSuits.add(s);
       }
       const isSaveCard = (c: Card) =>
         c.suit !== trump && saveSuits.has(c.suit) && (c.rank === 10 || c.rank === 12);
@@ -200,9 +222,25 @@ function pickPlayCard(state: GameState, seat: Seat, legalCards: readonly Card[])
   const winningCards = legalCards.filter((c) => beats(c, winner.card, trump, rules));
   if (winningCards.length > 0) {
     // Sí: si tengo un NO-TRIUNFO que gana, lo prefiero (conservo el
-    // triunfo). Si solo me sirve un triunfo, el más barato.
+    // triunfo).
     const nonTrumpWinners = winningCards.filter((c) => c.suit !== trump);
     if (nonTrumpWinners.length > 0) return cheapestCard(nonTrumpWinners, rules);
+
+    // Solo triunfo me sirve para matar. ¿Vale la pena?
+    // Regla: si la baza ya jugada vale MENOS puntos que el triunfo más
+    // barato que puedo gastar, NO mato — descarto lo más barato no-triunfo
+    // y conservo el triunfo para bazas donde merezca la pena. La
+    // excepción es cuando NO tengo cartas no-triunfo disponibles (estoy
+    // obligado por reglas, p.ej. fallo obligatorio): entonces mato con
+    // el triunfo más barato.
+    if (nonTrumps.length > 0) {
+      const cheapestWinningTrump = cheapestCard(winningCards, rules);
+      const trumpCost = cardPoints(cheapestWinningTrump);
+      const tablePoints = pointsOnTrick(trick, rules);
+      if (trumpCost > 0 && tablePoints < trumpCost) {
+        return cheapestCard(nonTrumps, rules);
+      }
+    }
     return cheapestCard(winningCards, rules);
   }
 

@@ -166,6 +166,7 @@ describe('Cantes', () => {
     });
     const actions = legalActions(s, 0);
     expect(actions.some((a) => a.type === 'SING_CANTE')).toBe(true);
+    expect(() => apply(s, { type: 'SING_CANTE', suit: 'copas', pair: [10, 12] })).not.toThrow();
   });
 
   it('el cante guarda el seat que cantó (necesario para anunciarlo por pantalla)', () => {
