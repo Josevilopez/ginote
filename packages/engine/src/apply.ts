@@ -214,11 +214,17 @@ export function apply(state: GameState, action: Action): GameEvent[] {
     state.trumpCard = taken;
     events.push({ type: 'SEVEN_SWAPPED', seat, taken, given: state.trumpCard });
   } else if (action.type === 'SING_CANTE') {
-    const canCanteInArrastre =
-      (state.phase === 'lead' || state.phase === 'follow' || state.phase === 'arrastre') &&
-      state.trumpCard === null;
-    if (state.phase !== 'winnerWindow' && !canCanteInArrastre) {
-      throw new Error('SING_CANTE solo en winnerWindow o arrastre');
+    // El cante se permite en winnerWindow (ventana tras una baza) o en
+    // cualquier momento del juego (lead/follow/arrastre) siempre que se
+    // haya ganado la última baza — la condición fina vive en
+    // `legalActions.puedeCantar`. No imponemos aquí `trumpCard === null`
+    // porque `legalActions` ya ofrece el cante durante el robo (lead
+    // post-draw) cuando el ganador completa la pareja, y `apply` debe
+    // ser coherente con eso.
+    const canCanteInGame =
+      state.phase === 'lead' || state.phase === 'follow' || state.phase === 'arrastre';
+    if (state.phase !== 'winnerWindow' && !canCanteInGame) {
+      throw new Error('SING_CANTE solo en winnerWindow o durante el juego');
     }
     const [a, b] = state.rules.cantes.pair;
     if (action.pair[0] !== a || action.pair[1] !== b) {

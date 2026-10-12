@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { apply, legalActions } from '../src/index.js';
+import { apply, card, legalActions } from '../src/index.js';
 import { C, makeState } from './builders.js';
 
 describe('Cantes', () => {
@@ -166,6 +166,33 @@ describe('Cantes', () => {
     });
     const actions = legalActions(s, 0);
     expect(actions.some((a) => a.type === 'SING_CANTE')).toBe(true);
+    expect(() => apply(s, { type: 'SING_CANTE', suit: 'copas', pair: [10, 12] })).not.toThrow();
+  });
+
+  it('el ganador puede cantar en lead post-draw aunque el triunfo SIGA visible (todavía hay cartas)', () => {
+    // Caso del bug que reportaste en producción: el escenario típico
+    // durante el robo en mano temprana es que `phase='lead'` y
+    // `trumpCard !== null` (todavía quedan cartas en el mazo y el
+    // triunfo sigue visible). El ganador (o su compañero) de la baza
+    // anterior ha completado la pareja y debe poder cantar. `legalActions`
+    // ya lo ofrecía, pero `apply` lo rechazaba porque requería
+    // `trumpCard === null`. Ahora ambos están alineados.
+    const s = makeState({
+      phase: 'lead',
+      trump: 'oros',
+      trumpCard: C.oros3, // todavía hay cartas en el mazo (no es arrastre)
+      leader: 0,
+      turn: 0,
+      lastWinner: 0,
+      deck: [card('oros', 7), card('oros', 4)], // cartas restantes
+      hands: {
+        0: [C.copas10, C.copas12, C.espadas7, C.bastos12, C.copas11, C.espadas1],
+        1: [],
+        2: [],
+        3: [],
+      },
+    });
+    expect(legalActions(s, 0).some((a) => a.type === 'SING_CANTE')).toBe(true);
     expect(() => apply(s, { type: 'SING_CANTE', suit: 'copas', pair: [10, 12] })).not.toThrow();
   });
 

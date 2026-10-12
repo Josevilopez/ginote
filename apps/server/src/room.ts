@@ -386,8 +386,18 @@ export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {
  * `phase: 'finished'`.
  */
 export function triggerNextHand(room: Room): void {
-  if (room.matchFinished) return;
-  if (room.state.phase !== 'finished') return;
+  // DEBUG: log temporal para diagnosticar por qué una mano a veces
+  // no avanza al estado "Repartiendo siguiente mano…". Borrar tras
+  // cerrar el ticket.
+  if (room.matchFinished) {
+    console.log(`[triggerNextHand] no-op: matchFinished=true code=${room.code}`);
+    return;
+  }
+  if (room.state.phase !== 'finished') {
+    console.log(`[triggerNextHand] no-op: phase=${room.state.phase} code=${room.code}`);
+    return;
+  }
+  console.log(`[triggerNextHand] proceeding code=${room.code} vuelta=${room.state.vuelta} matchEnded=${room.state.matchEnded}`);
 
   // 1. Procesar la partida recién terminada, si la hay.
   if (room.state.matchEnded && room.state.matchWinner !== null) {

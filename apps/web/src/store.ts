@@ -121,7 +121,13 @@ export const useGame = create<State>((set, get) => ({
 
   leave() {
     if (wsRef) {
-      wsRef.send(JSON.stringify({ type: 'LEAVE' } satisfies ClientMessage));
+      // Solo enviamos LEAVE si el socket sigue abierto — `readyState`
+      // 1 = OPEN. Si ya está CLOSING/CLOSED/CONNECTING, `send` lanza
+      // `WebSocket is already in CLOSING or CLOSED state` y la excepción
+      // se ve en consola sin que podamos hacer nada útil.
+      if (wsRef.readyState === 1) {
+        wsRef.send(JSON.stringify({ type: 'LEAVE' } satisfies ClientMessage));
+      }
       wsRef.close();
       wsRef = null;
     }

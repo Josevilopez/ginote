@@ -248,8 +248,8 @@ export const GUINOTE_ARAGONES: RulesConfig = {
     mustOverplay: true,
     mustTrumpIfVoid: true,
     partnerWinningExemptsOverplay: true,
-    partnerWinningExemptsTrump: false,
-    mustTrumpEvenIfCantBeat: true,
+    partnerWinningExemptsTrump: true,  // confirmado: compañero ganando exime de fallar con triunfo (puedes descartar)
+    mustTrumpEvenIfCantBeat: false,   // confirmado: si no puedes superar al triunfo de mesa, no obligado a tirar triunfo (puedes descartar). Coherente con la línea 38.
   },
   swapSeven: { onlyOnOwnTurn: true, onlyIfWonLastTrick: true, onlyDuringDraw: true, aloud: true },
   cantes: {

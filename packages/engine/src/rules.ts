@@ -127,8 +127,14 @@ export interface VueltasScoring {
 /**
  * Reglas confirmadas del guiñote aragonés. Ver `docs/guinote-aragones-diseno.md`.
  *
- * Los flags `partnerWinningExemptsTrump` y `mustTrumpEvenIfCantBeat` están
- * confirmados en el doc; el resto son TODO y se ajustarán cuando confirmes.
+ * Confirmados:
+ *  - `mustTrumpIfVoid = true`             → sin palo y rival gana: debes fallar con triunfo si puedes.
+ *  - `partnerWinningExemptsOverplay = true` → compañero ganando exime de superar.
+ *  - `partnerWinningExemptsTrump = true`    → compañero ganando exime de fallar con triunfo.
+ *  - `mustTrumpEvenIfCantBeat = false`      → si tu triunfo NO supera al de mesa, puedes descartar
+ *                                            (no estás obligado a tirar el triunfo flojo).
+ *
+ * El resto de flags son TODO y se ajustarán cuando confirmes.
  */
 export const GUINOTE_ARAGONES: RulesConfig = {
   players: 4,
@@ -146,7 +152,7 @@ export const GUINOTE_ARAGONES: RulesConfig = {
     mustTrumpIfVoid: true,
     partnerWinningExemptsOverplay: true,
     partnerWinningExemptsTrump: true, // confirmado: compañero ganando exime de fallar con triunfo
-    mustTrumpEvenIfCantBeat: true, // si tienes triunfo y oponente gana, obligatorio aunque no supere
+    mustTrumpEvenIfCantBeat: false, // confirmado: si no puedes superar al triunfo de mesa, NO estás obligado a tirar triunfo (puedes descartar)
   },
   swapSeven: { onlyOnOwnTurn: true, onlyIfWonLastTrick: true, onlyDuringDraw: true, aloud: true },
   cantes: {

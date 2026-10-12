@@ -623,4 +623,52 @@ describe('heuristic — no matar con triunfo en bazas pobres', () => {
       expect(action!.cardId).toBe('oros-7');
     }
   });
+
+  it('rival gana con triunfo, mi triunfo NO puede superarlo → puede descartar (mustTrumpEvenIfCantBeat=false)', () => {
+    // El caso descrito por el usuario: en arrastre, sin palo de salida
+    // (copas), hay un triunfo de mesa (oros-3) que es más fuerte que mi
+    // oros-7. Con `mustTrumpEvenIfCantBeat = false` el motor me permite
+    // descartar en vez de tirar el triunfo flojo. El bot, además, no
+    // debe gastar el oros-7 si la baza no vale lo suficiente: prefiere
+    // descartar el no-triunfo más barato.
+    //
+    // Setup en arrastre (trumpCard === null): sale seat 1 con copas-3.
+    // Seat 2 (rival) tira oros-3 (triunfo, gana). Turno de seat 3 (bot).
+    // Seat 3 es rival del ganador → debe intentar fallar con triunfo, pero
+    // oros-7 no supera oros-3 → con mustTrumpEvenIfCantBeat=false,
+    // descartar es legal. Las 6 cartas están en legalCards, y el bot
+    // aplica "no matar en bazas pobres" → descarta el no-triunfo más
+    // barato.
+    const s = makeState({
+      trump: 'oros',
+      trick: [
+        { seat: 1, card: C.copas3 }, // 10 pts
+        { seat: 2, card: C.oros3 }, // 10 pts, gana (triunfo)
+      ],
+      trickPoints: { 0: 0, 1: 0 },
+      hands: {
+        0: [C.espadas7, C.bastos12, C.espadas1, C.bastos10, C.oros7, C.oros6],
+        1: [C.copas3, C.espadas3, C.espadas1, C.bastos1, C.copas3, C.bastos3],
+        2: [C.oros6, C.oros10, C.copas12, C.espadas6, C.bastos3, C.espadas3],
+        3: [C.espadas7, C.bastos12, C.espadas1, C.bastos10, C.oros7, C.oros6],
+      },
+    });
+    s.turn = 3;
+    s.phase = 'follow';
+    s.deck = [];
+    s.trumpCard = null;
+    s.leader = 1;
+
+    const action = heuristicBotAction(s, 3);
+    expect(action).not.toBeNull();
+    expect(action!.type).toBe('PLAY_CARD');
+    if (action!.type === 'PLAY_CARD') {
+      // El bot descarta una no-triunfo (no tira el oros-7 flojo).
+      expect(action!.cardId).not.toBe('oros-7');
+      expect(action!.cardId).not.toMatch(/^oros-/);
+      // De las no-triunfo (espadas7=0, bastos12=4, espadas1=11,
+      // bastos10=3), la más barata en puntos es espadas-7 (0 pts).
+      expect(action!.cardId).toBe('espadas-7');
+    }
+  });
 });

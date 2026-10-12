@@ -160,33 +160,66 @@ describe('legalPlays — fallar con triunfo', () => {
     expect(ids(legalPlays(s, 2))).toEqual(['oros-1', 'oros-3']);
   });
 
-  it('si no puedes superar con triunfo y mustTrumpEvenIfCantBeat, juegas cualquier triunfo', () => {
-    // Sale seat 1 con copas-1. Turno de seat 2, no tiene copas, tiene oros-3 (no supera).
-    // oros-3 no supera copas-1 (distinto palo, oros-3 no es triunfo suficiente vs copas-1).
-    // Espera, copas-1 no es triunfo (trump=oros). oros-3 sí es triunfo, y cualquier
-    // triunfo gana a no-triunfo. Así que oros-3 SÍ supera copas-1.
-    // Vamos a poner oros-7: oros-7 es triunfo pero no supera a otro oros-7 (no hay).
-    // Hmm, super es "triunfo > no-triunfo". Un oros-7 gana a copas-1 porque es triunfo.
-    // Para "no supera con triunfo": necesitamos que el triunfo de mesa sea más alto.
-    // Oros-1 (As de oros) en mesa. oros-3 no lo supera. Pero si el jugador no tiene
-    // oros-1, oros-3, oros-12, etc., y solo tiene oros-7,6,5,4,2, tampoco puede superar.
+  it('si no puedes superar con triunfo y mustTrumpEvenIfCantBeat=false, NO estás obligado a tirar el triunfo flojo', () => {
+    // Regla confirmada en `docs/guinote-aragones-diseno.md` línea 38:
+    // "Sin el palo de salida, con triunfo en mesa más alto que el tuyo y
+    // sin poder superarlo: no obligado a tirar triunfo". El jugador
+    // puede descartar libremente (toda la mano es legal).
+    //
+    // Setup: sale seat 1 con copas-3 (palo no triunfo). Seat 2 (otro
+    // rival) juega oros-3 (el "3" de triunfo, gana). Turno de seat 3:
+    // no tiene copas, tiene oros-7 (triunfo flojo que NO gana a
+    // oros-3) y descartes. Como mustTrumpEvenIfCantBeat = false → puede
+    // jugar cualquier carta (incluido descartar otra cosa en vez del
+    // triunfo flojo).
+    const s = makeState({
+      phase: 'follow',
+      trump: 'oros',
+      trumpCard: null,
+      leader: 1,
+      turn: 3,
+      trick: [
+        { seat: 1, card: C.copas3 },
+        { seat: 2, card: C.oros3 },
+      ],
+      hands: {
+        0: [],
+        1: [],
+        2: [],
+        3: [C.espadas7, C.bastos12, C.espadas1, C.bastos10, C.oros7, C.oros6],
+      },
+    });
+    // Winner: seat 2 con oros-3. Seat 3 es rival del ganador, no tiene
+    // copas (palo de salida), tiene oros-7 (flojo, no gana a oros-3) y
+    // descartes. Con mustTrumpEvenIfCantBeat = false, las 6 cartas son
+    // legales (puede descartar).
+    expect(legalPlays(s, 3).length).toBe(6);
+  });
+
+  it('si ALGÚN triunfo sí gana al de mesa, ese sí es obligatorio (independiente de mustTrumpEvenIfCantBeat)', () => {
+    // Complemento: aunque `mustTrumpEvenIfCantBeat` sea false (puedo
+    // descartar si NINGUNO de mis triunfos gana), si tengo AL MENOS un
+    // triunfo que SÍ gana al de mesa, estoy obligado a jugar uno
+    // superior (rama `if (higher.length > 0) return higher`). Sale
+    // seat 1 con oros-3 (el "3"). Turno de seat 2 con oros-1 (el As,
+    // gana a oros-3) y oros-5 (flojo). Solo oros-1 es legal.
     const s = makeState({
       phase: 'follow',
       trump: 'oros',
       trumpCard: null,
       leader: 1,
       turn: 2,
-      trick: [{ seat: 1, card: C.oros1 }],
+      trick: [{ seat: 1, card: C.oros3 }],
       hands: {
         0: [],
         1: [],
-        2: [C.copas3, C.espadas7, C.bastos12, C.oros6, C.oros5, C.espadas1],
+        2: [C.copas3, C.espadas7, C.bastos12, C.oros1, C.oros5, C.espadas1],
         3: [],
       },
     });
-    // Winner: seat 1 con oros-1. El jugador 2 no tiene copas, tiene oros-6 y oros-5.
-    // Ninguno supera oros-1. Como mustTrumpEvenIfCantBeat = true, juega cualquier oros.
-    expect(ids(legalPlays(s, 2))).toEqual(['oros-6', 'oros-5']);
+    // Winner: seat 1 con oros-3. Seat 2 tiene oros-1 (gana) y oros-5
+    // (no gana). Solo oros-1 es legal.
+    expect(ids(legalPlays(s, 2))).toEqual(['oros-1']);
   });
 
   it('si no tienes ni palo ni triunfo, juegas cualquier carta', () => {
@@ -236,14 +269,14 @@ describe('legalPlays — fallar con triunfo', () => {
     expect(legalPlays(s, 2).length).toBe(6);
   });
 
-  it('compañero ganando exime también de superar el triunfo (puede tirar triunfo flojo)', () => {
+  it('rival gana con triunfo superior, ninguno de mis triunfos lo supera → descarte libre (mustTrumpEvenIfCantBeat=false)', () => {
     // Trump: oros. Sale seat 0 con copas-3. Seat 1 juega oros-1 (triunfo, gana).
-    // Turno de seat 2 (compañero de seat 0). Seat 2 NO tiene copas, tiene oros-7
-    // (triunfo flojo) y descartes.
-    // partner (seat 0) NO va ganando (seat 1 trumpó), así que debe fallar con triunfo.
-    // oros-7 no supera oros-1 → como mustTrumpEvenIfCantBeat=true, juega oros-7.
-    // (Verifica que el flag mustTrumpEvenIfCantBeat sigue forzando un triunfo
-    // flojo cuando el oponente gana, no el compañero.)
+    // Turno de seat 2 (rival del ganador). Seat 2 NO tiene copas, tiene oros-7
+    // y oros-6 (triunfos flojos que NO superan oros-1) y descartes.
+    //
+    // Como `mustTrumpEvenIfCantBeat = false`, el jugador NO está obligado
+    // a tirar un triunfo flojo: puede descartar cualquier carta de su
+    // mano. Las 6 cartas son legales.
     const s = makeState({
       phase: 'follow',
       trump: 'oros',
@@ -261,9 +294,10 @@ describe('legalPlays — fallar con triunfo', () => {
         3: [],
       },
     });
-    // Winner: seat 1 (oros-1). partner (seat 0) NO gana → debe triunfar. oros-7/6
-    // no superan oros-1 → mustTrumpEvenIfCantBeat=true → juega cualquier oros
-    // (no descartes de otros palos).
-    expect(ids(legalPlays(s, 2)).sort()).toEqual(['oros-6', 'oros-7']);
+    // Winner: seat 1 (oros-1). partner de seat 2 = seat 0, NO gana → debe
+    // intentar fallar con triunfo. oros-7/6 no superan oros-1 →
+    // mustTrumpEvenIfCantBeat=false → descarte libre, las 6 cartas son
+    // legales.
+    expect(legalPlays(s, 2).length).toBe(6);
   });
 });
