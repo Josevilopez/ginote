@@ -1,5 +1,6 @@
 import type { Card, Seat } from './types.js';
 import type { GameState, Play } from './state.js';
+import type { RulesConfig } from './rules.js';
 import { SEATS, partnerOf } from './types.js';
 
 /**
@@ -23,6 +24,14 @@ export interface PlayerView {
   readonly dealer: Seat;
   readonly trump: GameState['trump'];
   readonly trumpCard: Card | null; // visible en draw
+  /**
+   * Configuración de reglas que aplica a esta partida. La envía el servidor
+   * para que el cliente (frontend) NO tenga que hardcodear la `RulesConfig`
+   * (por ejemplo `GUINOTE_ARAGONES`). Si en una sala se juega una variante
+   * regional con reglas distintas, el cliente recibe esa variante aquí y
+   * `legalPlaysFromView` usa estos mismos flags.
+   */
+  readonly rules: RulesConfig;
   readonly hand: readonly Card[]; // tu mano
   readonly handCounts: Record<Seat, number>; // cuántas tiene cada uno (público)
   readonly trick: readonly Play[];
@@ -57,6 +66,7 @@ export function viewFor(state: GameState, seat: Seat): PlayerView {
     dealer: state.dealer,
     trump: state.trump,
     trumpCard: state.trumpCard,
+    rules: state.rules,
     hand: state.hands[seat]!.slice(),
     handCounts,
     trick: state.trick.plays.slice(),

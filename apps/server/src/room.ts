@@ -12,7 +12,7 @@ import {
   type Card,
   type GameEvent,
 } from '@guinote/engine';
-import { stepHeuristicBot } from '@guinote/bots';
+import { stepHeuristicBot, heuristicBotAction } from '@guinote/bots';
 
 /**
  * Nombres típicos aragoneses para los bots de la sala. Pensado para
@@ -316,7 +316,18 @@ export async function stepBots(
     const player = room.players[turn]!;
     if (player.token !== null) return acted;
     const before = room.state.finishedTricks.length;
-    if (!stepHeuristicBot(room.state, turn)) return acted;
+    // Aplica la acción del bot por la MISMA ruta que las acciones
+    // humanas: `applyActionWithResolveEvent`. Esto es clave porque
+    // unifica los efectos colaterales: el broadcast de `SWAP_HAPPENED`
+    // cuando un bot cambia el 7, el broadcast de `TRICK_JUST_RESOLVED`
+    // cuando una baza termina, etc. Antes, los bots usaban
+    // `stepHeuristicBot` que aplicaba el motor en crudo y se saltaba
+    // esos broadcasts: por eso sólo se mostraba el aviso de cambio
+    // del 7 cuando lo hacías TÚ, no cuando lo hacía un bot.
+    const botAction = heuristicBotAction(room.state, turn);
+    if (!botAction) return acted;
+    const ok = applyActionWithResolveEvent(room, turn, botAction);
+    if (!ok) return acted;
     acted = true;
     const after = room.state.finishedTricks.length;
     if (after > before) {

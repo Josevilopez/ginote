@@ -782,6 +782,12 @@ body {
 .trick-card.pos-2 { transform: translate(0, calc(var(--card-w-baza) * -0.95 + 35px)); }          /* Norte: encima del centro */
 .trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -1.1), 30px) rotate(-12deg); } /* Oeste: izquierda + tilt antihorario */
 
+/* Carta en vuelo (animación FLIP tras PLAY_CARD): elevada sobre el resto
+   para que durante la transición tape momentáneamente a las otras cartas
+   del truco. La clase se aplica como atributo `data-flying` directamente
+   al .trick-card y se quita al terminar la animación. */
+.trick-card[data-flying] { z-index: 5; }
+
 /* Móvil: las cartas laterales se acercan un poco más al centro (offsets
    más cortos) y bajamos el mazo para que no tape las cartas del truco.
    La rotación ya vive en la regla base — aplica también en escritorio.

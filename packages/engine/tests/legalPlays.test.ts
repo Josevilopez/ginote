@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { legalPlays, type GameState } from '../src/index.js';
+import { legalPlays, legalPlaysFromView, GUINOTE_ARAGONES, type GameState } from '../src/index.js';
 import { C, makeState } from './builders.js';
 
 function ids(cards: readonly { id: string }[]): string[] {
@@ -299,5 +299,130 @@ describe('legalPlays — fallar con triunfo', () => {
     // mustTrumpEvenIfCantBeat=false → descarte libre, las 6 cartas son
     // legales.
     expect(legalPlays(s, 2).length).toBe(6);
+  });
+
+  it('compañero sale de espadas, rival cubre con triunfo superior (bastos), mano SIN espadas y bastos propios NO superan → descarte libre en oros', () => {
+    // Escenario reportado por el jugador: triunfo bastos, sale el
+    // compañero con espadas, rival de la izquierda tira bastos-1 (el As,
+    // gana). Turno del humano: en mano bastos-7 y bastos-6 (NO superan
+    // bastos-1) más cartas en oros, copas Y NINGUNA espada (no puede
+    // seguir palo). Como mustTrumpEvenIfCantBeat es false, puede
+    // descartar libremente (oros incluidos). Las 6 son legales; en
+    // particular oros-1 debe figurar entre las legales. ESTO es lo que
+    // el jugador llamaba "no debe ser así" antes de este fix.
+    const s = makeState({
+      phase: 'follow',
+      trump: 'bastos',
+      trumpCard: null,
+      leader: 2, // sale el compañero (seat 2 es pareja de seat 0)
+      turn: 0,
+      trick: [
+        { seat: 2, card: C.espadas7 },
+        { seat: 1, card: C.bastos1 },
+      ],
+      // Mano de seat 0: dos bastos flojos + cuatro cartas de oros/copas
+      // NINGUNA espada (no se puede asistir). oros-1 debe ser jugable.
+      hands: {
+        0: [C.bastos7, C.bastos6, C.oros1, C.oros12, C.copas11, C.copas10],
+        1: [],
+        2: [],
+        3: [],
+      },
+    });
+    // partner de seat 0 = seat 2 (sale con espadas-7). Winner actual =
+    // seat 1 con bastos-1 (triunfo superior). Seat 0 no tiene espadas
+    // (led suit), pero sí bastos-7/bastos-6: ninguno supera bastos-1
+    // → mustTrumpEvenIfCantBeat=false → 6 cartas legales.
+    expect(legalPlays(s, 0).length).toBe(6);
+    expect(legalPlays(s, 0).map((c) => c.id)).toContain('oros-1');
+    expect(legalPlays(s, 0).map((c) => c.id)).toContain('oros-12');
+  });
+
+  it('compañero sale de espadas, rival cubre con triunfo superior, mano CON espadas → obligado a jugar espadas aunque pierda (regla seguir palo)', () => {
+    // Complemento: si el jugador SÍ tiene cartas del palo de salida
+    // (espadas), DEBE jugar una de ellas aunque vaya a perder. La regla
+    // "fallar con triunfo" solo aplica cuando el palo de salida NO está
+    // disponible. Aquí seat 0 tiene espadas-10, así que la mano está
+    // restringida a las espadas; bastos y oros NO son legales aunque
+    // ninguna espada gane.
+    const s = makeState({
+      phase: 'follow',
+      trump: 'bastos',
+      trumpCard: null,
+      leader: 2,
+      turn: 0,
+      trick: [
+        { seat: 2, card: C.espadas7 },
+        { seat: 1, card: C.bastos1 },
+      ],
+      hands: {
+        0: [C.espadas10, C.bastos7, C.bastos6, C.oros1, C.oros12, C.copas11],
+        1: [],
+        2: [],
+        3: [],
+      },
+    });
+    // Led suit = espadas. mustOverplay=true, partnerWins=false →
+    // mismo palo obligatorio. espadas-10 no supera bastos-1 (distinto
+    // palo), así que higher=[] y devolvemos sameSuit = [espadas-10].
+    expect(ids(legalPlays(s, 0))).toEqual(['espadas-10']);
+  });
+});
+
+describe('legalPlaysFromView — coherencia con legalPlays (servidor)', () => {
+  // La función del cliente (`legalPlaysFromView`) y la del servidor
+  // (`legalPlays`) deben devolver EXACTAMENTE el mismo conjunto de cartas
+  // para los mismos datos de entrada. Esto blinda el contrato cliente/
+  // servidor: si la regla cambia, ambas APIs se mueven juntas porque
+  // delegan en `computeLegalCards`.
+
+  it('cliente y servidor coinciden en el escenario reportado del bug', () => {
+    // Mismo setup que el test de regresión del bug: triunfo bastos,
+    // compañero sale con espadas-7, rival gana con bastos-1, mano sin
+    // espadas pero con bastos-7/bastos-6 flojos. Resultado: 6 cartas
+    // legales (oros y copas incluidos).
+    const hand = [C.bastos7, C.bastos6, C.oros1, C.oros12, C.copas11, C.copas10];
+    const trick = [
+      { seat: 2, card: C.espadas7 },
+      { seat: 1, card: C.bastos1 },
+    ];
+    const fromView = legalPlaysFromView(
+      {
+        hand,
+        trick,
+        trumpCard: null,
+        trump: 'bastos',
+        rules: GUINOTE_ARAGONES,
+      },
+      0,
+    );
+    // Construimos el GameState equivalente para el servidor.
+    const s = makeState({
+      phase: 'follow',
+      trump: 'bastos',
+      trumpCard: null,
+      leader: 2,
+      turn: 0,
+      trick,
+      hands: { 0: hand, 1: [], 2: [], 3: [] },
+    });
+    const fromServer = legalPlays(s, 0);
+    // Mismo set de IDs, sin importar orden.
+    expect(new Set(fromView.map((c) => c.id))).toEqual(new Set(fromServer.map((c) => c.id)));
+    // El bug original (cliente devolvía solo bastos) habría devuelto 2.
+    expect(fromView.length).toBe(6);
+  });
+
+  it('cliente respeta la regla de "seguir palo" si hay cartas del led suit', () => {
+    const hand = [C.espadas10, C.bastos7, C.bastos6, C.oros1, C.oros12, C.copas11];
+    const trick = [
+      { seat: 2, card: C.espadas7 },
+      { seat: 1, card: C.bastos1 },
+    ];
+    const fromView = legalPlaysFromView(
+      { hand, trick, trumpCard: null, trump: 'bastos', rules: GUINOTE_ARAGONES },
+      0,
+    );
+    expect(new Set(fromView.map((c) => c.id))).toEqual(new Set(['espadas-10']));
   });
 });

@@ -3,7 +3,14 @@ import type { CSSProperties } from 'react';
 import { useGame } from '../store.js';
 import { CardView } from '../components/CardView.js';
 import { SuitGlyph } from '../components/SuitGlyph.js';
-import { card, teamOf, nextSeat, canSwapSevenWithTrump, nextDealer } from '@guinote/engine';
+import {
+  card,
+  teamOf,
+  nextSeat,
+  canSwapSevenWithTrump,
+  nextDealer,
+  legalPlaysFromView,
+} from '@guinote/engine';
 import type { Card, PlayerView, Seat, Suit } from '@guinote/engine';
 
 const SUIT_NAME: Record<Suit, string> = {
@@ -53,6 +60,22 @@ export function Game() {
   const matchOver = useGame((s) => s.matchOver);
   const justResolved = useGame((s) => s.justResolved);
   const swapAnnouncement = useGame((s) => s.swapAnnouncement);
+  // Auto-clear del swap overlay: el servidor emite `SWAP_HAPPENED`, lo
+  // recibimos aquí como parte del estado y mostramos el aviso. Al
+  // cabo de 3,5 s lo limpiamos vía el propio store para que el
+  // componente se re-renderice sin el overlay. Si llega otro swap
+  // mientras, `uid` cambia y este effect re-arranca el timer limpio.
+  // Antes el timer vivía en el módulo de `store.ts`, lo que provocaba
+  // que el clear se ejecutara sin pasar por el ciclo de vida del
+  // componente y a veces la actualización tardaba en reflejarse en
+  // pantalla. Mismo patrón que `canteAnnouncement`.
+  useEffect(() => {
+    if (!swapAnnouncement) return;
+    const id = window.setTimeout(() => {
+      useGame.setState({ swapAnnouncement: null });
+    }, 3500);
+    return () => window.clearTimeout(id);
+  }, [swapAnnouncement?.uid]);
   const sendAction = useGame((s) => s.sendAction);
   const leave = useGame((s) => s.leave);
   // Progresión partida → coto → match (servidor). Necesitamos varios
@@ -74,7 +97,47 @@ export function Game() {
   const slotRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const dragRef = useRef<{ idx: number; startX: number; pointerId: number } | null>(null);
   // offsetX se actualiza en cada move y se renderiza como translateX.
+  // IMPORTANTE: NO se rellena en `pointerdown` — solo cuando hay
+  // movimiento real por encima del umbral de reorder. Esto evita que un
+  // tap rápido vea un "flash" de la carta levantada (-6px) antes del
+  // FLIP hacia el truco (el usuario reportó ese salto como molesto).
   const [dragVisual, setDragVisual] = useState<{ idx: number; offsetX: number } | null>(null);
+  // Rect capturado en `pointerdown` (posición natural de la carta, sin
+  // ningún lift inline). Sirve como origen del FLIP cuando el usuario
+  // suelta sin moverse lo suficiente como para reordenar: medimos ese
+  // mismo punto al iniciar la animación, así no hay "salto" entre la
+  // posición al pulsar y la posición de salida de la carta volando.
+  const pointerDownRectRef = useRef<DOMRect | null>(null);
+
+  // ───────────── Animación FLIP al jugar una carta ─────────────
+  // Cola de vuelos en curso. Cada vuelo es una carta que debe animarse
+  // desde una posición de origen (la mano del jugador si es él quien
+  // tira, o el avatar del seat si es otro jugador) hasta su celda en
+  // el truco. La cola admite varios vuelos simultáneos (p.ej. en una
+  // ronda rápida el rival puede jugar 2 cartas entre dos VIEW).
+  // Para cada vuelo aplicamos la técnica FLIP (First/Last/Invert/Play):
+  //   - Last: medimos dónde está la carta en el truco (post-VIEW).
+  //   - Invert: la colocamos visualmente en el origen con `translate(dx,dy)`
+  //             sin transición.
+  //   - Play: al siguiente frame, le quitamos el offset y dejamos que la
+  //             transición CSS la lleve a su posición final.
+  // Si el usuario tiene `prefers-reduced-motion`, no se encolan vuelos:
+  // las cartas aparecen directamente en su sitio sin volar.
+  const [flyingCards, setFlyingCards] = useState<{
+    uid: number;
+    cardId: string;
+    fromRect: DOMRect;
+  }[]>([]);
+  // Refs a cada .trick-card para localizarla por card.id durante la
+  // animación y aplicar transformadas imperativas sin re-render.
+  const trickElsRef = useRef<Record<string, HTMLDivElement | null>>({});
+  // Refs a cada `.seat` para usarlo como origen de la animación cuando
+  // la carta la tira un rival o el compañero (esos casos no tienen un
+  // "slot en la mano" visible — la carta parece salir del jugador que
+  // la juega, lo más intuitivo es el avatar del seat).
+  const seatElsRef = useRef<Record<Seat, HTMLDivElement | null>>({
+    0: null, 1: null, 2: null, 3: null,
+  });
 
   // ¿En qué fase estamos para el humano? ¿qué puede hacer?
   const myOptions = useMemo(() => {
@@ -229,6 +292,224 @@ export function Game() {
     }
   }, [view?.trick.length]);
 
+  // ───────────── FLIP: carta volando de la mano al truco ─────────────
+  // Cuando alguien juega una carta, guardamos su rect de origen en la cola
+  // `flyingCards` (mano del humano si es él, o avatar del seat si es un
+  // rival) y, cuando llega el VIEW con esa carta en el truco, este
+  // effect itera sobre cada vuelo pendiente y aplica el FLIP:
+  //   1. Mide la posición final en el truco.
+  //   2. Calcula el delta (dx, dy) entre final y origen.
+  //   3. Coloca la carta en el truco con un `transform` que la desplaza
+  //      al origen, sin transición (frame 1).
+  //   4. Fuerza reflow y al frame siguiente aplica `transition +
+  //      translate(0)` para que se anime hasta su posición final.
+  // Se compone con la transform de la clase `.trick-card.pos-N` leyendo
+  // la matriz computada, de modo que la carta termina exactamente en su
+  // sitio del truco (sin saltos).
+  //
+  // IMPORTANTE: procesamos CADA vuelo UNA SOLA VEZ. Antes el effect
+  // dependía de `[flyingCards, view?.version, you]`, así que cada bump
+  // de versión durante una animación en curso (p. ej. un bot tira una
+  // segunda carta justo después de la nuestra) re-corria el effect y
+  // REINICIABA la animación desde el origen, causando que el usuario
+  // viera la misma carta volar dos veces. Ahora usamos un Set de uids
+  // ya procesados como filtro y deps = `[flyingCards]`.
+  const processedFlightUidsRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (flyingCards.length === 0) return;
+    const reduceMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const DURATION_MS = 380;
+    const EASING = 'cubic-bezier(0.34, 1.18, 0.4, 1)';
+    const newFlights = flyingCards.filter(
+      (f) => !processedFlightUidsRef.current.has(f.uid),
+    );
+    if (newFlights.length === 0) return;
+    // Marcamos como procesados ANTES de empezar la animación. Esto es
+    // idempotente: si el effect re-corre (e.g. por una actualización de
+    // `flyingCards` que no tiene que ver con estos vuelos), se saltan
+    // porque ya están en el Set.
+    for (const flight of newFlights) {
+      processedFlightUidsRef.current.add(flight.uid);
+    }
+    const cleanupTimers: number[] = [];
+    const rafs: number[] = [];
+    for (const flight of newFlights) {
+      const el = trickElsRef.current[flight.cardId];
+      if (!el) {
+        // El DOM aún no está listo (raro, porque los `useEffect` corren
+        // tras commit y los `ref` callbacks también). Para no perder
+        // el vuelo, des-marcamos del Set para que el próximo cambio de
+        // `flyingCards` lo reintente. Aquí no debería llegar, pero por
+        // si llega el ref no estaba aún, no animamos en este ciclo.
+        processedFlightUidsRef.current.delete(flight.uid);
+        continue;
+      }
+      if (reduceMotion) {
+        // Sin animación: quitamos el vuelo y limpiamos estilos inline
+        // (aunque normalmente no hay nada que limpiar si nunca pusimos
+        // estilos, lo hacemos por simetría con el camino animado).
+        cleanupTimers.push(
+          window.setTimeout(() => {
+            el.style.transform = '';
+            el.style.transition = '';
+            el.style.willChange = '';
+            el.removeAttribute('data-flying');
+            setFlyingCards((prev) => prev.filter((f) => f.uid !== flight.uid));
+          }, 0),
+        );
+        continue;
+      }
+      const toRect = el.getBoundingClientRect();
+      const fromCx = flight.fromRect.left + flight.fromRect.width / 2;
+      const fromCy = flight.fromRect.top + flight.fromRect.height / 2;
+      const toCx = toRect.left + toRect.width / 2;
+      const toCy = toRect.top + toRect.height / 2;
+      const dx = fromCx - toCx;
+      const dy = fromCy - toCy;
+      // Leemos la matriz que ya aplica la CSS class `.trick-card.pos-N`
+      // (translate + opcional rotate). Componemos el delta sumándolo al
+      // término de translación, sin reemplazar el resto.
+      const cs = window.getComputedStyle(el);
+      const baseMat = cs.transform;
+      let startTransform: string;
+      let endTransform: string;
+      const m = baseMat.match(/^matrix\(([^)]+)\)$/);
+      if (m) {
+        const parts = m[1]!.split(',').map((s) => parseFloat(s.trim()));
+        if (parts.length !== 6) {
+          startTransform = `translate(${dx}px, ${dy}px)`;
+          endTransform = 'translate(0px, 0px)';
+        } else {
+          const [a, b, c, d, tx, ty] = parts as [number, number, number, number, number, number];
+          startTransform = `matrix(${a}, ${b}, ${c}, ${d}, ${tx! + dx}, ${ty! + dy})`;
+          endTransform = `matrix(${a}, ${b}, ${c}, ${d}, ${tx}, ${ty})`;
+        }
+      } else {
+        startTransform = `translate(${dx}px, ${dy}px)`;
+        endTransform = 'translate(0px, 0px)';
+      }
+      // Frame 1: saltar al origen visualmente SIN transición.
+      el.style.transition = 'none';
+      el.style.transform = startTransform;
+      el.setAttribute('data-flying', '');
+      el.style.willChange = 'transform';
+      // Forzar reflow.
+      void el.getBoundingClientRect();
+      // Frame 2: animar a la posición final.
+      rafs.push(
+        requestAnimationFrame(() => {
+          el.style.transition = `transform ${DURATION_MS}ms ${EASING}`;
+          el.style.transform = endTransform;
+        }),
+      );
+      // Cleanup: limpiar inline styles y quitar de la cola.
+      cleanupTimers.push(
+        window.setTimeout(() => {
+          el.style.transform = '';
+          el.style.transition = '';
+          el.style.willChange = '';
+          el.removeAttribute('data-flying');
+          setFlyingCards((prev) => prev.filter((f) => f.uid !== flight.uid));
+        }, DURATION_MS + 60),
+      );
+    }
+    return () => {
+      rafs.forEach((id) => cancelAnimationFrame(id));
+      cleanupTimers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [flyingCards]);
+  // Safety net: si un vuelo nunca arrancó (p.ej. servidor rechazó la
+  // jugada, o el truco se vació sin que pasara por la fase de post-
+  // VIEW), lo purgamos a los 2,5 s para no acumular estado.
+  useEffect(() => {
+    if (flyingCards.length === 0) return;
+    const timers = flyingCards.map((f) =>
+      window.setTimeout(() => {
+        setFlyingCards((prev) => prev.filter((x) => x.uid !== f.uid));
+      }, 2500),
+    );
+    return () => timers.forEach((id) => window.clearTimeout(id));
+  }, [flyingCards]);
+
+  // Detección de cartas NUEVAS en el truco. Tanto las nuestras (cuando
+  // llega el VIEW posterior a nuestro `PLAY_CARD`) como las del rival o
+  // el compañero se encolan en este único effect, y todas comparten la
+  // misma cola `flyingCards`. Comparamos el set de IDs del truco actual
+  // con el que vimos en la versión anterior; las nuevas se traducen a
+  // vuelos FLIP con origen "mano" (si son nuestras) o "avatar del seat"
+// (si son de otros). Este es el ÚNICO sitio donde se encolan vuelos:
+// `onPlay` ya no encola optimistamente, lo que evita el bug del
+  // doble-vuelo (la carta aparecía "de golpe" en el truco al llegar la
+  // VIEW, y luego se animaba desde la mano cuando llegaba la siguiente
+  // actualización).
+  const shownTrickIdsRef = useRef<Set<string>>(new Set());
+  // Flag para no animar en la primera vista (cartas que ya estaban en
+  // el truco antes de que este componente las viera). Si te unes a una
+  // sala a mitad de baza, esas cartas NO deben animarse — solo las que
+  // aparezcan DESPUÉS de este effect corriendo.
+  const initializedTrickDiffRef = useRef(false);
+  useEffect(() => {
+    if (!view) return;
+    const currentIds = new Set(view.trick.map((p) => p.card.id));
+    // Cuando el truco se vacía (baza resuelta), reseteamos el ref de
+    // seguimiento y purgamos la cola de vuelos (sus cartas ya no están
+    // en la mesa). Marcamos `initializedTrickDiffRef` para que el
+    // siguiente truco no se considere "primera vista".
+    if (view.trick.length === 0) {
+      shownTrickIdsRef.current = new Set();
+      setFlyingCards((prev) => (prev.length > 0 ? [] : prev));
+      initializedTrickDiffRef.current = true;
+      return;
+    }
+    // Primera vista con truco no vacío: solo registramos qué cartas hay,
+    // sin encolar vuelos. Si te metes a una sala con la baza ya
+    // empezada, esas cartas aparecen estáticas (no animadas).
+    if (!initializedTrickDiffRef.current) {
+      shownTrickIdsRef.current = currentIds;
+      initializedTrickDiffRef.current = true;
+      return;
+    }
+    // Diferencia: cartas que están en el truco ACTUAL pero no en el
+    // visto en la versión anterior.
+    const newEntries: { seat: Seat; cardId: string }[] = [];
+    for (const p of view.trick) {
+      if (!shownTrickIdsRef.current.has(p.card.id)) {
+        newEntries.push({ seat: p.seat, cardId: p.card.id });
+      }
+    }
+    shownTrickIdsRef.current = currentIds;
+    if (newEntries.length === 0) return;
+    // Para cada carta nueva, determinamos su origen:
+    //  - Si es nuestra: usa el rect capturado al `pointerdown` (mano).
+    //    Si por algún motivo no hay rect (p.ej. jugada por teclado o
+    //    sin pointerdown previo), la carta aparece "estática" sin volar.
+    //  - Si es de otro seat: avatar del seat.
+    const flightsToAdd: { uid: number; cardId: string; fromRect: DOMRect }[] = [];
+    for (const entry of newEntries) {
+      let fromRect: DOMRect | null = null;
+      if (entry.seat === you) {
+        fromRect = pointerDownRectRef.current;
+      } else {
+        const seatEl = seatElsRef.current[entry.seat];
+        if (seatEl) fromRect = seatEl.getBoundingClientRect();
+      }
+      if (!fromRect) continue;
+      flightsToAdd.push({
+        // `performance.now()` + Math.random() garantiza unicidad
+        // incluso si dos cartas aparecen en el mismo tick del
+        // servidor (mismo view.version).
+        uid: performance.now() + Math.random(),
+        cardId: entry.cardId,
+        fromRect,
+      });
+    }
+    if (flightsToAdd.length > 0) {
+      setFlyingCards((prev) => [...prev, ...flightsToAdd]);
+    }
+  }, [view?.version, view?.trick.length, you]);
+
   // Highlight breve (1,5s) en la carta recién ROBADA del mazo por el
   // jugador. Distinguimos "robo" (1 carta nueva tras un truco) del
   // "reparto inicial" (6 cartas nuevas al empezar mano), porque en el
@@ -333,10 +614,23 @@ export function Game() {
   // (Movido arriba del early return para que `hasRestrictedHand` pueda
   //  leerlo dentro del useMemo. La función `computeLegalSet` no es un hook.)
 
-  const onPlay = (card: Card) => {
+  const onPlay = (card: Card, _fromRect: DOMRect | null) => {
     if (!isMyTurn) return;
     if (view.phase === 'winnerWindow') return;
     if (!legalSet.has(card.id)) return;
+    // NO encolamos el vuelo aquí. El `onPlay` solo dispara la acción al
+    // servidor. El encolado del vuelo lo hace el "diff effect" (más
+    // abajo), cuando llega el VIEW con nuestra propia carta ya
+    // colocada en el truco. Esto evita el bug anterior en el que
+    // encolar aquí era prematuro (el DOM del truco aún no tenía
+    // nuestra carta), se hacía un "skip+unmark" en el FLIP, y luego
+    // cuando llegaba la siguiente actualización del servidor se
+    // animaba con retraso — el usuario veía la carta "aparecer" en el
+    // truco (sin animación) y luego "volver a volar" (con FLIP).
+    //
+    // El rect de origen (la posición de la carta en nuestra mano al
+    // pulsar) ya está capturado en `pointerDownRectRef.current` desde
+    // el `pointerdown`; el diff effect lo lee cuando encola.
     sendAction({ type: 'PLAY_CARD', cardId: card.id });
   };
 
@@ -433,6 +727,12 @@ export function Game() {
           const initials = isYou ? 'T' : (first + second).toUpperCase() || '?';
           return (
             <div
+              ref={(el) => {
+                // Origen de FLIP para cartas que tira este seat (avatar
+                // del jugador). Cuando llegue un VIEW con una carta
+                // nueva de este seat en el truco, medimos este rect.
+                seatElsRef.current[seat] = el;
+              }}
               key={seat}
               className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''}`}
             >
@@ -484,6 +784,14 @@ export function Game() {
             const isWinner = winningKeys.has(`${p.seat}-${p.card.id}`);
             return (
               <div
+                ref={(el) => {
+                  // Indexamos por card.id para la animación FLIP; solo
+                  // nos interesa localizar MI carta cuando llega el
+                  // VIEW posterior a un `PLAY_CARD` propio. Cleanup
+                  // automático: cuando React desmonte el nodo, callback
+                  // se vuelve a llamar con `null` y sobrescribimos.
+                  trickElsRef.current[p.card.id] = el;
+                }}
                 key={`${p.seat}-${p.card.id}`}
                 className={`trick-card pos-${pos} ${isWinner ? 'winning' : ''}`}
               >
@@ -574,13 +882,33 @@ export function Game() {
                   if (!legalSet.has(c.id)) return;
                   e.preventDefault();
                   (e.currentTarget as Element).setPointerCapture(e.pointerId);
+                  // Capturamos el rect AHORA, antes de que React aplique
+                  // cualquier lift inline (-6px). Es el origen del FLIP si
+                  // finalmente el usuario solo hizo tap: medimos desde el
+                  // punto donde vio la carta, sin "saltar" a otro sitio
+                  // cuando se quite el transform al pointerup.
+                  const el = slotRefs.current[idx];
+                  pointerDownRectRef.current = el ? el.getBoundingClientRect() : null;
                   dragRef.current = { idx, startX: e.clientX, pointerId: e.pointerId };
-                  setDragVisual({ idx, offsetX: 0 });
+                  // NO rellenamos `dragVisual` aquí a propósito: para un
+                  // tap rápido no queremos ver la carta levantada -6px
+                  // durante los 50-100 ms antes del FLIP. Solo pasamos
+                  // a "modo drag visual" cuando `onPointerMove` detecta
+                  // movimiento por encima del umbral.
                 }}
                 onPointerMove={(e) => {
                   const d = dragRef.current;
                   if (!d || d.idx !== idx) return;
-                  setDragVisual({ idx, offsetX: e.clientX - d.startX });
+                  const offsetX = e.clientX - d.startX;
+                  // Activamos el lift (-6px) Y el translateX solo cuando
+                  // el movimiento cruza el umbral de reorder. Para
+                  // movimientos por debajo, no renderizamos nada: el slot
+                  // sigue en su sitio y, si el usuario suelta, onPlay
+                  // usará el rect natural capturado en pointerdown.
+                  const DRAG_THRESHOLD = 5;
+                  if (Math.abs(offsetX) > DRAG_THRESHOLD) {
+                    setDragVisual({ idx, offsetX });
+                  }
                 }}
                 onPointerUp={(e) => {
                   const d = dragRef.current;
@@ -644,7 +972,15 @@ export function Game() {
                     setCustomOrder(newOrder);
                   } else {
                     // Tap (sin arrastre significativo) → jugar la carta.
-                    onPlay(c);
+                    // Pasamos el RECT capturado en `pointerdown` (la posición
+                    // natural de la carta al pulsar, sin lift inline). Eso
+                    // garantiza que la animación FLIP empieza exactamente
+                    // desde donde el usuario vio la carta, sin "saltos" al
+                    // quitar el `translateY(-6px)` que se aplicaría si
+                    // midiera el rect ahora. Si fue un drag suficientemente
+                    // largo (>= DRAG_THRESHOLD), se hizo `setCustomOrder`
+                    // arriba y nunca llegamos aquí.
+                    onPlay(c, pointerDownRectRef.current);
                   }
                 }}
                 onPointerCancel={() => {
@@ -659,90 +995,91 @@ export function Game() {
         </div>
 
         {/* Acciones: dos variantes del panel.
-            - .action-bar-mobile: 3 botones en horizontal (Cantar, Cambiar,
-              Nada). Render CONDICIONAL: solo aparece en la ventana de
-              decisión del jugador cuando hay al menos un cante o un 7 que
-              cambiar. El botón "Nada" permite pasar explícitamente.
-            - .action-bar-desktop: 2 botones en vertical dentro del panel
-              con chrome (fondo + borde + pie explicativo). SIEMPRE visible
-              (los botones individuales se desactivan cuando no proceden).
+            - .action-bar-mobile: lista de botones en horizontal.
+            - .action-bar-desktop: lista vertical dentro del panel con chrome
+              (fondo + borde + pie explicativo).
+            Solo se renderiza la barra cuando hay AL MENOS una opción
+            disponible (algún cante o cambio de 7). Botones:
+              * Uno por CADA cante disponible, etiquetando el palo y el
+                valor (+20 o +40) — Rey+Sota del triunfo = 40, Rey+Sota de
+                cualquier otro palo = 20.
+              * "Cambiar el 7" si tu mano tiene el 7 del triunfo y la carta
+                de triunfo está a la vista (o no, según el motor).
+              * "Nada" para pasar explícitamente (cancelar el cante y/o el
+                cambio). El cliente autoenvía PASS cuando no hay opciones;
+                este botón cubre el caso "hay opciones pero prefiero no
+                usar ninguna".
             CSS muestra uno u otro según el viewport. */}
-        <div className="action-bar-mobile">
-          {(myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (
-            <div className={`action-bar${view.phase === 'winnerWindow' && view.turn === you ? ' is-you' : ''}`}>
-              <div className="action-buttons">
+        {(myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (() => {
+          const isYouWindow =
+            view.phase === 'winnerWindow' && view.turn === you;
+          // Render helper compartido entre móvil y escritorio: itera los
+          // cantes, añade Cambiar-7 si aplica, y termina con Nada.
+          // `small` afecta al padding/icono (móvil más compacto).
+          const renderButtons = (small: boolean) => {
+            const primaryCls = small ? 'btn primary small' : 'btn primary';
+            const passCls = small ? 'btn small' : 'btn';
+            const glyphSize = small ? 12 : 14;
+            return (
+              <>
+                {myOptions.cantes.map((c) => (
+                  <button
+                    key={c.suit}
+                    className={primaryCls}
+                    onClick={() =>
+                      sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] })
+                    }
+                    title={
+                      c.value === 40
+                        ? 'Cantar las 40 (Rey + Sota del triunfo)'
+                        : `Cantar 20 en ${SUIT_NAME[c.suit]} (Rey + Sota)`
+                    }
+                    data-suit={c.suit}
+                  >
+                    <SuitGlyph suit={c.suit} size={glyphSize} />
+                    <span>
+                      {c.value === 40
+                        ? 'Cantar las 40'
+                        : `Cantar 20 en ${SUIT_NAME[c.suit]}`}
+                    </span>
+                  </button>
+                ))}
+                {myOptions.canSwapSeven && (
+                  <button
+                    className={primaryCls}
+                    onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
+                    title="Cambiar el 7 del triunfo por la carta de triunfo"
+                  >
+                    Cambiar el 7
+                  </button>
+                )}
                 <button
-                  className="btn primary small"
-                  disabled={myOptions.cantes.length === 0}
-                  onClick={() => {
-                    // Canta el primer cante disponible, priorizando 40
-                    // (Rey+Sota del triunfo) sobre 20 (Rey+Sota de cualquier
-                    // otro palo). El motor ya se encarga de validar el caso
-                    // del 40 y descontarlo de la lista de cantes.
-                    const c =
-                      myOptions.cantes.find((c) => c.value === 40) ??
-                      myOptions.cantes.find((c) => c.value === 20);
-                    if (c) sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] });
-                  }}
-                  title={
-                    myOptions.cantes.length === 0
-                      ? 'No tienes Rey+Sota de ningún palo'
-                      : 'Canta el primer cante disponible (40 antes que 20)'
-                  }
-                >
-                  Cantar
-                </button>
-                <button
-                  className="btn primary small"
-                  disabled={!myOptions.canSwapSeven}
-                  onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
-                  title={myOptions.canSwapSeven ? `Cambiar el 7 por el triunfo` : 'No tienes el 7 del triunfo (o no es tu turno, o el triunfo no es una carta superior)'}
-                >
-                  Cambiar el 7
-                </button>
-                <button
-                  className="btn small"
+                  className={passCls}
                   onClick={() => sendAction({ type: 'PASS' })}
+                  title="Pasar sin cantar ni cambiar el 7"
                 >
                   Nada
                 </button>
+              </>
+            );
+          };
+          return (
+            <>
+              <div className="action-bar-mobile">
+                <div className={`action-bar${isYouWindow ? ' is-you' : ''}`}>
+                  <div className="action-buttons">{renderButtons(true)}</div>
+                </div>
               </div>
-            </div>
-          )}
-        </div>
-        <div className="action-bar-desktop">
-          <div className={`action-bar${view.phase === 'winnerWindow' && view.turn === you ? ' is-you' : ''}`}>
-            <div className="action-panel">
-              <div className="action-buttons">
-                <button
-                  className="btn primary"
-                  disabled={myOptions.cantes.length === 0}
-                  onClick={() => {
-                    const c =
-                      myOptions.cantes.find((c) => c.value === 40) ??
-                      myOptions.cantes.find((c) => c.value === 20);
-                    if (c) sendAction({ type: 'SING_CANTE', suit: c.suit, pair: [10, 12] });
-                  }}
-                  title={
-                    myOptions.cantes.length === 0
-                      ? 'No tienes Rey+Sota de ningún palo'
-                      : 'Canta el primer cante disponible (40 antes que 20)'
-                  }
-                >
-                  Cantar
-                </button>
-                <button
-                  className="btn primary"
-                  disabled={!myOptions.canSwapSeven}
-                  onClick={() => sendAction({ type: 'SWAP_SEVEN' })}
-                  title={myOptions.canSwapSeven ? `Cambiar el 7 por el triunfo` : 'No tienes el 7 del triunfo (o no es tu turno, o el triunfo no es una carta superior)'}
-                >
-                  Cambiar el 7
-                </button>
+              <div className="action-bar-desktop">
+                <div className={`action-bar${isYouWindow ? ' is-you' : ''}`}>
+                  <div className="action-panel">
+                    <div className="action-buttons">{renderButtons(false)}</div>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </div>
+            </>
+          );
+        })()}
         </div>
       </div>
 
@@ -1095,8 +1432,6 @@ export function Game() {
   );
 }
 
-const STRENGTH = [1, 3, 12, 10, 11, 7, 6, 5, 4, 2] as const;
-
 /**
  * Mini-chip inline que pinta la carta que un jugador acaba de recibir
  * tras un SWAP_SEVEN. Lo usamos en el overlay `.swap-announcement`.
@@ -1223,67 +1558,34 @@ function marcadorAcumulado(cumRaw: number): { value: number; label: string } {
   return { value: 0, label: '—' };
 }
 
+/**
+ * Cartas legales para el humano en este momento. Antes esta función
+ * replicaba a mano la lógica de `legalPlays` del motor (`packages/engine`)
+ * y se desincronizó (bug reportado: forzaba a tirar bastos incluso cuando
+ * ninguno podía ganar). Ahora delega en `legalPlaysFromView` del motor,
+ * garantizando UNA SOLA implementación de la regla.
+ *
+ * La `RulesConfig` VIAJA en el `PlayerView` que el servidor envía por WS
+ * (campo `view.rules`). El cliente NO importa ninguna configuración por
+ * defecto: si el servidor decide jugar con una variante regional, el
+ * cliente recibe esa variante en el primer VIEW y la respeta
+ * automáticamente.
+ */
 function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you: number | null): Set<string> {
   const set = new Set<string>();
-  if (!view) return set;
-  if (you === null) return set;
-  if (view.trumpCard !== null) {
-    // draw: todo legal
-    for (const c of view.hand) set.add(c.id);
-    return set;
-  }
-  if (view.trick.length === 0) {
-    for (const c of view.hand) set.add(c.id);
-    return set;
-  }
-  const led = view.trick[0]!.card.suit;
-  const sameSuit = view.hand.filter((c) => c.suit === led);
-  if (sameSuit.length > 0) {
-    // ¿compañero gana? winner del viewFor viene como lastWinner (anterior), pero
-    // aquí el ganador actual se deduce del trick parcial.
-    const winningIdx = currentWinnerIndex(view.trick, view.trump);
-    const winnerSeat = view.trick[winningIdx]!.seat;
-    const partnerWins = winnerSeat !== you && winnerSeat === view.partner;
-    if (partnerWins) {
-      for (const c of sameSuit) set.add(c.id);
-      return set;
-    }
-    // obligar a superar si puedo
-    const winningCard = view.trick[winningIdx]!.card;
-    const higher = sameSuit.filter((c) => beats(c, winningCard, view.trump));
-    for (const c of (higher.length > 0 ? higher : sameSuit)) set.add(c.id);
-    return set;
-  }
-  const trumps = view.hand.filter((c) => c.suit === view.trump);
-  if (trumps.length > 0) {
-    const winningIdx = currentWinnerIndex(view.trick, view.trump);
-    const winningCard = view.trick[winningIdx]!.card;
-    const winnerSeat = view.trick[winningIdx]!.seat;
-    const partnerWins = winnerSeat !== you && winnerSeat === view.partner;
-    if (partnerWins) {
-      // exención total
-      for (const c of view.hand) set.add(c.id);
-      return set;
-    }
-    const higher = trumps.filter((c) => beats(c, winningCard, view.trump));
-    for (const c of (higher.length > 0 ? higher : trumps)) set.add(c.id);
-    return set;
-  }
-  for (const c of view.hand) set.add(c.id);
+  if (!view || you === null) return set;
+  const cards = legalPlaysFromView(
+    {
+      hand: view.hand,
+      trick: view.trick,
+      trumpCard: view.trumpCard,
+      trump: view.trump,
+      rules: view.rules,
+    },
+    you as Seat,
+  );
+  for (const c of cards) set.add(c.id);
   return set;
-}
-
-function beats(a: Card, b: Card, trump: string): boolean {
-  if (a.suit === b.suit) return STRENGTH.indexOf(a.rank) < STRENGTH.indexOf(b.rank);
-  return a.suit === trump && b.suit !== trump;
-}
-
-function currentWinnerIndex(plays: readonly { card: Card }[], trump: string): number {
-  let bestIdx = 0;
-  for (let i = 1; i < plays.length; i++) {
-    if (beats(plays[i]!.card, plays[bestIdx]!.card, trump)) bestIdx = i;
-  }
-  return bestIdx;
 }
 
 /**

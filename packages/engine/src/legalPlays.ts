@@ -34,48 +34,98 @@ export function currentWinner(plays: readonly Play[], trump: Suit, rules: RulesC
 }
 
 /**
- * Cartas legales que `seat` puede jugar ahora mismo.
+ * Inputs mínimos que necesita el cálculo de cartas legales. NO requiere el
+ * `GameState` completo (que tiene docenas de campos que no intervienen en
+ * esta decisión). Pensado para que clientes con solo el `PlayerView` (lo
+ * que llega por WebSocket del servidor) puedan preguntar al motor qué
+ * cartas son legales sin reconstruir el estado entero.
+ */
+export interface LegalPlaysQuery {
+  readonly hand: readonly Card[];
+  /** Cartas ya echadas en la baza en curso (incluida la salida). Vacío al salir. */
+  readonly trick: readonly Play[];
+  /** `null` durante el arrastre (no hay triunfo visible). */
+  readonly trumpCard: Card | null;
+  readonly trump: Suit;
+  readonly rules: RulesConfig;
+}
+
+/**
+ * Implementación única de la regla "qué cartas son legales ahora". Vive en
+ * un helper con inputs mínimos para que `legalPlays(state, seat)` (servidor)
+ * y `legalPlaysFromView(query, seat)` (cliente) deleguen aquí y NUNCA
+ * puedan divergir.
  *
- * Reglas cubiertas (todas viven en `RulesConfig.arrastre`):
+ * Reglas cubiertas (todas viven en `rules.arrastre`):
  *  - Fase de robo (`trumpCard !== null`): todo legal (sigue la "ventaja" del robo).
  *  - Salida (primera carta): todo legal.
  *  - Seguir palo: si tienes cartas del palo de salida, solo puedes jugar esas.
- *  - Superar: si el compañero NO va ganando, tienes que superar la carta que va ganando.
- *    Si no puedes, juegas cualquiera del palo (te "cubres" cuanto puedas).
- *  - Fallar con triunfo: si no tienes el palo de salida y tienes triunfo, juegas triunfo.
- *    Si el compañero va ganando, esta obligación se omite.
+ *  - Superar: si el compañero NO va ganando, tienes que superar la carta que
+ *    va ganando. Si no puedes, juegas cualquiera del palo (te "cubres" cuanto
+ *    puedas).
+ *  - Fallar con triunfo: si no tienes el palo de salida y tienes triunfo,
+ *    juegas triunfo. Si el compañero va ganando, esta obligación se omite.
+ *    Si tu triunfo NO supera al de mesa y `mustTrumpEvenIfCantBeat` es false,
+ *    puedes descartar (no estás obligado a tirar el triunfo flojo).
  *  - Si no tienes ni palo ni triunfo, juegas lo que quieras.
  */
-export function legalPlays(state: GameState, seat: Seat): Card[] {
-  const hand = state.hands[seat]!;
-  const trick = state.trick;
+export function computeLegalCards(q: LegalPlaysQuery, seat: Seat): Card[] {
+  const { hand, trick, trumpCard, trump, rules } = q;
 
   // Fase de robo: todavía no hay obligación de asistir.
-  if (state.trumpCard !== null) return hand;
+  if (trumpCard !== null) return hand.slice();
 
   // Salida: cualquier carta.
-  if (trick.plays.length === 0) return hand;
+  if (trick.length === 0) return hand.slice();
 
-  const a = state.rules.arrastre;
-  const ledSuit = trick.plays[0]!.card.suit;
-  const winning = currentWinner(trick.plays, state.trump, state.rules);
+  const a = rules.arrastre;
+  const ledSuit = trick[0]!.card.suit;
+  const winning = currentWinner(trick, trump, rules);
   const partnerWins = winning.seat !== seat && partnerOf(winning.seat) === seat;
 
   const sameSuit = hand.filter((c) => c.suit === ledSuit);
   if (sameSuit.length > 0) {
     if (!a.mustOverplay || (partnerWins && a.partnerWinningExemptsOverplay)) {
-      return sameSuit;
+      return sameSuit.slice();
     }
-    const higher = sameSuit.filter((c) => beats(c, winning.card, state.trump, state.rules));
-    return higher.length > 0 ? higher : sameSuit;
+    const higher = sameSuit.filter((c) => beats(c, winning.card, trump, rules));
+    return higher.length > 0 ? higher.slice() : sameSuit.slice();
   }
 
-  const trumps = hand.filter((c) => c.suit === state.trump);
+  const trumps = hand.filter((c) => c.suit === trump);
   if (trumps.length > 0 && a.mustTrumpIfVoid && !(partnerWins && a.partnerWinningExemptsTrump)) {
-    const higher = trumps.filter((c) => beats(c, winning.card, state.trump, state.rules));
-    if (higher.length > 0) return higher;
-    return a.mustTrumpEvenIfCantBeat ? trumps : hand;
+    const higher = trumps.filter((c) => beats(c, winning.card, trump, rules));
+    if (higher.length > 0) return higher.slice();
+    return a.mustTrumpEvenIfCantBeat ? trumps.slice() : hand.slice();
   }
 
-  return hand;
+  return hand.slice();
+}
+
+/**
+ * API para el servidor (que tiene el `GameState` completo). Delegada en
+ * `computeLegalCards` para no duplicar la lógica.
+ */
+export function legalPlays(state: GameState, seat: Seat): Card[] {
+  return computeLegalCards(
+    {
+      hand: state.hands[seat]!,
+      trick: state.trick.plays,
+      trumpCard: state.trumpCard,
+      trump: state.trump,
+      rules: state.rules,
+    },
+    seat,
+  );
+}
+
+/**
+ * API para clientes (que solo tienen la vista `PlayerView` del servidor).
+ * Pasa los inputs mínimos al motor y devuelve las cartas legales. El
+ * frontend SIEMPRE debe usar esta función; nunca replicar la lógica a mano
+ * (esa fue la fuente del bug "te obliga a tirar bastos" en el cliente,
+ * reportado por el jugador).
+ */
+export function legalPlaysFromView(q: LegalPlaysQuery, seat: Seat): Card[] {
+  return computeLegalCards(q, seat);
 }

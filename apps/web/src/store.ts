@@ -62,7 +62,6 @@ interface State {
 
 let wsRef: WebSocket | null = null;
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
-let swapTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useGame = create<State>((set, get) => ({
   ws: null,
@@ -203,9 +202,11 @@ function connect(
     } else if (msg.type === 'MATCH_OVER') {
       set({ matchOver: msg });
     } else if (msg.type === 'SWAP_HAPPENED') {
-      // Mostrar el overlay del swap 3,5 s. Si llega otro swap mientras,
-      // `uid` cambia y el effect en Game.tsx resetea el timer.
-      if (swapTimer) clearTimeout(swapTimer);
+      // Mostrar el overlay del swap. El timer de auto-clear vive en el
+      // componente Game.tsx (useEffect) — antes estaba aquí pero daba
+      // problemas con la suscripción de Zustand (el timer a nivel de
+      // módulo no se conecta con el ciclo de vida del componente y a
+      // veces limpiaba el overlay antes de que el usuario lo viera).
       set({
         swapAnnouncement: {
           uid: performance.now(),
@@ -214,10 +215,6 @@ function connect(
           given: msg.given as Card,
         },
       });
-      swapTimer = setTimeout(() => {
-        set({ swapAnnouncement: null });
-        swapTimer = null;
-      }, 3500);
     } else if (msg.type === 'ERROR') {
       set({ error: msg.message });
     }
