@@ -6,7 +6,7 @@ import { resolve as resolvePath, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
-import { createRoomWithBots, getRoom } from './rooms.js';
+import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom } from './rooms.js';
 import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
 
 type WsSocket = {
@@ -22,14 +22,26 @@ await app.register(cors, { origin: true });
 await app.register(websocket);
 
 app.post('/api/rooms', async (req, reply) => {
+  const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' };
+  const name = (body.name ?? 'Jugador').slice(0, 20);
+  // `mode: 'bots'`  → mesa con bots ya listos, reparte al instante.
+  // `mode: 'lobby'` (defecto) → sala en lobby: el humano espera 30 s a
+  // que se le una un amigo antes de repartir (si nadie entra, los huecos
+  // se rellenan con bots al expirar la ventana).
+  const mode: 'lobby' | 'bots' = body.mode === 'bots' ? 'bots' : 'lobby';
+  const room = createRoomWithBots({ fillWithBots: mode === 'bots' });
+  return { code: room.code, mode, name };
+});
+
+// "Jugar con jugadores": asignación a la mejor sala abierta a matchmaking
+// (la que tenga más humanos sin llegar a 4 y aún en lobby). Si no hay
+// ninguna, crea una nueva en modo lobby. La sala creada no se rellena
+// con bots al instante — el lobbyTimer del server se ocupa al expirar.
+app.post('/api/rooms/matchmake', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string };
   const name = (body.name ?? 'Jugador').slice(0, 20);
-  // Salas siempre se crean en modo lobby: el primer humano que entre
-  // arranca una ventana de espera para que se le una un amigo antes
-  // de repartir. Si nadie entra, los huecos se rellenan con bots al
-  // expirar la ventana (ver `scheduleLobbyCheck`).
-  const room = createRoomWithBots({ fillWithBots: false });
-  return { code: room.code, name };
+  const { room, created } = findOrCreateMatchmakeRoom();
+  return { code: room.code, name, created };
 });
 
 app.get('/api/health', async () => ({ ok: true }));
@@ -141,6 +153,12 @@ app.register(async (instance) => {
       roomCode: room.code,
       seatNames: room.players.map((p) => p.name),
       isBot: room.players.map((p) => p.token === null),
+      // Token opaco para reconectar al mismo seat si se cae el WS.
+      // Se emite SIEMPRE — el cliente sabe si es nuevo o reconexión.
+      // Re-conexiones: `p.token` ya estaba fijado por una conexión
+      // anterior; lo reusamos para que el cliente pueda reclamar el
+      // seat original sin que el server le asigne uno nuevo.
+      token: room.players[seat]!.token ?? '',
     });
     // DEBUG temporal: confirmar que el server emite VIEWs.
     console.log(`[ws-debug-out] WELCOME -> seat=${seat} code=${room.code}`);
@@ -187,6 +205,29 @@ app.register(async (instance) => {
         return;
       }
       if (msg.type === 'LEAVE') {
+        // Abandono VOLUNTARIO. Liberamos el slot INMEDIATAMENTE (sin
+        // backoff) y marcamos `leaving=true` para que el `socket.on('close')`
+        // posterior no intente re-aplicar el backoff al cerrar el WS.
+        // Bug Sprint 2.12: antes solo hacíamos `socket.close()`, lo que
+        // dejaba el token del cliente intacto en el seat; si el cliente
+        // pulsaba "Jugar con jugadores" justo después, matchmake reusaba
+        // la misma sala (humans > 0) y el siguiente WS sin token entraba
+        // al siguiente seat libre → el mismo cliente aparecía como 2
+        // humanos en la sala.
+        const p = room.players[seat];
+        if (p) {
+          p.leaving = true;
+          if (room.state === null) {
+            // Sala en lobby: liberar el slot YA. Si la partida ya
+            // empezó, no liberamos el seat (el humano que se va deja un
+            // hueco, pero como no podemos sustituir a media partida, el
+            // bot heurístico asume el control por el backoff estándar).
+            p.token = null;
+            p.name = '?';
+            p.ws = null;
+            scheduleLobbyCheck(room);
+          }
+        }
         socket.close();
         return;
       }
@@ -267,7 +308,35 @@ app.register(async (instance) => {
     });
 
     socket.on('close', () => {
-      if (room.players[seat]) room.players[seat]!.ws = null;
+      const p = room.players[seat];
+      if (!p) return;
+      // LEAVE previo (Sprint 2.12): el cliente abandonó voluntariamente.
+      // El handler de LEAVE ya liberó el slot (o lo hará cuando
+      // scheduleLobbyCheck corra). No aplicamos backoff — solo
+      // limpiamos la marca `leaving` para no contaminar futuros
+      // handlers y dejamos `ws = null`.
+      if (p.leaving) {
+        p.leaving = false;
+        p.ws = null;
+        return;
+      }
+      // Drop ACCIDENTAL: WS se cierra sin LEAVE (p.ej. el cliente
+      // pierde la red o cierra la pestaña). Para permitir la
+      // re-conexión por token guardamos el token durante 90 s. Si el
+      // cliente vuelve a abrir un WS con `?token=T` en esa ventana, el
+      // server reconoce el token y reusa el mismo seat. Pasados los
+      // 90 s sin reconexión, liberamos el slot definitivamente.
+      p.ws = null;
+      setTimeout(() => {
+        const now = room.players[seat];
+        if (!now) return;
+        // Si `ws` sigue null y nadie ha reclamado el seat, libéralo.
+        if (now.ws === null && now.token !== null) {
+          now.token = null;
+          now.name = '?';
+          if (room.state === null) scheduleLobbyCheck(room);
+        }
+      }, 90_000);
     });
   });
 });

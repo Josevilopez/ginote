@@ -60,6 +60,15 @@ export interface PlayerSlot {
   /** null = bot. string = token de reconexión del cliente. */
   token: string | null;
   ws: WebSocket | null;
+  /**
+   * Flag interno que marca que el cliente envió un `LEAVE` antes de
+   * que el WS cerrase. Lo usa el handler `socket.on('close')` para
+   * distinguir un abandono intencional (LEAVE → liberar el slot
+   * inmediatamente, sin backoff) de un drop accidental (WS closes
+   * solo → backoff de 90s antes de liberar el token por si el
+   * cliente intenta reconectar). Sprint 2.12.
+   */
+  leaving?: boolean;
 }
 
 export interface Room {
@@ -149,9 +158,9 @@ export function createRoom(opts: {
   const botNames = pickAragonBotNames(4);
   for (let s = 0 as Seat; s < 4; s = (s + 1) as Seat) {
     if (fill) {
-      players.push({ seat: s, name: botNames[s]!, token: null, ws: null });
+      players.push({ seat: s, name: botNames[s]!, token: null, ws: null, leaving: false });
     } else {
-      players.push({ seat: s, name: '?', token: null, ws: null });
+      players.push({ seat: s, name: '?', token: null, ws: null, leaving: false });
     }
   }
 
@@ -349,6 +358,10 @@ function startMatchAndDeal(room: Room): void {
         roomCode: room.code,
         seatNames: room.players.map((pl) => pl.name),
         isBot: room.players.map((pl) => pl.token === null),
+        // Mismo token que ya tenía asignado. El cliente lo ignora si
+        // ya lo tenía guardado; si no, lo aprende. Re-conexiones futuras
+        // usarán este token para reclamar el seat.
+        token: p.token ?? '',
       } satisfies ServerMessage));
     }
   }

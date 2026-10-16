@@ -93,7 +93,16 @@ interface State {
   matchChampion: 0 | 1 | null;
 
   // Acciones
-  createRoom: () => Promise<void>;
+  /**
+   * Crea o se une a una sala. El parámetro `mode` elige qué endpoint se
+   * usa:
+   *  - `'bots'`: `POST /api/rooms {mode:'bots'}` → sala con bots ya
+   *    listos, empieza al instante.
+   *  - `'lobby'`: `POST /api/rooms/matchmake {…}` → matchmaking: asigna
+   *    a la sala con más humanos, o crea una nueva en lobby. Espera 30 s
+   *    a que entre un amigo antes de repartir.
+   */
+  createRoom: (mode: 'bots' | 'lobby') => Promise<void>;
   /** Une al cliente a una sala existente por código. NO crea la sala. */
   joinRoom: (code: string) => void;
   sendAction: (action: Action) => void;
@@ -105,6 +114,95 @@ interface State {
 
 let wsRef: WebSocket | null = null;
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Nombre del jugador persistido entre sesiones. Si no hay nada en
+ * localStorage, devuelve 'Jugador' como fallback. Limitado a 20 chars
+ * en el setter para no enviar basura al server.
+ */
+const PLAYER_NAME_KEY = 'guinote:playerName';
+const PLAYER_NAME_DEFAULT = 'Jugador';
+export function getPlayerName(): string {
+  try {
+    return (window.localStorage.getItem(PLAYER_NAME_KEY) ?? '').slice(0, 20) || PLAYER_NAME_DEFAULT;
+  } catch {
+    return PLAYER_NAME_DEFAULT;
+  }
+}
+export function setPlayerName(name: string): void {
+  try {
+    const clean = name.slice(0, 20).trim() || PLAYER_NAME_DEFAULT;
+    window.localStorage.setItem(PLAYER_NAME_KEY, clean);
+  } catch {
+    // localStorage no disponible (modo privado extremo, etc.); no-op.
+  }
+}
+
+/**
+ * Token de reconexión asociado a un `code` de sala. Sobrevive entre
+ * pestañas y sesiones (localStorage), pero solo lo usa este cliente:
+ * al volver a abrir la misma `#CODE`, envía `?token=` y el server le
+ * devuelve el mismo `seat`.
+ *
+ * Se invalida al recibir un `ROOM_OVER` (la sala ya cerró) o al
+ * hacer `leave()` (saliste voluntariamente). Eso evita que un token
+ * antiguo reclame un seat en una sala recreada que ya no es tuya.
+ */
+const tokenKey = (code: string) => `guinote:token:${code}`;
+export function getStoredToken(code: string): string | null {
+  try {
+    return window.localStorage.getItem(tokenKey(code));
+  } catch {
+    return null;
+  }
+}
+function setStoredToken(code: string, token: string): void {
+  try {
+    window.localStorage.setItem(tokenKey(code), token);
+  } catch {
+    // ignore
+  }
+}
+function clearStoredToken(code: string): void {
+  try {
+    window.localStorage.removeItem(tokenKey(code));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * "Última sala en la que estuve". Lo guarda el cliente al recibir un
+ * WELCOME y lo limpia al hacer `leave()` o al detectar que ya no
+ * existe (ROOM_NOT_FOUND). Sirve para que al pulsar otra vez "Jugar
+ * con jugadores" el cliente intente primero RE-CONECTAR a esa sala
+ * (con su token guardado) antes de pedir una nueva por matchmake.
+ * Sin esta pista, el botón siempre haría matchmake y el usuario
+ * acabaría en una sala distinta cada vez.
+ */
+const LAST_ROOM_KEY = 'guinote:lastRoomCode';
+export function getLastRoomCode(): string | null {
+  try {
+    const raw = window.localStorage.getItem(LAST_ROOM_KEY);
+    return raw && /^[A-Z0-9]{4}$/.test(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+function setLastRoomCode(code: string): void {
+  try {
+    window.localStorage.setItem(LAST_ROOM_KEY, code);
+  } catch {
+    // ignore
+  }
+}
+function clearLastRoomCode(): void {
+  try {
+    window.localStorage.removeItem(LAST_ROOM_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 export const useGame = create<State>((set, get) => ({
   ws: null,
@@ -131,23 +229,52 @@ export const useGame = create<State>((set, get) => ({
   matchFinished: false,
   matchChampion: null,
 
-async createRoom() {
+async createRoom(mode: 'bots' | 'lobby') {
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null });
     try {
-      const resp = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: 'Jugador' }),
-      });
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const { code } = (await resp.json()) as { code: string };
-      if (!code) throw new Error('Servidor no devolvió código de sala');
-      // Metemos el código en el hash de la URL para que sea fácil de
-      // compartir: la barra de direcciones ya muestra la URL completa
-      // con `#ABCD`, lista para copiar y mandar al amigo. La entrada
-      // al juego también puede hacerse pegando esta URL.
-      history.replaceState(null, '', `#${code}`);
-      connect(code, set, get);
+      const name = getPlayerName();
+      if (mode === 'lobby') {
+        // Sprint 2.11: re-conexión automática. Si el cliente estuvo
+        // antes en una sala (la tenemos guardada como `lastRoomCode` en
+        // localStorage) y aún conserva un token válido, intentamos
+        // RE-CONECTAR a esa misma sala antes de pedir una nueva. Si la
+        // sala ya no existe, el server responderá ROOM_NOT_FOUND, el
+        // handler `ws.onmessage` limpiará el token, y la próxima vez
+        // que el usuario pulse el botón (o recargue) caerá en el
+        // camino de matchmake. Esto resuelve el caso "cerré la pestaña
+        // a medias y al volver quiero seguir donde lo dejé".
+        const lastCode = getLastRoomCode();
+        const lastToken = lastCode ? getStoredToken(lastCode) : null;
+        if (lastCode && lastToken) {
+          history.replaceState(null, '', `#${lastCode}`);
+          connect(lastCode, set, get);
+          return;
+        }
+        // Sin sala previa → matchmaking normal: el server asigna a la
+        // sala con más humanos en lobby o crea una nueva.
+        const resp = await fetch('/api/rooms/matchmake', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const { code } = (await resp.json()) as { code: string };
+        if (!code) throw new Error('Servidor no devolvió código de sala');
+        history.replaceState(null, '', `#${code}`);
+        connect(code, set, get);
+      } else {
+        // 'bots': mesa con bots, empieza al instante.
+        const resp = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ mode: 'bots', name }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const { code } = (await resp.json()) as { code: string };
+        if (!code) throw new Error('Servidor no devolvió código de sala');
+        history.replaceState(null, '', `#${code}`);
+        connect(code, set, get);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       set({ error: `No se pudo crear la sala: ${msg}. ¿Está el servidor corriendo en :3001?` });
@@ -231,6 +358,16 @@ async createRoom() {
       wsRef.close();
       wsRef = null;
     }
+    // Saliste voluntariamente: invalidamos el token de esta sala para
+    // que una próxima reconexión con el mismo code (la sala recreada)
+    // NO intente reclamar el seat que acabas de liberar. Si quisieras
+    // volver a entrar a esa sala, recibirías un seat nuevo. Y
+    // limpiamos también el `lastRoomCode` para que el siguiente pulso
+    // a "Jugar con jugadores" no intente re-conectar a una sala que
+    // acabas de abandonar a propósito.
+    const code = get().roomCode;
+    if (code) clearStoredToken(code);
+    clearLastRoomCode();
     set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null });
   },
 }));
@@ -240,13 +377,47 @@ function connect(
   set: (partial: Partial<State>) => void,
   get: () => State,
 ) {
+  // Cierra cualquier WebSocket previo antes de abrir el nuevo.
+  // Sin esto, cada llamada a `createRoom` / `joinRoom` apilaba un
+  // nuevo WS sobre el anterior y el server asignaba un seat NUEVO
+  // por cada conexión — el mismo cliente terminaba ocupando los 4
+  // seats con un WS por cabeza. (Bug reportado en Sprint 2.11.)
+  if (wsRef) {
+    try { wsRef.close(); } catch { /* ignore */ }
+    wsRef = null;
+  }
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${window.location.host}/ws/${code}`);
+  // Enviamos `name` y `token` como query params para que el server
+  // identifique re-conexiones y asigne el seat correcto. `name` lo lee
+  // el server al asignar el primer slot libre; `token` se usa para
+  // reclamar el seat anterior si el server lo reconoce (ver WS handler
+  // en `apps/server/src/index.ts`).
+  const params = new URLSearchParams();
+  const storedName = getPlayerName();
+  if (storedName) params.set('name', storedName);
+  const storedToken = getStoredToken(code);
+  if (storedToken) params.set('token', storedToken);
+  const query = params.toString();
+  const ws = new WebSocket(
+    `${proto}://${window.location.host}/ws/${code}${query ? `?${query}` : ''}`,
+  );
   wsRef = ws;
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data) as ServerMessage;
     if (msg.type === 'WELCOME') {
+      // Guardamos el token nuevo en localStorage asociado a este code.
+      // Si reconectamos en el futuro y el server sigue reconociendo el
+      // mismo token, nos devolverá el mismo `seat`. Si no, asignará
+      // uno nuevo (y entonces este token queda obsoleto — el server
+      // emite uno nuevo y lo sobreescribimos).
+      if (msg.token) setStoredToken(msg.roomCode, msg.token);
+      // Guardamos también el code actual como "última sala en la que
+      // estuve" — esto permite que al pulsar otra vez "Jugar con
+      // jugadores" el cliente intente RE-CONECTAR a esta misma sala
+      // antes de pedir una nueva por matchmake. Sin esto, cada
+      // pulsación creaba una sala nueva.
+      setLastRoomCode(msg.roomCode);
       set({
         you: msg.you,
         roomCode: msg.roomCode,
@@ -360,6 +531,17 @@ function connect(
         pendingActionCardId: null,
       });
     } else if (msg.type === 'ERROR') {
+      // Caso especial: el server dice que la sala a la que intentamos
+      // reconectar ya NO existe (otro jugador la cerró, o el server se
+      // reinició, o la sala recreada recibió un code distinto).
+      // Limpiamos el token Y el lastRoomCode para que la próxima vez
+      // que el usuario pulse "Jugar con jugadores" caiga en matchmake
+      // normal, en vez de seguir intentando esta sala fantasma.
+      if (msg.code === 'ROOM_NOT_FOUND') {
+        const lastCode = getLastRoomCode();
+        if (lastCode) clearStoredToken(lastCode);
+        clearLastRoomCode();
+      }
       // El server rechazó nuestra acción (probablemente porque re-enviamos
       // la misma antes de recibir VIEW — esto ya no debería pasar con el
       // lock `pendingAction`, pero por si acaso lo tratamos).

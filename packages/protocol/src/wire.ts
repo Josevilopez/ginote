@@ -60,6 +60,14 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     roomCode: z.string(),
     seatNames: z.array(z.string()),
     isBot: z.array(z.boolean()),
+    /**
+     * Token opaco que identifica esta conexión concreta del cliente.
+     * El cliente lo guarda en localStorage (clave `guinote:token:<code>`)
+     * para poder reclamar el mismo `seat` si pierde conexión y vuelve.
+     * Si el server detecta el token en el `?token=` de un nuevo WS,
+     * prefiere ese seat sobre "primer slot libre".
+     */
+    token: z.string(),
   }),
   z.object({
     type: z.literal('VIEW'),

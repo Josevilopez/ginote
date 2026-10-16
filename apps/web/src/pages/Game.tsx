@@ -236,42 +236,52 @@ export function Game() {
   // ───────────── Cuenta atrás del turno (espejo del auto-play del server) ──
   // El server tiene una red de seguridad que auto-aplica la primera acción
   // legal de un humano si pasan 10s sin actuar (ver
-  // `apps/server/src/room.ts:scheduleAutoPlay`). Aquí reflejamos esa cuenta
-  // atrás para que el jugador VEA que tiene tiempo limitado y no se
-  // pregunte "¿me he quedado colgado?" — sabe exactamente cuántos segundos
-  // le quedan antes de que el server tire por él.
+  // `apps/server/src/room.ts:scheduleAutoPlay`). Aquí reflejamos esa
+  // cuenta atrás con un anillo de progreso que se depleta
+  // (`<TurnClock />`) en el avatar del seat al que le toca. No usamos
+  // ya el pill "Tu turno / Esperando a X" porque se solapaba con la
+  // baraja y ocupaba sitio entre el board y la mano.
   const AUTO_PLAY_MS = 10_000;
-  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
+  // Marca el momento en que empezó MI turno (cuando me toca a mí).
+  // Cuando es null, no se pinta ningún reloj: el seat al que le toque
+  // se marcará solo con su pulso habitual en el avatar.
+  const [myTurnStartedAt, setMyTurnStartedAt] = useState<number | null>(null);
   useEffect(() => {
     if (!view || you === null) return;
-    // Solo cuenta atrás cuando es MI turno en una fase que requiere acción.
-    // En winnerWindow el auto-PASS ya cubre los 350ms; en 'finished' no hay
-    // turno. En arrastre sí cuenta: el server auto-tira para no quedarnos
-    // colgados si la UI no habilita cartas en el móvil.
+    if (view.turn !== you) {
+      setMyTurnStartedAt(null);
+      return;
+    }
+    // Solo cuenta atrás cuando es MI turno en una fase que requiere
+    // acción. En winnerWindow el auto-PASS ya cubre los 350ms; en
+    // 'finished' no hay turno. En arrastre sí cuenta: el server
+    // auto-tira para no quedarnos colgados si la UI no habilita cartas
+    // en el móvil.
     const activePhase =
       view.phase === 'lead' ||
       view.phase === 'follow' ||
       view.phase === 'arrastre';
-    if (view.turn === you && activePhase) {
-      setTurnDeadline(Date.now() + AUTO_PLAY_MS);
+    if (activePhase) {
+      setMyTurnStartedAt(Date.now());
     } else {
-      setTurnDeadline(null);
+      setMyTurnStartedAt(null);
     }
   }, [view?.version, view?.turn, view?.phase, you]);
-  // Tick de UI: fuerza re-render cada 100ms mientras hay cuenta atrás,
-  // para que la barra se vacíe visualmente.
+  // Tick de UI: fuerza re-render cada 100 ms mientras hay cuenta atrás,
+  // para que el anillo SVG se vacíe visualmente.
   const [now, setNow] = useState<number>(Date.now());
   useEffect(() => {
-    if (turnDeadline === null) return;
+    if (myTurnStartedAt === null) return;
     const id = window.setInterval(() => setNow(Date.now()), 100);
     return () => window.clearInterval(id);
-  }, [turnDeadline]);
-  const remainingMs = turnDeadline !== null ? Math.max(0, turnDeadline - now) : 0;
-  const remainingPct = turnDeadline !== null ? remainingMs / AUTO_PLAY_MS : 0;
-  // Nombre del seat que está jugando AHORA. Usado cuando NO es mi turno.
-  const currentPlayerName =
-    view && view.turn !== null
-      ? seatNames[view.turn] ?? `Jugador ${view.turn + 1}`
+  }, [myTurnStartedAt]);
+  // `turnClockPct` = 1 al inicio, 0 al expirar. Solo se pinta en MI
+  // avatar — los turnos de bots no tienen red de seguridad, los de
+  // otros humanos no se pueden espejar sin violar la privacidad del
+  // cliente.
+  const turnClockPct =
+    myTurnStartedAt !== null
+      ? Math.max(0, 1 - (now - myTurnStartedAt) / AUTO_PLAY_MS)
       : null;
 
   // ───────────── Anuncio de cante (overlay central) ─────────────
@@ -784,11 +794,21 @@ export function Game() {
           // ("Pilar", "Ramiro", etc.) generados en el servidor; los que
           // aún no tienen nombre muestran la inicial de su seat label.
           // Para el humano usamos "T" de "Tú".
-          const displayName = isYou ? 'Tú' : seatNames[seat] || SEAT_LABELS[seat];
-          const parts = displayName.trim().split(/\s+/);
+          // Nombre visible: para todos los seats usamos `seatNames[seat]` (que
+          // viene del server: bots traen nombres aragoneses, humanos el
+          // que introdujeron en la Home). Para MI seat añadimos `(Tú)` al
+          // final para identificarlo de un vistazo entre los 4 jugadores.
+          // Antes era la constante `'Tú'` y la inicial `T`, lo que
+          // ocultaba el nombre propio en la mesa.
+          const rawName = seatNames[seat] || SEAT_LABELS[seat];
+          const displayName = isYou ? `${rawName} (Tú)` : rawName;
+          // Iniciales para el avatar (sin hardcodear 'T'): primera letra
+          // de las dos primeras palabras. Funciona igual para bots
+          // (Pilar, Ramiro → PR) y para el humano.
+          const parts = rawName.trim().split(/\s+/);
           const first = (parts[0] ?? '').charAt(0);
           const second = parts.length >= 2 ? (parts[1] ?? '').charAt(0) : '';
-          const initials = isYou ? 'T' : (first + second).toUpperCase() || '?';
+          const initials = (first + second).toUpperCase() || '?';
           return (
             <div
               ref={(el) => {
@@ -800,7 +820,60 @@ export function Game() {
               key={seat}
               className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''}`}
             >
-              <div className="seat-avatar">{initials}</div>
+              <div className="seat-avatar">
+                {initials}
+                {/* Reloj circular de cuenta atrás del turno. Solo se pinta
+                    cuando el TURNO ACTIVO es ESTE seat Y es humano. El
+                    server tiene una red de seguridad de 10s
+                    (`scheduleAutoPlay` en `apps/server/src/room.ts`) que
+                    auto-tira por el humano si no actúa; el reloj le
+                    avisa visualmente cuánto le queda. Anillos: verde >5s,
+                    amarillo 5–2.5s, rojo <2.5s. */}
+                {(() => {
+                  // Solo renderizamos si:
+                  //   - el seat activo es ESTE seat (mismo índice)
+                  //   - la fase requiere acción (no winnerWindow ni finished)
+                  //   - el seat es humano (los bots no tienen auto-play)
+                  //   - hay un porcentaje válido (>0, calculado arriba)
+                  if (view.turn !== seat) return null;
+                  if (view.phase === 'finished' || view.phase === 'winnerWindow') return null;
+                  if (isBot[seat]) return null;
+                  if (turnClockPct === null) return null;
+                  // Clases CSS según urgencia para el color del stroke.
+                  const urgency =
+                    turnClockPct > 0.5
+                      ? 'turn-clock-fresh'
+                      : turnClockPct > 0.25
+                        ? 'turn-clock-mid'
+                        : 'turn-clock-low';
+                  // dasharray = `${pct*100} 100` — el primer valor es
+                  // el tramo visible (gira de las 12 en sentido horario
+                  // gracias al rotate(-90) en el circle.fill), el
+                  // segundo es el resto invisible.
+                  const dash = Math.max(0, Math.min(100, turnClockPct * 100));
+                  return (
+                    <svg
+                      viewBox="0 0 36 36"
+                      className={`turn-clock ${urgency}`}
+                      aria-hidden="true"
+                    >
+                      <circle
+                        className="turn-clock-track"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                      />
+                      <circle
+                        className="turn-clock-fill"
+                        cx="18"
+                        cy="18"
+                        r="15.9155"
+                        style={{ strokeDasharray: `${dash} 100` }}
+                      />
+                    </svg>
+                  );
+                })()}
+              </div>
               <div className="seat-name">
                 {displayName}
                 {view.lastWinner === seat && ' 👑'}
@@ -863,34 +936,6 @@ export function Game() {
               </div>
             );
           })}
-        </div>
-
-        {/* Indicador de turno: "Tu turno" con cuenta atrás 10s cuando me
-            toca a mí (espejo del auto-play del server), o "Esperando a X"
-            cuando está jugando otro. Especjo del `scheduleAutoPlay` del
-            server: si el humano no actúa en 10s, el server auto-tira. */}
-        <div className="turn-indicator" aria-live="polite">
-          {turnDeadline !== null ? (
-            <div className="turn-indicator-mine">
-              <span className="turn-indicator-label">
-                Tu turno
-                <span className="turn-indicator-secs">
-                  {' · '}
-                  {Math.ceil(remainingMs / 1000)}s
-                </span>
-              </span>
-              <div className="turn-indicator-bar">
-                <div
-                  className="turn-indicator-bar-fill"
-                  style={{ width: `${(remainingPct * 100).toFixed(1)}%` }}
-                />
-              </div>
-            </div>
-          ) : currentPlayerName && view?.phase !== 'finished' ? (
-            <span className="turn-indicator-label">
-              Esperando a {currentPlayerName}
-            </span>
-          ) : null}
         </div>
         </div>
 
@@ -1548,13 +1593,42 @@ export function Game() {
             {seatNames[swapAnnouncement.seat] || SEAT_LABELS[swapAnnouncement.seat]}
           </div>
           <div className="swap-announcement-text">
-            cambia el <b className="value">7</b> por{' '}
-            <SwapCardInline card={swapAnnouncement.taken} />
+            {/* Sprint 2.9: el mensaje se lee al revés para que coincida
+                con el flujo narrativo del jugador — "te quito ESTA CARTA
+                y te meto el 7" (info-card-primero). Antes decía "cambia
+                el 7 por XXXX" lo que resultaba confuso al verlo rápido
+                en el overlay. Usamos `cardName(taken)` (definida más
+                abajo junto a `rankLabel`) para mostrar "As de Oros" /
+                "Rey de Copas" en vez del dígito. */}
+            cambia el <b className="value">{cardName(swapAnnouncement.taken)}</b>{' '}
+            por el <b className="value">7</b>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Nombre completo de una carta en formato "As de Oros", "Tres de Copas",
+ * "Rey de Espadas", etc. Lo usamos en el mensaje del overlay de
+ * SWAP_SEVEN (Sprint 2.9). Como el motor ya garantiza que la carta
+ * tomada en un swap es siempre SUPERIOR al 7 (rango ∈ {1, 3, 10, 11,
+ * 12}), mostramos los nombres tradicionales (As / Tres / Sota /
+ * Caballo / Rey) en vez del dígito para que se lea bonito.
+ */
+function rankLabel(rank: number): string {
+  switch (rank) {
+    case 1: return 'As';
+    case 3: return 'Tres';
+    case 10: return 'Sota';
+    case 11: return 'Caballo';
+    case 12: return 'Rey';
+    default: return `${rank}`;
+  }
+}
+function cardName(c: Card): string {
+  return `${rankLabel(c.rank)} de ${SUIT_NAME[c.suit]}`;
 }
 
 /**

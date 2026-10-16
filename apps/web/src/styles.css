@@ -141,11 +141,18 @@ body {
   margin: 0;
 }
 .home .join-input {
-  width: 88px;
+  /* Antes 88px: con font-size 22px + letter-spacing 0.18em solo cabían
+     ~3 letras antes de que el cursor se desplazara fuera del input.
+     Sprint 2.10: 144px asegura que las 4 letras caben holgadas,
+     dejando sitio a que el placeholder "ABCD" se vea entero y a que
+     el cursor siga dentro al escribir/pegar. font-size leve bajada
+     a 20px (de 22) para que las 4 letras no saturen el ancho del
+     input en móvil. */
+  width: 144px;
   text-align: center;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.20em;
   text-transform: uppercase;
   padding: 12px 14px;
   border-radius: 12px;
@@ -158,6 +165,42 @@ body {
 }
 .home .join-input:focus { border-color: var(--accent); }
 .home .join-input::placeholder { color: var(--fg-mute); opacity: 0.6; letter-spacing: 0.18em; }
+.home .name-label {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fg-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  width: 100%;
+  max-width: 280px;
+}
+.home .name-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 17px;
+  background: var(--bg-2);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 12px;
+  color: var(--fg);
+  text-align: left;
+  outline: none;
+  transition: border-color 0.15s;
+  text-transform: none;
+}
+.home .name-input:focus { border-color: var(--accent); }
+.home .cta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+@media (max-width: 480px) {
+  .home .cta-row { flex-direction: column; width: 100%; }
+  .home .cta-row .btn { width: 100%; }
+}
 
 .btn {
   background: var(--bg-2);
@@ -655,11 +698,22 @@ body {
   max-width: 100%;
   overflow: hidden;
   opacity: 0.7;
+  transition: opacity 0.15s linear, color 0.15s linear;
+}
+/* El nombre del seat activo se ilumina para reforzar la marca visual
+   del turno (junto al anillo del avatar). No hace nada en winner-window
+   (mismo motivo que el avatar). */
+.seat.active .seat-name {
+  opacity: 1;
+  color: var(--accent);
 }
 /* Avatar circular con la inicial del jugador. Marco amarillo por defecto;
    el turno activo lo refuerza con un anillo + glow; el compañero lleva
    marco azul claro. */
 .seat-avatar {
+  /* `position: relative` para que el SVG `.turn-clock` (absolute)
+     se ancle al avatar en vez de a otro ancestro. */
+  position: relative;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -676,8 +730,13 @@ body {
 .seat.active .seat-avatar {
   border-color: var(--accent);
   /* Anillo más grueso + glow más amplio + pulse animation para que el
-     turno activo sea imposible de pasar por alto. */
-  box-shadow: 0 0 0 3px var(--accent), 0 0 20px rgba(232, 196, 107, 0.7);
+     turno activo sea imposible de pasar por alto. Reforzado en Sprint
+     2.7: borde de 3px, doble halo (anillo amarillo + glow lejano) y
+     pulso más lento pero más visible. */
+  border-width: 3px;
+  box-shadow: 0 0 0 4px rgba(212, 160, 23, 0.35),
+    0 0 28px rgba(232, 196, 107, 0.55);
+  color: var(--accent);
   color: var(--accent);
   animation: turn-pulse 1.4s ease-in-out infinite alternate;
 }
@@ -832,71 +891,53 @@ body {
   filter: drop-shadow(0 2px 4px rgba(0,0,0,0.45));
 }
 
-/* Indicador de turno: pill centrado bajo la baza. Cuando es mi turno
-   muestra una cuenta atrás de 10s (espejo del `scheduleAutoPlay` del
-   server) con una barra que se vacía; cuando juega otro, sólo dice
-   "Esperando a X". Vive dentro del board y se posiciona respecto a él. */
-.turn-indicator {
+/* Reloj de cuenta atrás (Sprint 2.7). Se pinta como un anillo SVG
+   superpuesto al avatar del seat al que le toca. Verde al inicio (>5s),
+   amarillo a media (5–2.5s), rojo al final (<2.5s). El círculo "track"
+   es el aro oscuro de fondo; "fill" es el segmento que se depleta
+   gracias al `stroke-dasharray` que inyectamos desde React con
+   `pct * 100` (el primer valor es el arco visible, el segundo el
+   resto del perímetro, ambos sobre 100). El `transform: rotate(-90deg)`
+   del "fill" hace que el depleting empiece arriba a las 12 en punto.
+
+   NO se renderiza para bots (no tienen red de seguridad de 10s) ni en
+   `winnerWindow` / `finished` (no hay turno accionable). Solo cuando el
+   humano que tiene el turno QUIERE actuar y el server va a auto-tirar
+   por él si pasa del tiempo. */
+.turn-clock {
   position: absolute;
-  bottom: 4%;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  z-index: 4;
+  width: 56px;
+  height: 56px;
+  transform: translate(-50%, -50%);
+  z-index: 3;
   pointer-events: none;
-  display: flex;
-  justify-content: center;
-  min-width: 200px;
-  max-width: 80%;
+  /* Sombra ligera para que se vea sobre avatares claros y oscuros. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+  overflow: visible;
 }
-.turn-indicator-mine {
-  background: rgba(15, 23, 42, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  padding: 6px 16px 8px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-  color: #f8fafc;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  align-items: stretch;
-  min-width: 180px;
+.turn-clock-track {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.45);
+  stroke-width: 3;
 }
-.turn-indicator-label {
-  font-size: 0.95em;
-  font-weight: 600;
-  text-align: center;
-  white-space: nowrap;
+.turn-clock-fill {
+  fill: none;
+  stroke: var(--ok); /* verde por defecto (>50%) */
+  stroke-width: 3;
+  stroke-linecap: round;
+  /* Hace que el arco visible arranque arriba a las 12. El centro del
+     SVG es (18,18) en viewBox 0..36 → coincide con el 50%/50% y se ve
+     sólido al rotar. */
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  /* Suaviza los cambios de color cuando la urgencia cruza un umbral
+     (verde → amarillo → rojo) */
+  transition: stroke 0.2s linear;
 }
-.turn-indicator-secs {
-  font-variant-numeric: tabular-nums;
-  opacity: 0.85;
-  font-weight: 500;
-}
-.turn-indicator-bar {
-  height: 4px;
-  background: rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.turn-indicator-bar-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #fbbf24 0%, #ef4444 100%);
-  transition: width 0.1s linear;
-}
-/* En pantallas estrechas (móvil) lo achicamos y lo subimos un poco para
-   que no choque con la mano del jugador en la parte inferior. */
-@media (max-width: 768px) {
-  .turn-indicator {
-    bottom: 26%;
-    min-width: 160px;
-  }
-  .turn-indicator-mine {
-    padding: 4px 12px 6px;
-  }
-  .turn-indicator-label {
-    font-size: 0.85em;
-  }
-}
+.turn-clock-mid .turn-clock-fill { stroke: #fbbf24; }
+.turn-clock-low .turn-clock-fill { stroke: var(--danger); }
 /* Las cartas de la baza usan su propio tamaño, más grande que las miniaturas. */
 .trick-card .card-img,
 .trick-card .card-img.small {
@@ -1179,17 +1220,16 @@ body {
   display: flex;
   justify-content: center;
   gap: 6px;
-  /* Padding-top generoso para que las cartas "playable" eleven con
-     translateY sin tocar el tablero de arriba. Padding-bottom incluye
-     el safe-bottom del notch. Importante: NO overflow-x: auto. Con auto,
-     al arrastrar una carta (drag-to-reorder) el translateX del drag
-     visual se cortaba contra el borde de la mano y daba la sensación
-     de que la carta no "salía" del box. Con visible, las cartas pueden
-     extenderse libremente mientras se arrastran; el .board
-     (overflow: hidden) sigue recortando lo que salga del tablero. */
-  padding: 16px 4px calc(2px + var(--safe-bottom));
+  /* Padding-top / padding-bottom para aire alrededor de la fila. Antes
+     se reservaban 16px arriba y un min-height extra para que las
+     cartas "playable" pudieran elevarse con translateY(-12px) sin
+     tocar el tablero. Sprint 2.8: ya no elevamos cartas — el feedback
+     "qué puedo jugar" se delega al brillo de las disabled. Padding
+     simplificado a `8px` arriba + safe-bottom. Importante: NO
+     overflow-x: auto (cortaría el drag visual con translateX). */
+  padding: 8px 4px calc(2px + var(--safe-bottom));
   overflow: visible;
-  min-height: calc(var(--card-h) + 4px);
+  min-height: var(--card-h);
   flex-shrink: 0;
 }
 .card-slot {
@@ -1204,15 +1244,27 @@ body {
 /* Sin `transition: transform` para que al reordenar el slot no haga el
    parpadeo de "vuelve a su sitio y luego salta al nuevo". El press
    feedback (:active translateY) se aplica instantáneo, que es OK. */
-/* Carta playable: se eleva hacia adelante (translateY negativo) para
-   resaltar cuáles puedes jugar, sin marco de color. Sombra suave debajo
-   para dar profundidad y separar visualmente la carta del resto de la
-   fila. Es el estilo que estaba antes del anillo amarillo. */
+/* Carta PLAYABLE (= legal y es mi turno y la mano está restringida):
+   ya no se eleva. Sprint 2.8: el feedback "qué puedes jugar" se delega
+   al BRILLO/color, no a la posición. Las legales se quedan planas en
+   la fila, las no legales se oscurecen (ver `.disabled` debajo). Esto
+   evita que el translateY nos comiera altura del tablero y que las
+   cartas "saltaran" al entrar en mi turno. cursor:pointer queda para
+   que el navegador muestre la mano al hacer hover. */
 .card-slot.playable {
-  transform: translateY(-12px);
-  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
 }
-.card-slot.disabled { cursor: not-allowed; }
+/* Carta DISABLED (= legal, mi turno, pero NO jugable ahora): se ve
+   atenuada con grayscale + bajada de brillo + saturación baja para
+   que se entienda "esto existe, pero no puedes tirarlo". El cursor
+   `not-allowed` refuerza el mensaje. El `:active { transform: none }`
+   es vestigio del comportamiento de elevación previo — no hace daño
+   dejarlo. */
+.card-slot.disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  filter: grayscale(0.6) brightness(0.85) saturate(0.7);
+}
 .card-slot.disabled:active { transform: none; }
 /* Drag activo: feedback visual para reordenar. */
 .card-slot.is-dragging {
@@ -1770,6 +1822,35 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+/* Chip del código de sala en la pantalla de lobby. "Sala" como label
+   apagado a la izquierda y el código grande en monoespaciada a la
+   derecha, separados por `gap` dentro de un pill con borde. De un
+   vistazo se ve "Sala · DFGH" en vez de pegados como "SalaDFGH". */
+.room-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.55);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+.room-code-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--fg-mute);
+  font-weight: 600;
+}
+.room-code-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.24em;
+  color: var(--accent);
+  text-transform: uppercase;
 }
 .lobby-card {
   width: 100%;
