@@ -1,9 +1,13 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
+import { readFile } from 'node:fs/promises';
+import { resolve as resolvePath, join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
+import type { Seat } from '@guinote/engine';
 import { createRoomWithBots, getRoom } from './rooms.js';
-import { applyActionWithResolveEvent, emitAfterChange, stepBots, triggerNextHand } from './room.js';
+import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -20,11 +24,83 @@ await app.register(websocket);
 app.post('/api/rooms', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string };
   const name = (body.name ?? 'Jugador').slice(0, 20);
-  const room = createRoomWithBots();
+  // Salas siempre se crean en modo lobby: el primer humano que entre
+  // arranca una ventana de espera para que se le una un amigo antes
+  // de repartir. Si nadie entra, los huecos se rellenan con bots al
+  // expirar la ventana (ver `scheduleLobbyCheck`).
+  const room = createRoomWithBots({ fillWithBots: false });
   return { code: room.code, name };
 });
 
 app.get('/api/health', async () => ({ ok: true }));
+
+// Health check simple para que el hosting (Cloudflare Tunnel, Fly, etc.)
+// sepa si el server está vivo. NO toca la base de datos ni nada caro.
+app.get('/healthz', async () => ({ ok: true, version: Date.now() }));
+
+// ───────────── Static serving del bundle web ─────────────
+// En dev seguimos sirviendo el web con `vite` (puerto 5173) y el
+// server queda en :3001, conectado por CORS. En prod (y con túnel)
+// el MISMO Fastify sirve el bundle del web desde su `apps/web/dist`
+// y los clientes se conectan por la misma URL. SPA fallback: si
+// piden un path sin extensión y no existe, devolvemos index.html.
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+// En runtime (Node) `__dirname` es el directorio del módulo compilado
+// (`apps/server/dist`). El bundle web está en `apps/web/dist`. Con
+// `../web/dist` resolvemos desde `dist/`.
+const WEB_DIST = resolvePath(__dirname, '..', '..', 'web', 'dist');
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
+};
+
+async function serveStatic(filePath: string, reply: import('fastify').FastifyReply) {
+  try {
+    const data = await readFile(filePath);
+    reply.type(MIME[extname(filePath)] ?? 'application/octet-stream');
+    // Cache en el cliente: 1 día. Los assets de Vite ya llevan hash
+    // en el nombre (`index-ABCDEF.js`), así que cacheamos tranquilos.
+    reply.header('Cache-Control', 'public, max-age=86400');
+    return reply.send(data);
+  } catch {
+    return reply.code(404).send('Not found');
+  }
+}
+
+app.get<{ Params: { path: string } }>('/assets/:path', async (req, reply) => {
+  return serveStatic(join(WEB_DIST, 'assets', req.params.path), reply);
+});
+
+// SPA fallback para cualquier GET que no sea API, WS, healthz.
+// Si no existe el archivo en disco, devolvemos index.html y que el
+// cliente (que no usa router) decida qué hacer.
+app.get<{ Params: { '*': string } }>('/*', async (req, reply) => {
+  // Sanity: no servir nada bajo /api, /ws, /healthz — ya están
+  // registradas arriba con sus handlers.
+  if (req.url.startsWith('/api') || req.url.startsWith('/ws') || req.url.startsWith('/healthz')) {
+    return reply.code(404).send('Not found');
+  }
+  const url = req.url.split('?')[0] ?? '/';
+  const target =
+    url === '/' || !url.includes('.')
+      ? join(WEB_DIST, 'index.html')
+      : join(WEB_DIST, url);
+  return serveStatic(target, reply);
+});
 
 app.register(async (instance) => {
   instance.get('/ws/:code', { websocket: true }, (socket: WsSocket, req) => {
@@ -66,16 +142,33 @@ app.register(async (instance) => {
       seatNames: room.players.map((p) => p.name),
       isBot: room.players.map((p) => p.token === null),
     });
-    emitAfterChange(room);
-    // Si el primer turno (o cualquier turno) cae en un bot al conectar
-    // (p. ej. mesa recién creada donde el dealer aleatorio deja a un bot
-    // como primer jugador, o un reconnect a media partida), hay que
-    // arrancar el ciclo de bots. Sin esto la partida se queda colgada
-    // silenciosamente hasta que un humano intente tirar carta.
-    void stepBots(room).catch(() => undefined);
+    // DEBUG temporal: confirmar que el server emite VIEWs.
+    console.log(`[ws-debug-out] WELCOME -> seat=${seat} code=${room.code}`);
+    if (room.state === null) {
+      // Modo lobby: la sala está esperando a que se unan más humanos
+      // antes de repartir. Emitimos LOBBY_STATUS al recién llegado y al
+      // resto, y programamos la comprobación del lobby (rellenar con
+      // bots al expirar la ventana).
+      broadcastLobbyStatus(room);
+      scheduleLobbyCheck(room);
+    } else {
+      emitAfterChange(room);
+      // Si el primer turno (o cualquier turno) cae en un bot al conectar
+      // (p. ej. mesa recién creada donde el dealer aleatorio deja a un bot
+      // como primer jugador, o un reconnect a media partida), hay que
+      // arrancar el ciclo de bots. Sin esto la partida se queda colgada
+      // silenciosamente hasta que un humano intente tirar carta.
+      void stepBots(room).catch(() => undefined);
+    }
 
     socket.on('message', async (raw: unknown) => {
       const text = raw instanceof Buffer ? raw.toString() : String(raw);
+      // Log de cada mensaje entrante para diagnóstico. Si una partida
+      // se queda colgada, este log muestra qué envió el cliente por
+      // última vez (o si dejó de enviar). Lo emite a stdout (no por
+      // el logger de Fastify) para que sea fácil de `grep` junto a
+      // los logs del auto-play.
+      console.log(`[ws] code=${room.code} seat=${seat} msg=${text.slice(0, 200)}`);
       let parsed: unknown;
       try {
         parsed = JSON.parse(text);
@@ -98,10 +191,33 @@ app.register(async (instance) => {
         return;
       }
       if (msg.type === 'ACTION') {
+        // DEBUG temporal: ver si la acción llega al server. Acortamos
+        // el commandId a 8 chars (los UUIDs enteros hacen las líneas
+        // ilegibles en el log).
+        const short = msg.commandId.slice(0, 8);
+        console.log(`[ws-debug] ACTION code=${room.code} seat=${seat} cmdId=${short} action=${JSON.stringify(msg.action)}`);
         if (room.seenCommandIds.has(msg.commandId)) return;
+        // El humano ha actuado: cancelamos la red de seguridad del
+        // auto-play para no encadenar acciones encima de las suyas.
+        clearAutoPlayTimer(room);
+        if (room.state === null) {
+          // Sala todavía en lobby: no se puede aplicar ninguna acción.
+          send(socket, { type: 'ERROR', code: 'NOT_YOUR_TURN', message: 'Aún esperando a más jugadores' });
+          return;
+        }
         room.seenCommandIds.add(msg.commandId);
         const finishedBefore = room.state.finishedTricks.length;
-        const ok = applyActionWithResolveEvent(room, seat as 0, msg.action);
+        // BUG histórico: aquí estaba `seat as 0`, un cast a literal 0.
+        // Eso significaba que TODAS las acciones de cualquier seat se
+        // aplicaban como si vinieran del seat 0. Para el primer jugador
+        // (que siempre es seat 0) funcionaba "por accidente"; para el
+        // segundo jugador, su acción se rechazaba siempre con
+        // ILLEGAL_ACTION silencioso (el cliente solo veía que la carta
+        // se oscurecía y el auto-play disparaba 10s después). Cambiado
+        // a `seat as Seat` para pasar el seat real capturado en el
+        // cierre del WS handler.
+        console.log(`[ws-debug] ACTION processing code=${code} turn=${room.state.turn} seat=${seat} action=${JSON.stringify(msg.action)}`);
+        const ok = applyActionWithResolveEvent(room, seat as Seat, msg.action);
         if (!ok) {
           send(socket, { type: 'ERROR', code: 'ILLEGAL_ACTION', message: 'Acción ilegal' });
           return;
@@ -139,6 +255,9 @@ app.register(async (instance) => {
 
         const acted = await stepBots(room);
         if (!acted) emitAfterChange(room);
+        // Tras la cadena de bots, si quedó turno en un humano, armamos
+        // la red de seguridad por si no actúa (10s).
+        scheduleAutoPlay(room);
       }
       if (msg.type === 'NEXT_HAND') {
         // El cliente ha pulsado "Continuar" en el panel de resumen.

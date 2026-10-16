@@ -126,6 +126,22 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     taken: z.unknown(), // Card (recibida del motor, validada en runtime)
     given: z.unknown(), // Card
   }),
+  /** Estado del lobby. Se emite cuando la sala está esperando a que se
+   *  unan más humanos antes de repartir. El cliente lo usa para mostrar
+   *  "Esperando más jugadores… Ns". `endsAt` es epoch ms o `null` si la
+   *  sala ya pasó la ventana (no debería pasar, pero lo contemplamos).
+   *  `windowMs` es la duración inicial de la ventana — el cliente lo usa
+   *  para dimensionar la barra depleting correctamente. */
+  z.object({
+    type: z.literal('LOBBY_STATUS'),
+    code: z.string(),
+    seatsConnected: z.number().int().min(0).max(4),
+    seatsTotal: z.number().int(),
+    endsAt: z.number().int().nullable(),
+    windowMs: z.number().int(),
+    seatNames: z.array(z.string()),
+    isBot: z.array(z.boolean()),
+  }),
 ]);
 
 export type ServerMessage = z.infer<typeof ServerMessageSchema>;

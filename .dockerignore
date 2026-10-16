@@ -1,0 +1,41 @@
+# Cosas que no deben acabar en el contexto de Docker. Aplican al build
+# desde la raíz del monorepo.
+node_modules
+**/node_modules
+**/dist
+**/.turbo
+**/.next
+**/.vite
+**/.cache
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+*.swp
+*.swo
+
+# Tests
+coverage
+**/*.test.ts
+**/*.test.tsx
+**/__tests__
+
+# CI
+.github
+.git
+.gitignore
+.gitattributes
+
+# Tmp / logs
+*.log
+.tmp-test
+.tmp
+*.tmp
+
+# Dev / misc
+docs
+scripts
+*.md
+!apps/server/README.md

@@ -65,11 +65,41 @@ export interface PlayerSlot {
 export interface Room {
   code: string;
   players: PlayerSlot[];
-  state: GameState;
+  /**
+   * Estado de la partida. `null` mientras la sala está en LOBBY (esperando
+   * a que se unan más humanos antes de repartir). Una vez expira la
+   * ventana del lobby o se llenan los 4 slots, se reparte y `state`
+   * pasa a un `GameState` real con `phase: 'lead'`.
+   */
+  state: GameState | null;
   /** Set de commandIds ya procesados (idempotencia básica). */
   seenCommandIds: Set<string>;
   /** Eventos pendientes para el log. */
   log: GameEvent[];
+  /**
+   * Timer de red de seguridad: si pasan N segundos (por defecto 10s) con
+   * el turno en un humano y sin que llegue ninguna ACTION, el server
+   * auto-aplica la primera acción legal para que la partida no se quede
+   * colgada. Cubre tres modos de fallo que no podemos distinguir desde
+   * el server: (a) el humano está distraído / no ve sus cartas, (b) la
+   * WS del móvil se cayó silenciosamente, (c) la UI del cliente no
+   * habilita las cartas en su turno. Cualquiera que sea, la partida
+   * avanza. Se limpia al llegar una ACTION del humano correspondiente.
+   */
+  autoPlayTimer: NodeJS.Timeout | null;
+  /**
+   * Timer del lobby: cuando `state === null`, está corriendo el contador
+   * para que se una otro humano. Se cancela si se llena la mesa antes
+   * de que expire. Si vence, se rellena con bots y se reparte.
+   */
+  lobbyTimer: NodeJS.Timeout | null;
+  /** Momento (ms epoch) en que expira el lobby, para que el cliente
+   *  muestre cuenta atrás. `null` si la sala no está en lobby. */
+  lobbyEndsAt: number | null;
+  /** Duración de la ventana inicial del lobby (ms). Si se suma un humano
+   *  adicional durante la ventana, el timer se reinicia con un valor
+   *  menor (ver `scheduleLobbyCheck`). */
+  lobbyWindowMs: number;
 
   // ─── Estructura del match completo (coto → partida → juego) ───
   // Terminología usada en este código (alineada con el cliente y el
@@ -125,17 +155,24 @@ export function createRoom(opts: {
     }
   }
 
-  const state = newHand({
-    id: `g-${opts.code}`,
-    seed: cryptoToken(),
-    rules: GUINOTE_ARAGONES,
-    // Sorteo inicial: el dealer de la primera mano se elige al azar entre
-    // los 4 asientos. A partir de ahí se aplica la regla del guiñote
-    // aragonés: "el que corta, reparte" (winner of last trick → next dealer),
-    // y siempre tira el de la derecha del dealer. Implementado en
-    // `startNextHand` + `nextDealer` del motor.
-    dealer: Math.floor(Math.random() * 4) as Seat,
-  });
+  // Modo lobby (default en producción): `state` queda `null` hasta que
+  // arranque la partida. Solo se reparte cuando se llene la mesa o
+  // expire la ventana del lobby (ver `scheduleLobbyCheck`). En el modo
+  // `fillWithBots: true` (legacy), repartimos inmediatamente como
+  // antes.
+  const state: GameState | null = fill
+    ? newHand({
+        id: `g-${opts.code}`,
+        seed: cryptoToken(),
+        rules: GUINOTE_ARAGONES,
+        // Sorteo inicial: el dealer de la primera mano se elige al azar entre
+        // los 4 asientos. A partir de ahí se aplica la regla del guiñote
+        // aragonés: "el que corta, reparte" (winner of last trick → next dealer),
+        // y siempre tira el de la derecha del dealer. Implementado en
+        // `startNextHand` + `nextDealer` del motor.
+        dealer: Math.floor(Math.random() * 4) as Seat,
+      })
+    : null;
 
   return {
     code: opts.code,
@@ -143,6 +180,10 @@ export function createRoom(opts: {
     state,
     seenCommandIds: new Set(),
     log: [],
+    autoPlayTimer: null,
+    lobbyTimer: null,
+    lobbyEndsAt: null,
+    lobbyWindowMs: 30000,
     partidas: { 0: 0, 1: 0 },
     cotos: { 0: 0, 1: 0 },
     partidaEnCoto: 1,
@@ -172,6 +213,7 @@ function broadcast(room: Room, msg: ServerMessage): void {
  * Emite la vista personalizada para cada jugador humano.
  */
 function broadcastView(room: Room): void {
+  if (room.state === null) return; // sala en lobby, no hay VIEW todavía
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1) {
       const view: PlayerView = viewFor(room.state, p.seat);
@@ -189,8 +231,199 @@ function broadcastView(room: Room): void {
         matchFinished: room.matchFinished,
         matchChampion: room.matchChampion,
       } satisfies ServerMessage));
+      // DEBUG temporal: confirmar que el VIEW se envía al cliente.
+      console.log(`[ws-debug-out] VIEW -> seat=${p.seat} code=${room.code} turn=${view.turn} phase=${view.phase} v=${room.state.version}`);
     }
   }
+}
+
+/**
+ * Emite un `LOBBY_STATUS` a todos los humanos conectados. Se usa mientras
+ * la sala está esperando a que se unan más jugadores antes de repartir.
+ * El cliente lo lee para mostrar "Esperando más jugadores… Ns".
+ */
+export function broadcastLobbyStatus(room: Room): void {
+  const msg = {
+    type: 'LOBBY_STATUS',
+    code: room.code,
+    seatsConnected: room.players.filter((p) => p.token !== null).length,
+    seatsTotal: 4,
+    endsAt: room.lobbyEndsAt,
+    windowMs: room.lobbyWindowMs,
+    seatNames: room.players.map((p) => p.name),
+    isBot: room.players.map((p) => p.token === null),
+  } as ServerMessage;
+  for (const p of room.players) {
+    if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg));
+  }
+}
+
+/**
+ * Programa la comprobación del lobby. Si la sala tiene `state === null`
+ * (modo lobby), mira si ya están los 4 slots ocupados por humanos:
+ *  - Si los 4 son humanos: arranca la partida al instante.
+ *  - Si hay 1+ humano y huecos: programa un timer para rellenar con bots
+ *    cuando expire. Cada nuevo humano que se una REINICIA el timer
+ *    (con un valor proporcionalmente menor, para que se note que la
+ *    ventana se va acortando). Los bots no cuentan para esto: solo
+ *    importan los humanos conectados.
+ *
+ * No-op si la sala ya tiene partida empezada.
+ */
+export function scheduleLobbyCheck(room: Room): void {
+  if (room.state !== null) return;
+  const humans = room.players.filter((p) => p.token !== null).length;
+  const total = 4;
+  clearLobbyTimer(room);
+  if (humans >= total) {
+    // Mesa llena de humanos: arrancar inmediatamente.
+    startMatchAndDeal(room);
+    return;
+  }
+  if (humans === 0) {
+    // Nadie conectado: no hacer nada, esperar a que entre el primero.
+    room.lobbyEndsAt = null;
+    return;
+  }
+  // Al menos un humano. La ventana se va acortando conforme se unen más
+  // humanos: 1 → ventana completa; 2 → mitad; 3 → cuarto. Así, cuando
+  // ya hay 3 conectados apenas esperamos, y el primero tiene los 30s
+  // enteros para invitar a quien quiera.
+  const remaining = Math.max(
+    1500,
+    Math.floor(room.lobbyWindowMs * Math.pow(0.5, humans - 1)),
+  );
+  room.lobbyEndsAt = Date.now() + remaining;
+  room.lobbyTimer = setTimeout(() => {
+    room.lobbyTimer = null;
+    if (room.state !== null) return; // ya empezó, race
+    startMatchAndDeal(room);
+  }, remaining);
+  // Re-emitir para que el cliente reciba el `endsAt` actualizado (la
+  // emisión inicial en index.ts se hace con lobbyEndsAt aún null porque
+  // scheduleLobbyCheck no había corrido).
+  broadcastLobbyStatus(room);
+}
+
+export function clearLobbyTimer(room: Room): void {
+  if (room.lobbyTimer) {
+    clearTimeout(room.lobbyTimer);
+    room.lobbyTimer = null;
+  }
+  room.lobbyEndsAt = null;
+}
+
+/**
+ * Llamado al expirar la ventana del lobby O cuando se llena la mesa de
+ * humanos. Rellena los huecos con bots (los humanos que ya están
+ * conectados conservan sus nombres vía HELLO), reparte la primera mano
+ * con un dealer aleatorio y emite los VIEWs a todos.
+ */
+function startMatchAndDeal(room: Room): void {
+  if (room.state !== null) return;
+  // Asignar bots a los slots vacíos (los que NO tienen token humano).
+  const botNames = pickAragonBotNames(4);
+  for (let s = 0 as Seat; s < 4; s = (s + 1) as Seat) {
+    const p = room.players[s]!;
+    if (p.token === null) {
+      p.name = botNames[s]!;
+    }
+  }
+  room.state = newHand({
+    id: `g-${room.code}`,
+    seed: cryptoToken(),
+    rules: GUINOTE_ARAGONES,
+    dealer: Math.floor(Math.random() * 4) as Seat,
+  });
+  room.seenCommandIds.clear();
+  room.lobbyEndsAt = null;
+  // El cliente recibió los seatNames con '?' en el WELCOME original.
+  // Ahora que los bots ya tienen nombre real, re-emitimos un WELCOME
+  // actualizado a cada humano para que pinte los avatares con sus
+  // nombres. Sin esto, los bots seguirían mostrándose como '?'.
+  for (const p of room.players) {
+    if (p.ws && p.ws.readyState === 1 && p.token !== null) {
+      p.ws.send(JSON.stringify({
+        type: 'WELCOME',
+        you: p.seat,
+        roomCode: room.code,
+        seatNames: room.players.map((pl) => pl.name),
+        isBot: room.players.map((pl) => pl.token === null),
+      } satisfies ServerMessage));
+    }
+  }
+  // broadcastView hace el trabajo: salta automáticamente si state === null,
+  // pero aquí ya es no-null. stepBots arranca por si el primer turno
+  // cae en un bot (mesa recién creada con dealer aleatorio).
+  broadcastView(room);
+  void stepBots(room).catch(() => undefined);
+}
+
+/**
+ * Red de seguridad: si pasan N segundos con el turno en un humano sin
+ * que llegue una ACTION, el server auto-aplica la primera acción legal
+ * en su nombre. Ver el campo `autoPlayTimer` en `Room` para el motivo.
+ *
+ * No-op si el turno actual no es de un humano (bot, finished, o null).
+ * `clearAutoPlayTimer` debe llamarse en cuanto el humano actúa (en el
+ * handler de ACTION en index.ts) para no aplicarle una acción encima.
+ *
+ * El timeout elegido (10s por defecto) es más largo que la pausa
+ * entre turnos de bots (1s) pero más corto que la pausa de baza
+ * resuelta (2,5s). Si vemos que dispara demasiado, lo subimos.
+ */
+export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
+  clearAutoPlayTimer(room);
+  if (room.state === null) return;
+  if (room.state.phase === 'finished') return;
+  const turn = room.state.turn;
+  if (turn === null) return;
+  if (room.players[turn]!.token === null) return; // es un bot, los bots no necesitan red de seguridad
+  room.autoPlayTimer = setTimeout(() => {
+    room.autoPlayTimer = null;
+    autoPlayForHuman(room, turn);
+  }, delayMs);
+}
+
+export function clearAutoPlayTimer(room: Room): void {
+  if (room.autoPlayTimer) {
+    clearTimeout(room.autoPlayTimer);
+    room.autoPlayTimer = null;
+  }
+}
+
+function autoPlayForHuman(room: Room, seat: Seat): void {
+  // Re-validamos el estado en el callback del timer: el humano
+  // podría haber actuado justo antes de que disparara.
+  if (room.state === null) return;
+  if (room.state.phase === 'finished') return;
+  if (room.state.turn !== seat) return;
+  if (room.players[seat]!.token === null) return;
+  const legal = legalActions(room.state, seat);
+  if (legal.length === 0) return;
+  // Cogemos la primera acción legal. PLAY_CARD no es determinista con
+  // el primero, pero en guiñote aragonés el orden de la mano es
+  // estable, así que es la carta más baja que cumple las reglas. Para
+  // no aburrir demasiado, mezclamos con la heurística del bot: si hay
+  // varias opciones, elige la peor carta del palo obligatorio (mismo
+  // criterio que `heuristicBotAction`).
+  let action = legal[0]!;
+  if (legal.length > 1) {
+    const heuristic = heuristicBotAction(room.state, seat);
+    if (heuristic && legal.some((a) => sameAction(a, heuristic))) {
+      action = heuristic;
+    }
+  }
+  console.log(`[autoPlay] seat=${seat} action=${JSON.stringify(action)} code=${room.code}`);
+  const ok = applyActionWithResolveEvent(room, seat, action);
+  if (!ok) return;
+  emitAfterChange(room);
+  // Tras el auto-play, pueden quedar bots por tirar. stepBots se
+  // encargará; al final del bucle, scheduleAutoPlay (que se llama
+  // también desde el WELCOME/ACTION handler) re-evaluará.
+  void stepBots(room)
+    .catch(() => undefined)
+    .finally(() => scheduleAutoPlay(room));
 }
 
 /**
@@ -226,6 +459,7 @@ export function applyActionWithResolveEvent(
   seat: Seat,
   action: Parameters<typeof apply>[1],
 ): boolean {
+  if (room.state === null) return false;
   const before = room.state.finishedTricks.length;
   const ok = applyAction(room, seat, action);
   if (!ok) return false;
@@ -272,6 +506,7 @@ export function applyActionWithResolveEvent(
  * Devuelve `true` si la acción era legal, `false` si no.
  */
 export function applyAction(room: Room, seat: Seat, action: Parameters<typeof apply>[1]): boolean {
+  if (room.state === null) return false;
   if (room.state.phase === 'finished') return false;
   if (room.state.turn !== seat) return false;
   const legal = legalActions(room.state, seat);
@@ -310,11 +545,19 @@ export async function stepBots(
   let acted = false;
   let safety = 100;
   while (safety-- > 0) {
+    if (room.state === null) return acted;
     if (room.state.phase === 'finished') return acted;
     const turn = room.state.turn;
     if (turn === null) return acted;
     const player = room.players[turn]!;
-    if (player.token !== null) return acted;
+    if (player.token !== null) {
+      // Turno de un humano: armar red de seguridad por si no actúa
+      // en los próximos 10s. Hacemos esto aquí (no en un finally)
+      // porque las salidas tempranas del while se saltan el
+      // `scheduleAutoPlay` que va al final de la función.
+      scheduleAutoPlay(room);
+      return acted;
+    }
     const before = room.state.finishedTricks.length;
     // Aplica la acción del bot por la MISMA ruta que las acciones
     // humanas: `applyActionWithResolveEvent`. Esto es clave porque
@@ -352,6 +595,9 @@ export async function stepBots(
       await sleep(delayMs);
     }
   }
+  // Tras la cadena de bots, si el turno quedó en un humano, armamos la
+  // red de seguridad por si no actúa.
+  scheduleAutoPlay(room);
   return acted;
 }
 
@@ -367,6 +613,7 @@ export async function stepBots(
  */
 export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {}): void {
   broadcastView(room);
+  if (room.state === null) return;
   if (room.state.phase === 'finished' && !opts.skipGameOver) {
     broadcastGameOver(room);
     if (room.state.matchEnded) {
@@ -404,6 +651,7 @@ export function triggerNextHand(room: Room): void {
     console.log(`[triggerNextHand] no-op: matchFinished=true code=${room.code}`);
     return;
   }
+  if (room.state === null) return; // sala en lobby, no hay partida que avanzar
   if (room.state.phase !== 'finished') {
     console.log(`[triggerNextHand] no-op: phase=${room.state.phase} code=${room.code}`);
     return;
@@ -448,9 +696,12 @@ export function triggerNextHand(room: Room): void {
   broadcastView(room);
   // Si el turno cae en un bot, arrancar automáticamente.
   void stepBots(room).catch(() => undefined);
+  // Y si cae en un humano, armar la red de seguridad del auto-play.
+  scheduleAutoPlay(room);
 }
 
 function broadcastGameOver(room: Room): void {
+  if (room.state === null) return;
   const msg = {
     type: 'GAME_OVER',
     handPoints: { 0: room.state.trickPoints[0], 1: room.state.trickPoints[1] },
@@ -463,6 +714,7 @@ function broadcastGameOver(room: Room): void {
 }
 
 function broadcastMatchOver(room: Room): void {
+  if (room.state === null) return;
   broadcast(room, {
     type: 'MATCH_OVER' as any,
     winner: room.state.matchWinner,
@@ -493,6 +745,7 @@ function broadcastMatchOver(room: Room): void {
  * "no repartir más" cuando el match entero ha terminado (`room.matchFinished`).
  */
 export function startNextHand(room: Room): void {
+  if (room.state === null) return; // startNextHand asume state no-null; se llama solo desde triggerNextHand que ya lo garantiza
   const lastHandLastTrick = room.state.finishedTricks[room.state.finishedTricks.length - 1];
   const lastTrickWinner = lastHandLastTrick ? lastHandLastTrick.winner : null;
   const newDealer = nextDealer(lastTrickWinner, room.state.dealer);
@@ -524,6 +777,7 @@ export function startNextHand(room: Room): void {
  * Llamar después de cada HAND_FINISHED en stepBots / applyAction.
  */
 function checkMatchOver(room: Room): void {
+  if (room.state === null) return;
   if (room.state.matchEnded && room.state.matchWinner !== null) {
     broadcast(room, {
       type: 'MATCH_OVER' as any,

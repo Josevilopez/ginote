@@ -56,6 +56,10 @@ export function Game() {
   const you = useGame((s) => s.you);
   const seatNames = useGame((s) => s.seatNames);
   const isBot = useGame((s) => s.isBot);
+  const roomCode = useGame((s) => s.roomCode);
+  const lobby = useGame((s) => s.lobby);
+  const pendingActionCardId = useGame((s) => s.pendingActionCardId);
+  const lastError = useGame((s) => s.lastError);
   const gameOver = useGame((s) => s.gameOver);
   const matchOver = useGame((s) => s.matchOver);
   const justResolved = useGame((s) => s.justResolved);
@@ -108,6 +112,12 @@ export function Game() {
   // mismo punto al iniciar la animación, así no hay "salto" entre la
   // posición al pulsar y la posición de salida de la carta volando.
   const pointerDownRectRef = useRef<DOMRect | null>(null);
+  // Timestamp del último drag que se ha COMMITTEADO (reorder hecho). El
+  // navegador sintetiza un `click` tras pointerup incluso cuando hubo un
+  // drag real — sin este flag, ese click haría `onPlay` y la carta se
+  // jugaría en vez de reordenarse. Marcamos un timestamp de 300 ms tras
+  // un reorder exitoso; durante esos 300 ms, `onClick` se salta.
+  const lastReorderAtRef = useRef<number>(0);
 
   // ───────────── Animación FLIP al jugar una carta ─────────────
   // Cola de vuelos en curso. Cada vuelo es una carta que debe animarse
@@ -222,6 +232,47 @@ export function Game() {
       return () => clearTimeout(t);
     }
   }, [view?.version, view?.turn, view?.phase, you, myOptions.mustPass, sendAction]);
+
+  // ───────────── Cuenta atrás del turno (espejo del auto-play del server) ──
+  // El server tiene una red de seguridad que auto-aplica la primera acción
+  // legal de un humano si pasan 10s sin actuar (ver
+  // `apps/server/src/room.ts:scheduleAutoPlay`). Aquí reflejamos esa cuenta
+  // atrás para que el jugador VEA que tiene tiempo limitado y no se
+  // pregunte "¿me he quedado colgado?" — sabe exactamente cuántos segundos
+  // le quedan antes de que el server tire por él.
+  const AUTO_PLAY_MS = 10_000;
+  const [turnDeadline, setTurnDeadline] = useState<number | null>(null);
+  useEffect(() => {
+    if (!view || you === null) return;
+    // Solo cuenta atrás cuando es MI turno en una fase que requiere acción.
+    // En winnerWindow el auto-PASS ya cubre los 350ms; en 'finished' no hay
+    // turno. En arrastre sí cuenta: el server auto-tira para no quedarnos
+    // colgados si la UI no habilita cartas en el móvil.
+    const activePhase =
+      view.phase === 'lead' ||
+      view.phase === 'follow' ||
+      view.phase === 'arrastre';
+    if (view.turn === you && activePhase) {
+      setTurnDeadline(Date.now() + AUTO_PLAY_MS);
+    } else {
+      setTurnDeadline(null);
+    }
+  }, [view?.version, view?.turn, view?.phase, you]);
+  // Tick de UI: fuerza re-render cada 100ms mientras hay cuenta atrás,
+  // para que la barra se vacíe visualmente.
+  const [now, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    if (turnDeadline === null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(id);
+  }, [turnDeadline]);
+  const remainingMs = turnDeadline !== null ? Math.max(0, turnDeadline - now) : 0;
+  const remainingPct = turnDeadline !== null ? remainingMs / AUTO_PLAY_MS : 0;
+  // Nombre del seat que está jugando AHORA. Usado cuando NO es mi turno.
+  const currentPlayerName =
+    view && view.turn !== null
+      ? seatNames[view.turn] ?? `Jugador ${view.turn + 1}`
+      : null;
 
   // ───────────── Anuncio de cante (overlay central) ─────────────
   // Cuando se declara un cante nuevo, mostramos un overlay centrado con
@@ -601,6 +652,12 @@ export function Game() {
   );
 
   if (!view || you === null) {
+    // Si el servidor nos mandó LOBBY_STATUS (sala esperando a más
+    // jugadores antes de repartir), pintamos la pantalla de lobby en
+    // vez del "Conectando…". Ver `scheduleLobbyCheck` en el server.
+    if (lobby !== null) {
+      return <LobbyScreen />;
+    }
     return <div className="loading">Conectando a la mesa…</div>;
   }
 
@@ -615,6 +672,8 @@ export function Game() {
   //  leerlo dentro del useMemo. La función `computeLegalSet` no es un hook.)
 
   const onPlay = (card: Card, _fromRect: DOMRect | null) => {
+    // DEBUG temporal: ver si onPlay se llama y por qué guarda falla.
+    console.log('[debug] onPlay carta=', card.id, 'isMyTurn=', isMyTurn, 'phase=', view?.phase, 'legal=', legalSet.has(card.id));
     if (!isMyTurn) return;
     if (view.phase === 'winnerWindow') return;
     if (!legalSet.has(card.id)) return;
@@ -700,6 +759,11 @@ export function Game() {
             <span className="score-label">Ellos</span>
           </div>
         </div>
+        {/* Botón "Invitar": muestra el código de sala en grande y copia al
+            portapapeles la URL completa con #ABCD para que tu amigo la
+            pegue en su móvil. Aparece solo en pantallas con sitio
+            (móvil = código solo). */}
+        <InviteButton code={roomCode} />
         <button className="btn small" onClick={leave}>Salir</button>
       </header>
 
@@ -800,6 +864,34 @@ export function Game() {
             );
           })}
         </div>
+
+        {/* Indicador de turno: "Tu turno" con cuenta atrás 10s cuando me
+            toca a mí (espejo del auto-play del server), o "Esperando a X"
+            cuando está jugando otro. Especjo del `scheduleAutoPlay` del
+            server: si el humano no actúa en 10s, el server auto-tira. */}
+        <div className="turn-indicator" aria-live="polite">
+          {turnDeadline !== null ? (
+            <div className="turn-indicator-mine">
+              <span className="turn-indicator-label">
+                Tu turno
+                <span className="turn-indicator-secs">
+                  {' · '}
+                  {Math.ceil(remainingMs / 1000)}s
+                </span>
+              </span>
+              <div className="turn-indicator-bar">
+                <div
+                  className="turn-indicator-bar-fill"
+                  style={{ width: `${(remainingPct * 100).toFixed(1)}%` }}
+                />
+              </div>
+            </div>
+          ) : currentPlayerName && view?.phase !== 'finished' ? (
+            <span className="turn-indicator-label">
+              Esperando a {currentPlayerName}
+            </span>
+          ) : null}
+        </div>
         </div>
 
         {/* Marcador "estilo tenis" — fuera del tablero (dentro de `.game`)
@@ -871,22 +963,57 @@ export function Game() {
               <button
                 key={c.id}
                 ref={(el) => { slotRefs.current[idx] = el; }}
-                className={`card-slot ${isMyTurn && hasRestrictedHand && legalSet.has(c.id) ? 'playable' : isMyTurn && hasRestrictedHand && !legalSet.has(c.id) ? 'disabled' : ''} ${isDraggingThis ? 'is-dragging' : ''} ${newlyDrawnId === c.id ? 'is-newly-drawn' : ''}`}
+                className={`card-slot ${isMyTurn && hasRestrictedHand && legalSet.has(c.id) ? 'playable' : isMyTurn && hasRestrictedHand && !legalSet.has(c.id) ? 'disabled' : ''} ${isDraggingThis ? 'is-dragging' : ''} ${newlyDrawnId === c.id ? 'is-newly-drawn' : ''} ${pendingActionCardId === c.id ? 'is-pending' : ''}`}
                 style={style}
+                type="button"
                 aria-label={`${c.rank} de ${c.suit}`}
+                // Camino principal para TAP → jugar la carta. Usamos
+                // `onClick` (no `onPointerUp`) porque el navegador SIEMPRE
+                // sintetiza un click tras pointerdown+pointerup en el mismo
+                // elemento, incluso en mobile. Antes dependíamos de
+                // `onPointerUp`, pero `e.preventDefault()` en `pointerdown`
+                // hacía que en algunos navegadores mobile (iOS Safari,
+                // ciertos Android) el `pointerup` (y por tanto la jugada)
+                // se perdiera — había que volver a pulsar. Con `onClick`
+                // evitamos esa ruta y la jugada se dispara siempre.
+                //
+                // Si el usuario ARRASTRA (offsetX > DRAG_THRESHOLD), el
+                // flag `dragVisual` queda activo y este handler se salta:
+                // ver `isDragging` arriba. Eso evita que un drag se
+                // convierta accidentalmente en una jugada + reorder.
+                onClick={(e) => {
+                  if (isDraggingThis) return;
+                  // Si acabamos de procesar un drag (reorder), el click
+                  // sintético del navegador NO debe disparar la jugada.
+                  // 300 ms es más que suficiente para distinguir drag de
+                  // tap puro: el navegador sintetiza el click casi a la vez
+                  // que el pointerup, y un reorder tarda en commitearse.
+                  if (Date.now() - lastReorderAtRef.current < 300) return;
+                  // DEBUG temporal: confirmar que el click llega al handler.
+                  // Si el bug persiste, abre DevTools (o chrome://inspect
+                  // desde PC) y mira estos logs para saber qué se está
+                  // disparando y qué no.
+                  console.log('[debug] onClick carta=', c.id, 'isDragging=', isDraggingThis);
+                  e.preventDefault();
+                  onPlay(c, pointerDownRectRef.current);
+                }}
                 onPointerDown={(e) => {
                   // Permitimos drag-to-reorder SIEMPRE, incluso cuando no es
                   // nuestro turno: la mano es del jugador y puede organizarla
                   // cuando quiera. El click-para-jugar sigue bloqueado vía
                   // onPlay (que comprueba isMyTurn y la legalidad).
                   if (!legalSet.has(c.id)) return;
-                  e.preventDefault();
-                  (e.currentTarget as Element).setPointerCapture(e.pointerId);
+                  // Importante: NO hacemos `e.preventDefault()` ni
+                  // `setPointerCapture` aquí. En algunos navegadores mobile
+                  // (iOS Safari, ciertos Android) el preventDefault sobre
+                  // pointerdown BLOQUEA el pointerup y/o el click sintético
+                  // posterior, dejando la carta "muerta" (hay que volver a
+                  // pulsar). Solo capturamos el pointer / prevenimos default
+                  // cuando detectamos movimiento real (en onPointerMove).
+                  //
                   // Capturamos el rect AHORA, antes de que React aplique
                   // cualquier lift inline (-6px). Es el origen del FLIP si
-                  // finalmente el usuario solo hizo tap: medimos desde el
-                  // punto donde vio la carta, sin "saltar" a otro sitio
-                  // cuando se quite el transform al pointerup.
+                  // finalmente el usuario solo hizo tap.
                   const el = slotRefs.current[idx];
                   pointerDownRectRef.current = el ? el.getBoundingClientRect() : null;
                   dragRef.current = { idx, startX: e.clientX, pointerId: e.pointerId };
@@ -900,88 +1027,77 @@ export function Game() {
                   const d = dragRef.current;
                   if (!d || d.idx !== idx) return;
                   const offsetX = e.clientX - d.startX;
-                  // Activamos el lift (-6px) Y el translateX solo cuando
-                  // el movimiento cruza el umbral de reorder. Para
-                  // movimientos por debajo, no renderizamos nada: el slot
-                  // sigue en su sitio y, si el usuario suelta, onPlay
-                  // usará el rect natural capturado en pointerdown.
+                  // Threshold original (5 px). Con el lock `pendingAction`
+                  // en el store, un tap con movimiento leve que active
+                  // dragVisual NO puede provocar doble click: el primer
+                  // onPlay ya marcó pending=true y el segundo sendAction
+                  // se descarta.
                   const DRAG_THRESHOLD = 5;
                   if (Math.abs(offsetX) > DRAG_THRESHOLD) {
+                    try {
+                      if (!(e.currentTarget as Element).hasPointerCapture(d.pointerId)) {
+                        (e.currentTarget as Element).setPointerCapture(d.pointerId);
+                      }
+                    } catch { /* ignore */ }
+                    e.preventDefault();
                     setDragVisual({ idx, offsetX });
                   }
                 }}
                 onPointerUp={(e) => {
+                  // Si fue un drag (dragVisual activo), hacemos el reorder.
+                  // Si fue un tap puro, NO hacemos nada aquí: el navegador
+                  // sintetizará un `click` que disparará `onPlay` vía el
+                  // handler de `onClick` (que detecta `isDraggingThis` y
+                  // sale si estamos arrastrando).
                   const d = dragRef.current;
-                  dragRef.current = null;
                   setDragVisual(null);
-                  if (!d || d.idx !== idx || !handRef.current) return;
+                  if (!d || d.idx !== idx) return;
+                  dragRef.current = null;
                   try { (e.currentTarget as Element).releasePointerCapture(d.pointerId); } catch { /* ignore */ }
+                  if (!handRef.current) return;
                   const offsetX = e.clientX - d.startX;
+                  // Mismo threshold que `onPointerMove` (5 px).
                   const DRAG_THRESHOLD = 5;
-                  if (Math.abs(offsetX) > DRAG_THRESHOLD) {
-                    // Regla con centros como ancla (simétrica izq/der):
-                    // 1) Encontrar la carta no-arrastrada cuyo CENTRO esté más
-                    //    cerca del cursor.
-                    // 2) Si `cursorX < center` → cae ANTES de esa carta.
-                    // 3) Si `cursorX >= center` → cae DESPUÉS (= antes de la
-                    //    siguiente carta, o al final si es la última).
-                    // Así, la "mitad izquierda" del slot de cada carta es zona
-                    // de "antes" y la "mitad derecha" es zona de "después":
-                    // arrastras a la izquierda y caes antes; a la derecha y
-                    // caes después, sin saltos inexplicables.
-                    const cursorX = e.clientX;
-                    type SlotInfo = { cardId: string; center: number };
-                    const slots: SlotInfo[] = [];
-                    for (let i = 0; i < slotRefs.current.length; i++) {
-                      if (i === idx) continue; // la arrastrada tiene transform
-                      const el = slotRefs.current[i];
-                      if (!el || !el.isConnected) continue;
-                      const r = el.getBoundingClientRect();
-                      slots.push({
-                        cardId: displayCards[i]!.id,
-                        center: r.left + r.width / 2,
-                      });
-                    }
-                    if (slots.length === 0) {
-                      setDragVisual(null);
-                      dragRef.current = null;
-                      return;
-                    }
-                    // Carta con centro más cercano al cursor.
-                    let bestIdx = 0;
-                    let bestDist = Math.abs(slots[0]!.center - cursorX);
-                    for (let i = 1; i < slots.length; i++) {
-                      const d = Math.abs(slots[i]!.center - cursorX);
-                      if (d < bestDist) {
-                        bestDist = d;
-                        bestIdx = i;
-                      }
-                    }
-                    // ¿Cursor a la izquierda o derecha del centro más cercano?
-                    const insertAt =
-                      cursorX < slots[bestIdx]!.center
-                        ? bestIdx // antes
-                        : bestIdx + 1; // después
-                    // Construir el nuevo orden.
-                    const movedId = displayCards[idx]!.id;
-                    const newOrder: string[] = [];
-                    for (let i = 0; i <= slots.length; i++) {
-                      if (i === insertAt) newOrder.push(movedId);
-                      if (i < slots.length) newOrder.push(slots[i]!.cardId);
-                    }
-                    setCustomOrder(newOrder);
-                  } else {
-                    // Tap (sin arrastre significativo) → jugar la carta.
-                    // Pasamos el RECT capturado en `pointerdown` (la posición
-                    // natural de la carta al pulsar, sin lift inline). Eso
-                    // garantiza que la animación FLIP empieza exactamente
-                    // desde donde el usuario vio la carta, sin "saltos" al
-                    // quitar el `translateY(-6px)` que se aplicaría si
-                    // midiera el rect ahora. Si fue un drag suficientemente
-                    // largo (>= DRAG_THRESHOLD), se hizo `setCustomOrder`
-                    // arriba y nunca llegamos aquí.
-                    onPlay(c, pointerDownRectRef.current);
+                  if (Math.abs(offsetX) <= DRAG_THRESHOLD) return; // tap: lo maneja onClick
+                  // Drag: hacer reorder con regla de centros (mitad izq/der).
+                  const cursorX = e.clientX;
+                  type SlotInfo = { cardId: string; center: number };
+                  const slots: SlotInfo[] = [];
+                  for (let i = 0; i < slotRefs.current.length; i++) {
+                    if (i === idx) continue; // la arrastrada tiene transform
+                    const el = slotRefs.current[i];
+                    if (!el || !el.isConnected) continue;
+                    const r = el.getBoundingClientRect();
+                    slots.push({
+                      cardId: displayCards[i]!.id,
+                      center: r.left + r.width / 2,
+                    });
                   }
+                  if (slots.length === 0) return;
+                  // Carta con centro más cercano al cursor.
+                  let bestIdx = 0;
+                  let bestDist = Math.abs(slots[0]!.center - cursorX);
+                  for (let i = 1; i < slots.length; i++) {
+                    const d = Math.abs(slots[i]!.center - cursorX);
+                    if (d < bestDist) {
+                      bestDist = d;
+                      bestIdx = i;
+                    }
+                  }
+                  // ¿Cursor a la izquierda o derecha del centro más cercano?
+                  const insertAt =
+                    cursorX < slots[bestIdx]!.center
+                      ? bestIdx // antes
+                      : bestIdx + 1; // después
+                  // Construir el nuevo orden.
+                  const movedId = displayCards[idx]!.id;
+                  const newOrder: string[] = [];
+                  for (let i = 0; i <= slots.length; i++) {
+                    if (i === insertAt) newOrder.push(movedId);
+                    if (i < slots.length) newOrder.push(slots[i]!.cardId);
+                  }
+                  setCustomOrder(newOrder);
+                  lastReorderAtRef.current = Date.now();
                 }}
                 onPointerCancel={() => {
                   dragRef.current = null;
@@ -1359,6 +1475,15 @@ export function Game() {
           el badge flotante intermedio lo quitamos porque no aportaba info
           que ya no estuviera visible. */}
 
+      {/* Banner de error: aparece abajo a la izquierda cuando llega un
+          `ERROR` del server (o de validación local). Auto-hide a 3 s.
+          Antes los errores se acumulaban en `error` pero Game.tsx no
+          los pintaba — el usuario no se enteraba de que el server había
+          rechazado algo. Con este banner + el lock `pendingAction`, si
+          el server rechaza una acción el usuario lo ve y entiende por
+          qué su click "no funcionó". */}
+      <ErrorBanner />
+
       {/* Anuncio de cante: aparece centrado al declararse un cante nuevo
           (SING_CANTE llega al servidor → llega al cliente → este overlay
           lo muestra durante 3,5 s y se va solo). `key={canteAnnouncement.uid}`
@@ -1451,6 +1576,58 @@ function SwapCardInline({ card }: { card: Card }) {
     <span className="swap-announcement-card" data-suit={card.suit}>
       {rankLabel} de <SuitGlyph suit={card.suit} size={14} />
     </span>
+  );
+}
+
+/**
+ * Botón "Invitar amigo" en la topbar del juego.
+ *
+ * Muestra el código de sala (4 letras) en grande y un tooltip con la URL
+ * completa lista para copiar (`https://host/#ABCD`). Al pulsar el botón
+ * (o el chip del código), copia la URL al portapapeles. Si la copia
+ * falla (HTTP sin contexto seguro, navegador viejo), muestra un prompt
+ * con la URL para que el usuario la copie a mano.
+ *
+ * En móvil el ancho es escaso: el chip del código ya es el "botón
+ * principal" (muestra + copia al pulsar). En escritorio mostramos
+ * también la URL inline para que sea fácil de leer.
+ */
+function InviteButton({ code }: { code: string | null }) {
+  const [copied, setCopied] = useState(false);
+  const shareUrl =
+    code !== null
+      ? `${window.location.origin}/#${code}`
+      : null;
+
+  const copy = async () => {
+    if (!shareUrl) return;
+    try {
+      // API moderna: requiere contexto seguro (HTTPS o localhost).
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        // Fallback para HTTP sin clipboard API: prompt con la URL.
+        window.prompt('Copia el enlace:', shareUrl);
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      window.prompt('No se pudo copiar. Cópialo manualmente:', shareUrl);
+    }
+  };
+
+  if (!code) return null;
+
+  // En móvil NO mostramos "Invitar" ni la URL inline: el chip del código
+  // ya es el botón principal (tocar copia la URL completa al portapapeles).
+  // En escritorio sí mostramos "Invitar" como hint visual.
+  return (
+    <div className="invite" onClick={copy} role="button" tabIndex={0}
+         aria-label="Invitar amigo a esta sala"
+         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') copy(); }}>
+      <span className="invite-code" aria-hidden="true">{code}</span>
+      <span className="invite-hint">{copied ? '¡Copiado!' : 'Invitar'}</span>
+    </div>
   );
 }
 
@@ -1586,6 +1763,115 @@ function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you:
   );
   for (const c of cards) set.add(c.id);
   return set;
+}
+
+/**
+ * Pantalla de lobby: se muestra mientras el servidor espera a que se unan
+ * más humanos antes de repartir. Sale sola cuando llega el primer VIEW.
+ *
+ * Muestra cuántos asientos están conectados (los bots placeholder NO
+ * cuentan) y una cuenta atrás que refleja `lobby.endsAt` enviado por el
+ * servidor. Cuando termina, el server rellena los huecos con bots y emite
+ * el primer VIEW.
+ */
+function LobbyScreen(): JSX.Element {
+  const lobby = useGame((s) => s.lobby)!;
+  const roomCode = useGame((s) => s.roomCode);
+  const leave = useGame((s) => s.leave);
+  // Re-render cada 100ms mientras hay endsAt, para que la cuenta atrás
+  // baje visualmente.
+  const [now, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    if (lobby.endsAt === null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(id);
+  }, [lobby.endsAt]);
+  const remainingMs = lobby.endsAt !== null ? Math.max(0, lobby.endsAt - now) : 0;
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  const filled = Math.min(lobby.seatsConnected, lobby.seatsTotal);
+  const empty = lobby.seatsTotal - filled;
+  return (
+    <div className="game lobby-screen">
+      <header className="topbar">
+        <div className="room-code">
+          <span className="room-code-label">Sala</span>
+          <b className="room-code-value">{roomCode ?? '????'}</b>
+        </div>
+        <button className="btn" onClick={leave} type="button">
+          Salir
+        </button>
+      </header>
+      <div className="lobby-card">
+        <h1 className="lobby-title">Esperando jugadores…</h1>
+        <p className="lobby-subtitle">
+          Comparte el código con tu compañero para que se una. Si nadie
+          viene, los huecos se rellenarán con bots y la partida empezará
+          automáticamente.
+        </p>
+        <div className="lobby-count">
+          <b>{filled}</b>
+          <span className="lobby-count-sep">/</span>
+          <span>{lobby.seatsTotal}</span>
+          <span className="lobby-count-label">conectados</span>
+        </div>
+        <div className="lobby-bar">
+          <div
+            className="lobby-bar-fill"
+            style={{
+              width: lobby.endsAt !== null
+                ? `${(remainingMs / lobby.windowMs * 100).toFixed(1)}%`
+                : '100%',
+            }}
+          />
+        </div>
+        {lobby.endsAt !== null && (
+          <p className="lobby-countdown">
+            Empezando en <b>{remainingSec}s</b>
+            {empty > 0 && (
+              <> · faltan {empty} jugador{empty === 1 ? '' : 'es'}</>
+            )}
+          </p>
+        )}
+        {lobby.endsAt === null && empty > 0 && (
+          <p className="lobby-countdown">
+            Esperando a {empty} jugador{empty === 1 ? '' : 'es'}…
+          </p>
+        )}
+        {lobby.endsAt === null && empty === 0 && (
+          <p className="lobby-countdown">Mesa llena · empezando…</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Banner flotante de errores del server. Se muestra durante 3 s cuando
+ * el cliente recibe un mensaje `ERROR` (por ejemplo, el server rechazó
+ * una acción por ILLEGAL_ACTION). Antes los errores se acumulaban en
+ * `state.error` pero no se pintaban en la UI durante una partida, así
+ * que el usuario no sabía qué había pasado.
+ */
+function ErrorBanner(): JSX.Element | null {
+  const lastError = useGame((s) => s.lastError);
+  // Re-render cada 100 ms mientras hay error reciente, para que el
+  // banner se oculte exactamente a los 3 s sin intervención.
+  const [now, setNow] = useState<number>(Date.now());
+  useEffect(() => {
+    if (lastError === null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(id);
+  }, [lastError !== null]);
+  if (lastError === null) return null;
+  const ageMs = now - lastError.ts;
+  const remainingMs = Math.max(0, 3000 - ageMs);
+  if (remainingMs === 0) return null;
+  return (
+    <div className="error-banner" role="alert" aria-live="assertive">
+      <span className="error-banner-icon" aria-hidden="true">⚠</span>
+      <span className="error-banner-message">{lastError.message}</span>
+    </div>
+  );
 }
 
 /**

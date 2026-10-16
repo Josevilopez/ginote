@@ -3,9 +3,9 @@ import { newRoomCode } from './roomCodes.js';
 
 const rooms = new Map<string, Room>();
 
-export function createRoomWithBots(): Room {
+export function createRoomWithBots(opts: { fillWithBots?: boolean } = {}): Room {
   const code = newRoomCode(4);
-  const room = createRoom({ code, fillWithBots: true });
+  const room = createRoom({ code, fillWithBots: opts.fillWithBots ?? false });
   rooms.set(code, room);
   return room;
 }
