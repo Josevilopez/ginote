@@ -8,6 +8,30 @@ import { canSwapSevenWithTrump } from './rules.js';
 const SEATS_4: readonly Seat[] = [0, 1, 2, 3] as const;
 
 /**
+ * Simula el resultado del draw() de esta baza SIN mutar el estado.
+ * Devuelve el número total de cartas (mazo + trumpCard) que quedarán
+ * DISPONIBLES para repartir en la siguiente baza. Se usa para
+ * detectar el aviso "¡Vamos de últimas!" una baza antes de que el
+ * mazo se vacíe (Sprint 2.18): si `simulateDrawPost` deja 4 cartas,
+ * la siguiente baza agotará el stock y entramos en arrastre.
+ *
+ * La mecánica del `draw()` real es popear del mazo hasta vaciarlo y,
+ * una vez vacío, coger el trumpCard. Si el mazo se vacía con menos
+ * de 4 pops, las siguientes iteraciones consumen el trumpCard. Si
+ * tampoco eso alcanza, las cartas restantes se quedan como están.
+ */
+function simulateDrawPost(deckLen: number, trumpCard: Card | null): number {
+  let m = deckLen;
+  let t: Card | null = trumpCard;
+  for (let i = 0; i < 4; i++) {
+    if (m > 0) m--;
+    else if (t !== null) t = null;
+    else break;
+  }
+  return m + (t !== null ? 1 : 0);
+}
+
+/**
  * Suma los puntos de las cartas de la baza (sin incluir 10 de últimas).
  */
 function puntosBaza(cards: readonly Card[], rules: GameState['rules']): number {
@@ -117,8 +141,47 @@ export function apply(state: GameState, action: Action): GameEvent[] {
       const winner = winnerPlay.seat;
       const trickPoints = puntosBaza(state.trick.plays.map((p) => p.card), state.rules);
       const allHandsEmpty = SEATS_4.every((s) => state.hands[s]!.length === 0);
+      // Dos conceptos independientes (Sprint 2.14 — clarification del usuario):
+      //
+      // 1. "¡Vamos de últimas!" / ENTRADA EN ARRASTRE (baza 4ª aprox.).
+      //    Aviso de transbordo: tras el draw() de la SIGUIENTE baza, ya
+      //    no quedan cartas para repartir (mazo+trunfo = 0). La mano
+      //    entra en arrastre (6 bazas sin robo). NO da puntos extra.
+      //    El usuario pidió (Sprint 2.18) que el aviso se emita al
+      //    RESOLVER LA BAZA 3, NO al resolver la baza 4: cuando las
+      //    cartas de la baza 3 terminan de jugarse y se hace el draw,
+      //    post-draw quedan 4 cartas (3 mazo + 1 trumpCard) y la
+      //    siguiente baza agotará el stock. Por eso lo calculamos en
+      //    `simulatedPostDraw` (no mutamos el estado del motor — el
+      //    `draw()` real ocurrirá tras el PASS posterior del ganador).
+      //
+      // 2. "10 de últimas" / BONUS (baza 10ª). El equipo que gana la
+      //    ÚLTIMA BAZA TOTAL de la mano (cuando las manos quedan
+      //    vacías Y no quedan cartas por robar) suma los 10 puntos
+      //    extra de `lastTrickBonus`. Se detecta con la condición
+      //    clásica `allHandsEmpty && deck=0 && trumpCard=null`.
+      //
+      // Antiguamente fusionaba ambos (Sprint 2.14a): aplicaba el bonus
+      // en baza 4 Y cerraba la mano en baza 4. El flow test cazó la
+      // regresión y revertimos. Sprint 2.18 también corrige la
+      // condición pre-draw por una simulación post-draw para que el
+      // aviso salte una baza antes (en la 3).
+      const simulatedPostDraw = simulateDrawPost(state.deck.length, state.trumpCard);
+      const isArrastreEntrance = simulatedPostDraw > 0 && simulatedPostDraw <= 4;
+      // "10 de últimas" — bonus al ganador de la última baza total de
+      // la mano. Esta condición es la que activa el bonus y la que
+      // también (probablemente) cierra la mano.
       const isLastTrick = allHandsEmpty && state.deck.length === 0 && state.trumpCard === null;
       const effectivePoints = isLastTrick ? trickPoints + state.rules.lastTrickBonus : trickPoints;
+      // Anadimos el flag del transbordo al arrastre (baza ~4) para que el
+      // cliente pueda mostrar el aviso "¡Vamos de últimas!" y distinguirlo
+      // del overlay de "10 de últimas" (baza 10, que muestra el +10).
+      const trickResolvedPayload = {
+        winner,
+        points: effectivePoints,
+        isLastTrick,
+        isArrastreEntrance,
+      };
       const team: Team = teamOf(winner);
       // Sumar al running trickPoints (esta mano).
       state.trickPoints[team] = (state.trickPoints[team] ?? 0) + effectivePoints;
@@ -144,8 +207,20 @@ export function apply(state: GameState, action: Action): GameEvent[] {
       // el MATCH_OVER solo se difunde al final natural de la mano (lo hace
       // el servidor en `emitAfterChange` cuando phase='finished'). Esto
       // preserva la tradición de "en idas se va a la mesa completa".
+      //
+      // Sprint 2.14a — IMPORTANTÍSIMO: el cierre de la mano (`handEnds`)
+      // y el bonus "10 de últimas" (`applyLastTrickBonus`) son COSAS
+      // DISTINTAS:
+      //  - El bonus se aplica en la baza 4 (cuando se agota el mazo +
+      //    triunfo) — `applyLastTrickBonus`.
+      //  - La mano termina cuando las manos quedan vacías y no quedan
+      //    cartas, o si el match se cortó — `handEnds`.
+      // Antes mi cambio los fusionaba (usaba `pendingCards <= 4` también
+      // para `handEnds`), lo que cerraba la mano a la 4ª baza en lugar
+      // de la 10ª. Bug detectado por el test `flow.test.ts`.
       const matchCutShort = state.matchEnded && state.vuelta > 1;
-      const handEnds = isLastTrick || matchCutShort;
+      const allCardsGone = allHandsEmpty && state.deck.length === 0 && state.trumpCard === null;
+      const handEnds = allCardsGone || matchCutShort;
 
       state.finishedTricks = [
         ...state.finishedTricks,
@@ -154,9 +229,18 @@ export function apply(state: GameState, action: Action): GameEvent[] {
           plays: state.trick.plays,
           trickPoints: effectivePoints,
           hadLastTrick: handEnds,
+          isArrastreEntrance,
+          // Sprint 2.22: distinguimos cierre de mano (`hadLastTrick`) de
+          // "última baza REAL de la mano" (`isLastTrick`). El primero
+          // también es true en un cierre anticipado por match cut; el
+          // segundo solo cuando la baza actual es la 10ª y se aplican
+          // los 10 puntos extra del guiñote. Esto evita que el cliente
+          // pinte el overlay "¡10 de últimas!" cuando el corte no es
+          // por la baza final (sino por haber cruzado el umbral antes).
+          isLastTrick,
         },
       ];
-      events.push({ type: 'TRICK_RESOLVED', winner, points: effectivePoints, isLastTrick: handEnds });
+      events.push({ type: 'TRICK_RESOLVED', ...trickResolvedPayload });
 
       if (handEnds) {
         // Mano terminada — bien porque era la última baza, bien porque

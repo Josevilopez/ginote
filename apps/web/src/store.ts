@@ -17,8 +17,13 @@ interface State {
 
   // Juego
   view: PlayerView | null;
-  /** Overlay de baza recién resuelta (se quita a los ~1.5s por el componente). */
-  justResolved: { winner: number; plays: { seat: number; card: Card }[]; points: number; isLastTrick: boolean } | null;
+  /**
+   * Overlay de baza recién resuelta (se quita a los ~2,5s por el
+   * componente). Sprint 2.16: añade `isArrastreEntrance` para distinguir
+   * "¡Vamos de últimas!" (aviso en baza ~4) de "10 de últimas" (bonus
+   * en baza 10, `isLastTrick=true`).
+   */
+  justResolved: { winner: number; plays: { seat: number; card: Card }[]; points: number; isLastTrick: boolean; isArrastreEntrance: boolean } | null;
   gameOver: {
     handPoints: { '0': number; '1': number };
     score?: PartidaScore | undefined;
@@ -489,6 +494,7 @@ function connect(
           plays: msg.plays as { seat: number; card: Card }[],
           points: msg.points,
           isLastTrick: msg.isLastTrick,
+          isArrastreEntrance: msg.isArrastreEntrance,
         },
         // TRICK_JUST_RESOLVED puede llegar DESPUÉS de un VIEW (cuando la
         // baza se resuelve en medio del ciclo de bots), pero también es

@@ -444,7 +444,10 @@ function autoPlayForHuman(room: Room, seat: Seat): void {
  * recién resuelta, para que el cliente muestre un overlay con las 4 cartas
  * durante un instante.
  */
-function broadcastTrickResolved(room: Room, trick: { winner: Seat; plays: readonly Play[]; trickPoints: number; hadLastTrick: boolean }): void {
+function broadcastTrickResolved(
+    room: Room,
+    trick: { winner: Seat; plays: readonly Play[]; trickPoints: number; hadLastTrick: boolean; isArrastreEntrance: boolean; isLastTrick: boolean },
+  ): void {
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1) {
       p.ws.send(JSON.stringify({
@@ -452,7 +455,14 @@ function broadcastTrickResolved(room: Room, trick: { winner: Seat; plays: readon
         winner: trick.winner,
         plays: trick.plays.map((pl) => ({ seat: pl.seat, card: pl.card })),
         points: trick.trickPoints,
-        isLastTrick: trick.hadLastTrick,
+        // Sprint 2.22: usar `trick.isLastTrick` (calculado por el motor:
+        // true SOLO si la baza es la última REAL de la mano) en lugar
+        // de `trick.hadLastTrick` (que también es true en cierres
+        // anticipados por match cut). Esto evita que el cliente pinte
+        // el overlay "¡10 de últimas!" en una baza intermedia cuando
+        // se cortó la mano por alcanzarse el umbral temprano.
+        isLastTrick: trick.isLastTrick,
+        isArrastreEntrance: trick.isArrastreEntrance,
       } satisfies ServerMessage));
     }
   }
@@ -553,6 +563,13 @@ export async function stepBots(
   room: Room,
   delayMs = 1000,
   trickPauseMs = 2500,
+  // Sprint 2.19: pausa extra larga cuando la baza resuelta es la
+  // última de la mano. Da tiempo al usuario a leer la jugada final
+  // (incluido el "10 de últimas" si aplica) antes de que se emita
+  // el GAME_OVER y le tape el panel de resumen. Antes era 2,5 s
+  // para todas las bazas — el usuario reportó que la última se
+  // sentía demasiado rápida al pasar al resumen.
+  lastTrickPauseMs = 7000,
 ): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   let acted = false;
@@ -582,6 +599,11 @@ export async function stepBots(
     // del 7 cuando lo hacías TÚ, no cuando lo hacía un bot.
     const botAction = heuristicBotAction(room.state, turn);
     if (!botAction) return acted;
+    // Sprint 2.15+: log adicional para confirmar qué decidió el bot
+    // ante el filtro del motor. Útil cuando un usuario reporta "el bot
+    // hizo un cambio ilegal": aquí vemos literalmente qué acción
+    // eligió la heurística y por qué.
+    console.log(`[BOT] code=${room.code} seat=${turn} action=${JSON.stringify(botAction)} trumpCard=${room.state.trumpCard?.id ?? 'null'}`);
     const ok = applyActionWithResolveEvent(room, turn, botAction);
     if (!ok) return acted;
     acted = true;
@@ -592,7 +614,12 @@ export async function stepBots(
       // Si la mano termina, no emitimos GAME_OVER todavía: lo haremos
       // después de la pausa para que el cliente vea la última baza.
       emitAfterChange(room, { skipGameOver: last.hadLastTrick });
-      await sleep(trickPauseMs);
+      // Sprint 2.19: pausa extra larga si la baza resuelta es la última
+      // de la mano, para que el jugador pueda leer la jugada final
+      // (incluido el "10 de últimas" si aplica) antes de que aparezca
+      // el GAME_OVER.
+      const pause = last.hadLastTrick ? lastTrickPauseMs : trickPauseMs;
+      await sleep(pause);
       if (last.hadLastTrick) {
         emitAfterChange(room); // ahora sí, con GAME_OVER
         // Auto-cadencia: repartimos la siguiente mano tras una pausa

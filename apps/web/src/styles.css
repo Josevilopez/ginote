@@ -976,14 +976,50 @@ body {
   .trick-card.pos-3 { transform: translate(calc(var(--card-w-baza) * -0.7), 24px) rotate(-12deg); }
 }
 
-/* Carta ganadora del truco: la elevamos un poco sobre el resto y la
-   traemos al frente con z-index. Sin outline, sin glow, sin pulse:
-   el usuario ve claramente cuál es la ganadora por tamaño y posición,
-   sin necesidad de un marco que distrae del resto del truco. */
+/* Carta ganadora del truco: la traemos al frente con z-index y le
+   ponemos un resplandor en el BORDE (mismo patrón de animación que la
+   carta recién robada, .is-newly-drawn, pero dorado). Sin scale ni
+   translate: que crezca el truco o se "salte" del sitio. La carta
+   mantiene su tamaño y posición y solo brilla el borde, superpuesta
+   a las otras por el z-index. Sprint 2.13.
+
+   El `animation-delay: 450ms` cubre la duración del FLIP
+   (`DURATION_MS = 380ms` en `Game.tsx`) con un margen de 70ms. Si la
+   carta ganadora fue la 4ª en llegar al centro (la más tardía), el
+   resplandor arranca JUSTO cuando termina su FLIP. Si ganó la 1ª/2ª/3ª
+   (que llegaron antes), hay 450ms de margen gratuito pero el usuario
+   lo percibe como "todas las cartas ya están colocadas". Sprint 2.14.
+
+   Sprint 2.19: el ramp-up (activación) ahora es más GRADUAL. Antes el
+   box-shadow saltaba de transparente a su pico máximo en el frame 0%
+   (con `ease-out` eso se nota como un golpe brusco). Repartimos el
+   ramp-up en dos escalones suaves (35% → 60% → 100%) y usamos
+   `cubic-bezier(0.4, 0, 0.2, 1)` (ease-in-out) para que ni la subida
+   ni la bajada se sientan a tirones. Duración extendida a 2.1 s
+   para que el ojo pueda seguir el incremento. El desvanecimiento
+   (60% → 100%) sigue siendo gradual — eso ya estaba bien, queda
+   igual. */
 .trick-card.winning { z-index: 3; }
 .trick-card.winning .card-img {
-  transform: scale(1.25);
-  transition: transform 0.4s ease-out;
+  border-radius: 12px;
+  animation: winning-glow 2.1s cubic-bezier(0.4, 0, 0.2, 1) 450ms forwards;
+}
+@keyframes winning-glow {
+  0% {
+    box-shadow: 0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+  35% {
+    box-shadow: 0 0 12px 2px var(--accent),
+      0 0 22px 4px rgba(232, 196, 107, 0.40);
+  }
+  60% {
+    box-shadow: 0 0 18px 4px var(--accent),
+      0 0 32px 6px rgba(232, 196, 107, 0.55);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 /* Carta recién ROBADA del mazo por el jugador. Highlight breve (1,5s)
@@ -1449,6 +1485,57 @@ body {
   16%  { transform: translateX(-50%) translateY(0)                 scale(1);    }
   88%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1);    }
   100% { opacity: 0; transform: translateX(-50%) translateY(-4px)  scale(1);    }
+}
+
+/* Aviso "¡Vamos de últimas!" (Sprint 2.16 / 2.18 / 2.23 con retardo).
+   Aparece en la baza 3 cuando tras el draw quedan ≤ 4 cartas para
+   repartir en la siguiente (la 4ª será la última con cartas). Borde
+   gris (aviso informativo, no evento de puntuación). El cliente
+   retrasa su aparición `arrastreDelayMs = 2000 ms` (Sprint 2.23)
+   para que el jugador primero vea la baza resuelta + el glow gradual.
+   Misma animación `last-trick-announce` pero más corta (2,8 s). */
+.arrastre-announcement {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  transform: translateX(-50%);
+  z-index: 9;
+  pointer-events: none;
+  padding: 14px 22px 12px;
+  border-radius: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.32);
+  background: rgba(15, 23, 42, 0.88);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  text-align: center;
+  max-width: 88%;
+  min-width: 220px;
+  animation: last-trick-announce 2.8s ease-in-out forwards;
+}
+.arrastre-announcement .arrastre-title {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #f8fafc;
+  line-height: 1.1;
+}
+.arrastre-announcement .arrastre-sub {
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 6px;
+  color: var(--fg-mute);
+  letter-spacing: 0.02em;
+}
+.arrastre-announcement .arrastre-sub b {
+  color: var(--fg);
+  font-weight: 700;
+}
+@keyframes last-trick-announce {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(-16px) scale(0.86); }
+  8%   { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1.06); }
+  14%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1);    }
+  85%  { opacity: 1; transform: translateX(-50%) translateY(0)     scale(1);    }
+  100% { opacity: 0; transform: translateX(-50%) translateY(8px)   scale(0.98); }
 }
 
 /* Cantes fijos por jugador: una fila de chips pequeños bajo el nombre de

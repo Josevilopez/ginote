@@ -327,6 +327,49 @@ export function Game() {
     return () => window.clearTimeout(id);
   }, [canteAnnouncement?.uid]);
 
+  // ───────────── Aviso "¡Vamos de últimas!" (Sprint 2.16/2.18, retardo 2.23) ─────────────
+  // Cuando el servidor emite `TRICK_JUST_RESOLVED { isArrastreEntrance:
+  // true }` significa que el draw de esta baza dejó el mazo+trunfo a 0
+  // — entramos en arrastre (6 bazas sin robo). NO se reparten más
+  // cartas. Este aviso es solo informativo (sin +10 puntos); el
+  // bonus de "10 de últimas" ya NO se muestra en pantalla (Sprint
+  // 2.23: el usuario prefiere no pintar overlay en la baza 10 final
+  // para que el game-over panel salga limpio).
+  const [arrastreAnnouncement, setArrastreAnnouncement] = useState<{
+    uid: number;
+    winner: Seat;
+    playerName: string;
+    isMine: boolean;
+  } | null>(null);
+  // Sprint 2.23: el usuario pidió un pequeño RETARDO antes de pintar
+  // el cartel para que se vea primero la jugada (glow de la ganadora
+  // durante el FLIP del truco). 2 s es suficiente: la baza queda
+  // resuelta con glow pleno durante ese tiempo y luego entra el
+  // overlay.
+  const arrastreDelayMs = 2000;
+  useEffect(() => {
+    if (!justResolved || !justResolved.isArrastreEntrance) return;
+    if (you === null) return;
+    const winner = justResolved.winner as Seat;
+    const playerName = seatNames[winner] || SEAT_LABELS[winner];
+    const isMine = (winner % 2) === (you % 2);
+    const id = window.setTimeout(() => {
+      setArrastreAnnouncement({
+        uid: performance.now(),
+        winner,
+        playerName,
+        isMine,
+      });
+    }, arrastreDelayMs);
+    return () => window.clearTimeout(id);
+  }, [justResolved]);
+  // Auto-clear a los 2,8 s tras pintar (timer del cartel en pantalla).
+  useEffect(() => {
+    if (!arrastreAnnouncement) return;
+    const id = window.setTimeout(() => setArrastreAnnouncement(null), 2800);
+    return () => window.clearTimeout(id);
+  }, [arrastreAnnouncement?.uid]);
+
   // Highlight de la carta ganadora desacoplado del timer de `justResolved`.
   // El bug que queríamos evitar: `justResolved` se limpia por su timer de
   // 4s, pero las cartas de la baza siguen renderizadas hasta que el
@@ -1605,6 +1648,30 @@ export function Game() {
           </div>
         </div>
       )}
+
+      {/* Aviso "¡Vamos de últimas!" (Sprint 2.16). Se muestra en la
+          baza 3 cuando tras el draw quedan ≤ 4 cartas para repartir
+          en la siguiente (la 4ª será la última con cartas). */}
+      {arrastreAnnouncement && (
+        <div
+          key={arrastreAnnouncement.uid}
+          className="arrastre-announcement"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="arrastre-title">¡Vamos de últimas!</div>
+          <div className="arrastre-sub">
+            Se acaba el mazo. De aquí en adelante <b>arrastre</b>: gana
+            quien tire la <b>baza 10</b> y se lleva 10 puntos extra.
+          </div>
+        </div>
+      )}
+
+      {/* El overlay "¡10 de últimas!" se ha retirado definitivamente en
+          Sprint 2.23 — el usuario prefiere que el game-over panel salga
+          limpio al final, sin un cartel intermedio. El bonus de +10
+          sigue aplicándose a los puntos en el motor (`lastTrickBonus`
+          en el `apply`); el marcador lo refleja al pasar al resumen. */}
     </div>
   );
 }

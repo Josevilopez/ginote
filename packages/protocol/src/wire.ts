@@ -113,6 +113,16 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     plays: z.array(z.object({ seat: z.number().int().min(0).max(3), card: z.unknown() })),
     points: z.number().int(),
     isLastTrick: z.boolean(),
+    /**
+     * Sprint 2.16: separación de conceptos del guiñote. `true` cuando
+     * esta baza agota las cartas para repartir (mazo + triunfo <= 4
+     * antes del draw) — equivale a "¡Vamos de últimas!" en el sentido
+     * de aviso de transbordo a arrastre. NO confundir con `isLastTrick`:
+     * en una mano típica, `isArrastreEntrance` salta en la 4ª baza y
+     * `isLastTrick` en la 10ª (última baza total de la mano, la que se
+     * lleva el bonus "10 de últimas").
+     */
+    isArrastreEntrance: z.boolean(),
   }),
   z.object({
     type: z.literal('MATCH_OVER'),

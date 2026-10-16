@@ -29,6 +29,27 @@ export interface FinishedTrick {
   readonly winner: Seat;
   readonly plays: readonly Play[];
   readonly trickPoints: number; // puntos de las cartas de la baza
+  /**
+   * Sprint 2.16: separamos "¡Vamos de últimas!" (transbordo a arrastre,
+   * baza ~4 cuando se agotan las cartas para repartir) de "10 de
+   * últimas" (baza 10, la última total de la mano, lleva bonus).
+   * `isArrastreEntrance=true` en la baza en la que el draw siguiente
+   * deja mazo+trunfo a 0; el cliente pinta entonces el aviso "¡Vamos
+   * de últimas!". NO confundir con `hadLastTrick` (que refleja el
+   * cierre de la mano).
+   */
+  readonly isArrastreEntrance: boolean;
+  /**
+   * Sprint 2.22: separado de `hadLastTrick`. Es `true` SOLO cuando la
+   * baza actual es la ÚLTIMA BAZA REAL de la mano (baza 10 en el caso
+   * típico: `allHandsEmpty && deck=0 && trumpCard=null`). NO se activa
+   * cuando el `matchCutShort` cierra la mano anticipadamente (es un
+   * corte administrativo por umbral; no hay bonus de "10 de últimas"
+   * en ese caso). El cliente lo usa para decidir si pintar el overlay
+   * "¡10 de últimas! +N puntos". Si vale `false`, el GAME_OVER sale
+   * igualmente pero el overlay se omite.
+   */
+  readonly isLastTrick: boolean;
   readonly hadLastTrick: boolean; // si era la última baza (para sumar 10 de últimas)
 }
 

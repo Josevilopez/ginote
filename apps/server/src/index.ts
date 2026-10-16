@@ -237,6 +237,20 @@ app.register(async (instance) => {
         // ilegibles en el log).
         const short = msg.commandId.slice(0, 8);
         console.log(`[ws-debug] ACTION code=${room.code} seat=${seat} cmdId=${short} action=${JSON.stringify(msg.action)}`);
+        // Sprint 2.15+: log de diagnóstico para el bug "bot cambia el
+        // 7 por una carta peor". Si alguna vez se ve un SWAP-IN con
+        // trumpCard.rank ∉ {1, 3, 10, 11, 12}, hay un bug en el
+        // filtro. Si NO sale esta línea → el SWAP_SEVEN ilegal ni
+        // siquiera llegó al server (causa más probable: el bot/humano
+        // ya había enviado otro flow, y lo que el usuario vio fue
+        // otra cosa: un `draw()` del mazo+trunfo). Con esta línea
+        // queda registrado cualquier intento de SWAP con su
+        // trumpCard-context, así podemos reconstruir exactamente qué
+        // pasó la próxima vez que el usuario reporte este caso.
+        if (msg.action.type === 'SWAP_SEVEN') {
+          const tc = room.state?.trumpCard;
+          console.log(`[SWAP-IN] code=${room.code} seat=${seat} trumpCard=${tc ? `${tc.id} (rank=${tc.rank})` : 'null'} trump=${room.state?.trump}`);
+        }
         if (room.seenCommandIds.has(msg.commandId)) return;
         // El humano ha actuado: cancelamos la red de seguridad del
         // auto-play para no encadenar acciones encima de las suyas.
@@ -274,9 +288,15 @@ app.register(async (instance) => {
         emitAfterChange(room, { skipGameOver: wasLastTrick });
 
         if (trickJustResolved) {
-          // Pausa para que se vea la baza resuelta, sea la última o no.
-          // Reducida a 2,5 s para que la "carta ganadora" no se eternice.
-          await new Promise<void>((r) => setTimeout(r, 2500));
+          // Sprint 2.21: pausa extra larga si la baza resuelta es la
+          // última de la mano, para que el jugador pueda leer la jugada
+          // final antes de que aparezca el GAME_OVER. Para bazas no
+          // finales mantenemos la pausa corta (2,5 s) para no ralentizar
+          // las bazas intermedias. Subida de 4,5 s → 7 s en línea con
+          // el retardo del overlay "10 de últimas" del cliente (4 s) y
+          // su duración en pantalla (6 s) = 10 s totales antes del panel.
+          const pause = wasLastTrick ? 7000 : 2500;
+          await new Promise<void>((r) => setTimeout(r, pause));
         } else {
           // Pausa para que el humano vea su carta antes de que el siguiente
           // bot actúe (como en una partida real).
