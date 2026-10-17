@@ -2,7 +2,7 @@
 
 **Goal**: dos personas en dos dispositivos distintos pueden crear una sala, compartir el código, y jugar una mano entera online.
 
-**Estado a fecha 2026-10-16**: pasos 1, 2, 4, 5 implementados; paso 3 pendiente de acción del usuario (instalar `cloudflared`); paso 6 pendiente de smoke e2e real.
+**Estado a fecha 2026-10-17**: ✅ **Sprint cerrado**. Pasos 1, 2, 4, 5, 7 implementados; pasos 3 y 6 cancelados por decisión del usuario (no se va a desplegar con cloudflared ni a hacer smoke e2e real). El motivo: se prioriza producto sobre deploy mientras no haya persistencia ni cuentas. Migración a deploy real se traslada a Sprint 2 (S2-16 Azure Container Apps).
 
 ---
 
@@ -30,17 +30,8 @@
   - `GET /api/*`, `/ws/*`, `/healthz` → handlers normales.
   - `GET /*` (cualquier otra ruta) → SPA fallback a `index.html`.
 
-### 3. Cloudflare Tunnel — ⏳ pendiente (acción del usuario)
-- El usuario debe instalar `cloudflared` en su Windows. Comando sugerido (ejecutar en una PowerShell con permisos de admin):
-  ```
-  winget install --id Cloudflare.cloudflared
-  ```
-- Cuando esté instalado, los comandos para arrancar el túnel son:
-  ```
-  cloudflared tunnel --url http://localhost:3001
-  ```
-  Esto expone el server (Fastify + WS + estáticos) como una URL HTTPS del estilo `https://algo-random.trycloudflare.com`. La WS sobre WSS funciona sobre el mismo túnel.
-- Con la URL generada, accedemos con el navegador y la probamos con un amigo.
+### 3. Cloudflare Tunnel — ❌ cancelado
+- El usuario decidió el 2026-10-17 no instalar `cloudflared` ni hacer smoke e2e real. Se sustituye por el deploy a Azure Container Apps previsto en Sprint 2 (S2-16).
 
 ### 4. CORS — ✅ completado
 - `origin: true` mantenido (refleja el Origin del cliente). Funciona tanto para `localhost:5173` (dev) como para `*.trycloudflare.com` (túnel) sin configuración adicional.
@@ -48,15 +39,10 @@
 
 ### 5. Re-unión por token tras desconexión — ✅ parcial
 - Implementado: cada seat lleva un `token` UUID persistido. Si el cliente reconecta con `?token=<uuid>`, recupera su seat. La lógica ya estaba en `apps/server/src/index.ts:42-48` y `cryptoToken()` en la línea 161.
-- Pendiente (Sprint 2): cuando alguien se desconecta y no vuelve en 30 s, el seat pasa a bot automáticamente. Hoy, un jugador desconectado mantiene su turno y la partida se queda colgada.
+- Pendiente (Sprint 2 — S2-12): bot-takeover definitivo cuando alguien se desconecta y no vuelve en 90 s. Hoy, el server hace auto-play heurístico durante el backoff, pero el seat no se convierte en bot.
 
-### 6. Smoke e2e real — ⏳ pendiente
-- 2 navegadores, 2 dispositivos, mismo código de sala. Una mano completa.
-- Pasos del smoke:
-  1. Usuario A abre la URL del túnel, pulsa "Crear mesa". Aparece código de 4 letras.
-  2. A comparte `https://<url-tunel>/#ABCD` con B.
-  3. B abre la URL, el hash le auto-mete en la sala.
-  4. Ambos juegan. Comprobar que ven las cartas del otro, el orden de los turnos, los cantes, el cambio de 7.
+### 6. Smoke e2e real — ❌ cancelado
+- Bloqueado por la cancelación del paso 3. Se sustituye por el smoke e2e contra el deploy real de Azure Container Apps en Sprint 2 (S2-16 + smoke post-deploy).
 
 ### 7. Documentación — ✅ completado (este fichero)
 
