@@ -65,10 +65,19 @@
 - Falta: al expirar los 90 s, **convertir el seat en bot definitivamente** (cambiar `kind` en `SeatInfo` a `'bot_substitute'` y asignar un bot L1 al slot), reclamar el seat al volver (`seat.reclaim`) queda pendiente para la siguiente baza.
 - ~0.7 d.
 
-### S2-13 — Revancha — ⏳ no empezado
+### S2-13 — Revancha (primera a 3 partidas) — ⏳ no empezado
 - Hoy: el estado post-match dice literalmente "🏆 Match terminado — crea una sala nueva para jugar otra." en `apps/web/src/pages/Game.tsx:1542`.
-- Falta: estado `postgame` en la máquina de la mesa, `rematch.vote` (cliente → server), `rematch.status` (server → cliente) con votos y deadline, transición a nueva partida del mismo coto cuando todos votan sí en 20 s.
-- Decisión de diseño (a cerrar al implementar): "revancha" = **siguiente partida del coto** (mismos seats, repartidor rotado). Distinto de "nueva sala".
+- Diseño (decidido el 2026-10-17): **se elimina el concepto de "coto" del flujo de revancha**. Una "partida" = una mano completa con su score de equipo (≤ 100 puntos). El flujo es:
+  1. Termina una partida.
+  2. El server abre un `postgame` de 20 s con `rematch.status` (votos `pending`/`yes`/`no` por seat).
+  3. Si todos los humanos votan `yes` antes del deadline, se inicia **una nueva partida** (mismos seats, repartidor rotado, mazo nuevo, contadores `matchWins` por equipo incrementados).
+  4. Gana el **primer equipo que llegue a 3 partidas** (`matchWins >= 3`). En ese momento el server emite `matchEnded` y la mesa pasa a `closed`.
+  5. Si algún humano vota `no`, expira el deadline sin unanimidad, o se abandona un seat, la mesa se cierra: `matchEnded` con el equipo que lleve más `matchWins` en ese momento (o empate).
+- Estado de mesa: `forming → playing → postgame → (playing | closed)`.
+- Contador `matchWins: Record<TeamId, number>` en `Room` (inicial 0-0 al crear la sala).
+- Implementación: mensajes `rematch.vote` (cliente → server), `rematch.status` (server → cliente), `matchEnded` (server → cliente).
+- "Coto" como concepto se **reserva para partidas privadas en Sprint 3+** (cuando haya cuentas y lobbies privados con código).
+- Ventana de reconexión: **90 segundos** (lo que ya está implementado en `apps/server/src/index.ts:322-352`). Confirmado el 2026-10-17 — sin debate sobre 30 s vs 90 s.
 - ~1 d.
 
 ### S2-14 — Persistencia Cosmos — ⏳ no empezado
@@ -165,7 +174,7 @@ Paralelizable (mientras otra persona trabaja en otra tarea):
 | `apps/server/src/elo.ts` (nuevo) | Cálculo ELO con K alto/bajo |
 | `apps/server/src/rehydrate.ts` (nuevo) | Carga snapshots no caducados al arrancar |
 | `apps/server/src/index.ts` | Wire cookie, middleware ELO, hooks de Cosmos en fin de mano/partida/SIGTERM |
-| `apps/server/src/room.ts` | Bot-takeover definitivo tras 90 s, estado `postgame`, `rematch.vote` handler |
+| `apps/server/src/room.ts` | Bot-takeover definitivo tras 90 s, estado `postgame`, `matchWins: Record<TeamId, number>`, `rematch.vote`/`rematch.status`/`matchEnded` handlers, máquina `forming → playing → postgame → (playing \| closed)` |
 | `apps/server/src/rooms.ts` | Cola de matchmaking con rating, ventana ±100/+50, formación de equipos |
 | `packages/bots/src/{random,heuristic}.ts` | Exponer `level: 1 \| 2`, delay 600-1500 ms por acción |
 | `packages/bots/tests/stress.ts` (nuevo) | 10 000 partidas bot-vs-bot por modo sin acciones ilegales |
@@ -191,6 +200,7 @@ Paralelizable (mientras otra persona trabaja en otra tarea):
 
 1. Matchmaking puro con rating (cola, ventana, equipos) ya en S3, o lo dejamos como MVP de S2.
 2. Cuentas reales (OAuth o Entra External ID) — Sprint 3 o Sprint 4.
+3. **Partidas privadas con "coto"** (varias partidas con score acumulado tipo malas/buenas) — ¿Sprint 3 o Sprint 4? Reservado tras la decisión del 2026-10-17 de sacarlo del flujo de revancha.
 4. App nativa (React Native o Capacitor) — ¿vale la pena?
 5. i18n es/en — ¿Sprint 3?
 6. Ranking público y ELO visible en UI — ¿Sprint 3?
