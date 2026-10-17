@@ -1342,7 +1342,7 @@ body {
      (la 10 de últimas sigue visible y, en escritorio, sin overlay no se
      interactúa con el panel). */
   pointer-events: none;
-  animation: badge-in 0.3s ease-out;
+  animation: summary-in 0.36s cubic-bezier(0.2, 0.8, 0.2, 1);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7);
   max-width: min(92%, 460px);
   max-height: 90%;
@@ -1824,6 +1824,16 @@ body {
 @keyframes badge-in {
   from { opacity: 0; transform: translateX(-50%) translateY(8px); }
   to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+/* Variante para .game-over-summary (panel centrado en ambos ejes con
+   `transform: translate(-50%, -50%)`). La keyframe `badge-in` no vale
+   aquí porque su `to` deja `translateY(0)`, sin el `-50%` vertical, y
+   al terminar la animación el panel SNAP-ea de vuelta al centrado real
+   (el "golpe" que se veía al subir). Esta keyframe conserva el `-50%`
+   en ambos extremos para que el deslizamiento sea continuo. */
+@keyframes summary-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 14px)); }
+  to   { opacity: 1; transform: translate(-50%, -50%); }
 }
 @keyframes overlay-in {
   from { opacity: 0; transform: scale(0.95); }
