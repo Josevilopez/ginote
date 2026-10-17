@@ -240,8 +240,6 @@ function broadcastView(room: Room): void {
         matchFinished: room.matchFinished,
         matchChampion: room.matchChampion,
       } satisfies ServerMessage));
-      // DEBUG temporal: confirmar que el VIEW se envía al cliente.
-      console.log(`[ws-debug-out] VIEW -> seat=${p.seat} code=${room.code} turn=${view.turn} phase=${view.phase} v=${room.state.version}`);
     }
   }
 }
@@ -562,14 +560,14 @@ function sameAction(
 export async function stepBots(
   room: Room,
   delayMs = 1000,
-  trickPauseMs = 2500,
+  trickPauseMs = 2000,
   // Sprint 2.19: pausa extra larga cuando la baza resuelta es la
   // última de la mano. Da tiempo al usuario a leer la jugada final
   // (incluido el "10 de últimas" si aplica) antes de que se emita
   // el GAME_OVER y le tape el panel de resumen. Antes era 2,5 s
   // para todas las bazas — el usuario reportó que la última se
   // sentía demasiado rápida al pasar al resumen.
-  lastTrickPauseMs = 7000,
+  lastTrickPauseMs = 3000,
 ): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   let acted = false;

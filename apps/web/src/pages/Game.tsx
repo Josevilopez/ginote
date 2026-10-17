@@ -725,8 +725,6 @@ export function Game() {
   //  leerlo dentro del useMemo. La función `computeLegalSet` no es un hook.)
 
   const onPlay = (card: Card, _fromRect: DOMRect | null) => {
-    // DEBUG temporal: ver si onPlay se llama y por qué guarda falla.
-    console.log('[debug] onPlay carta=', card.id, 'isMyTurn=', isMyTurn, 'phase=', view?.phase, 'legal=', legalSet.has(card.id));
     if (!isMyTurn) return;
     if (view.phase === 'winnerWindow') return;
     if (!legalSet.has(card.id)) return;
@@ -1077,11 +1075,6 @@ export function Game() {
                   // tap puro: el navegador sintetiza el click casi a la vez
                   // que el pointerup, y un reorder tarda en commitearse.
                   if (Date.now() - lastReorderAtRef.current < 300) return;
-                  // DEBUG temporal: confirmar que el click llega al handler.
-                  // Si el bug persiste, abre DevTools (o chrome://inspect
-                  // desde PC) y mira estos logs para saber qué se está
-                  // disparando y qué no.
-                  console.log('[debug] onClick carta=', c.id, 'isDragging=', isDraggingThis);
                   e.preventDefault();
                   onPlay(c, pointerDownRectRef.current);
                 }}
@@ -1320,7 +1313,7 @@ export function Game() {
                 ) : s.matchWinner !== null && partidas[s.matchWinner] >= 3 ? (
                   <p className="summary-result-subtitle">Coto ganado — empezamos el siguiente</p>
                 ) : (
-                  <p className="summary-result-subtitle">Partida {partidaEnCoto} de 3 ganada</p>
+                  <p className="summary-result-subtitle">Has ganado la partida {partidaEnCoto} de 3</p>
                 )}
 
                 {/* Cajas grandes con el marcador final de la partida.
@@ -1436,8 +1429,8 @@ export function Game() {
                   }
                   return (
                     <p className="summary-result-subtitle">
-                      Llevas <b>{myPartidas}</b> de 3 partidas
-                      {faltan === 1 ? ' · falta 1' : ` · faltan ${faltan}`}
+                      Llevas <b>{myPartidas}</b> de 3, te
+                      {faltan === 1 ? ' falta 1' : ` faltan ${faltan}`}
                     </p>
                   );
                 })()}
@@ -1521,9 +1514,8 @@ export function Game() {
                     de las reglas de las vueltas. */}
                 {s.nextDealer !== null && s.nextStarter !== null && (
                   <p className="summary-footer">
-                    Reparte <b>{seatLabel(s.nextDealer)}</b>.
-                    {' '}Sale <b>{seatLabel(s.nextStarter)}</b>{' '}
-                    (a la derecha del dealer).
+                    Reparte <b>{seatLabel(s.nextDealer)}</b>; sale{' '}
+                    <b>{seatLabel(s.nextStarter)}</b>, a su derecha.
                   </p>
                 )}
                 {s.vuelta === 1 && (
@@ -1531,8 +1523,8 @@ export function Game() {
                 )}
                 {s.vuelta > 1 && (
                   <p className="summary-footer">
-                    En vueltas se arrastran las buenas/malas de la ida.
-                    La partida termina en cuanto una pareja pase {MATCH_THRESHOLD} puntos.
+                    En las vueltas se arrastran las buenas y las malas de la ida
+                    y gana quien primero pase de {MATCH_THRESHOLD}.
                   </p>
                 )}
               </section>
@@ -1547,7 +1539,7 @@ export function Game() {
             <div className="summary-actions">
               {matchFinished ? (
                 <span className="summary-actions-hint">
-                  🏆 El match ha terminado. Crea una sala nueva para volver a jugar.
+                  🏆 Match terminado — crea una sala nueva para jugar otra.
                 </span>
               ) : (
                 <span className="summary-actions-hint">
@@ -1660,10 +1652,6 @@ export function Game() {
           aria-live="polite"
         >
           <div className="arrastre-title">¡Vamos de últimas!</div>
-          <div className="arrastre-sub">
-            Se acaba el mazo. De aquí en adelante <b>arrastre</b>: gana
-            quien tire la <b>baza 10</b> y se lleva 10 puntos extra.
-          </div>
         </div>
       )}
 

@@ -160,8 +160,6 @@ app.register(async (instance) => {
       // seat original sin que el server le asigne uno nuevo.
       token: room.players[seat]!.token ?? '',
     });
-    // DEBUG temporal: confirmar que el server emite VIEWs.
-    console.log(`[ws-debug-out] WELCOME -> seat=${seat} code=${room.code}`);
     if (room.state === null) {
       // Modo lobby: la sala está esperando a que se unan más humanos
       // antes de repartir. Emitimos LOBBY_STATUS al recién llegado y al
@@ -232,11 +230,6 @@ app.register(async (instance) => {
         return;
       }
       if (msg.type === 'ACTION') {
-        // DEBUG temporal: ver si la acción llega al server. Acortamos
-        // el commandId a 8 chars (los UUIDs enteros hacen las líneas
-        // ilegibles en el log).
-        const short = msg.commandId.slice(0, 8);
-        console.log(`[ws-debug] ACTION code=${room.code} seat=${seat} cmdId=${short} action=${JSON.stringify(msg.action)}`);
         // Sprint 2.15+: log de diagnóstico para el bug "bot cambia el
         // 7 por una carta peor". Si alguna vez se ve un SWAP-IN con
         // trumpCard.rank ∉ {1, 3, 10, 11, 12}, hay un bug en el
@@ -271,7 +264,6 @@ app.register(async (instance) => {
         // se oscurecía y el auto-play disparaba 10s después). Cambiado
         // a `seat as Seat` para pasar el seat real capturado en el
         // cierre del WS handler.
-        console.log(`[ws-debug] ACTION processing code=${code} turn=${room.state.turn} seat=${seat} action=${JSON.stringify(msg.action)}`);
         const ok = applyActionWithResolveEvent(room, seat as Seat, msg.action);
         if (!ok) {
           send(socket, { type: 'ERROR', code: 'ILLEGAL_ACTION', message: 'Acción ilegal' });

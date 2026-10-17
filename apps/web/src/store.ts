@@ -316,7 +316,6 @@ async createRoom(mode: 'bots' | 'lobby') {
     // VIEW/ERROR), descartamos silenciosamente. Guardamos el ID de la
     // carta en vuelo para que la UI oscurezca SOLO esa carta.
     if (action.type === 'PLAY_CARD' && pendingActionCardId === action.cardId) {
-      console.log('[debug] sendAction SKIPPED (pendingCardId match) action=', action);
       return;
     }
     // `commandId` único por acción. Antes era `c-${lastCmdId + 1}` (un
@@ -330,15 +329,28 @@ async createRoom(mode: 'bots' | 'lobby') {
     // juego por HTTP simple desde la LAN (`http://192.168.1.23:3001`),
     // Chromium lanza `TypeError: crypto.randomUUID is not a function`
     // y el sendAction muere antes de llegar al WS. Fallback con
-    // timestamp base36 + 24 chars random: prefijado con `rb-` para que
-    // sea fácil de distinguir en logs de los `uuid-` del camino feliz
-    // y para ver de un vistazo qué clientes están en HTTP simple.
+    // `commandId` único por acción. Antes era `c-${lastCmdId + 1}` (un
+    // contador local) y eso provocaba colisiones entre los dos clientes
+    // humanos que entran a la misma sala — cada cliente arrancaba en 0
+    // y generaba `c-1`, `c-2`, ... en paralelo; el `seenCommandIds` del
+    // server descartaba el segundo como duplicado silencioso.
+    //
+    // En el camino feliz usamos `crypto.randomUUID()` (36 chars). El
+    // prefijo `uuid-` se descartó porque sumaba 5 chars al UUID (41
+    // total) y reventaba el `max(40)` del schema en `wire.ts`.
+    //
+    // `crypto.randomUUID()` solo está disponible en contextos seguros
+    // (HTTPS / localhost en algunos navegadores). Como accedemos al
+    // juego por HTTP simple desde la LAN (`http://192.168.1.23:3001`),
+    // Chromium lanza `TypeError: crypto.randomUUID is not a function`
+    // y el sendAction muere antes de llegar al WS. Fallback con
+    // timestamp base36 + 16 chars random, prefijado con `rb-` (random
+    // backend) para distinguir en logs cuándo un cliente está sirviendo
+    // el juego por HTTP simple.
     const cmdId =
       typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? `uuid-${crypto.randomUUID()}`
+        ? crypto.randomUUID()
         : `rb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
-    // DEBUG temporal: ver si sendAction se ejecuta y si el WS está OK.
-    console.log('[debug] sendAction cmdId=', cmdId, 'action=', action, 'wsReady=', ws?.readyState);
     if (!ws || ws.readyState !== 1) return;
     const newPendingCardId = action.type === 'PLAY_CARD' ? action.cardId : null;
     set({ pendingActionCardId: newPendingCardId });
