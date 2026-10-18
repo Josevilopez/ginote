@@ -11,7 +11,12 @@ import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } 
 import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
-import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
+import { initCosmos, readCosmosConfig, type CosmosHandles } from './persistence/cosmosClient.js';
+import {
+  ensurePlayer,
+  readPlayerIdFromCookie,
+  setPlayerCookie,
+} from './players.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -25,6 +30,23 @@ const app = Fastify({ logger: true });
 await app.register(cors, { origin: true });
 await app.register(websocket);
 
+/**
+ * Handles de Cosmos guardados a nivel de módulo para que los handlers
+ * HTTP y el WS puedan acceder al contenedor `players` sin tener que
+ * pasarlo por todas las funciones. Es `null` cuando el backend es
+ * `memory` (los handlers caen al modo anónimo sin cookie).
+ */
+let cosmosHandles: CosmosHandles | null = null;
+
+/**
+ * Detecta si el request viene por HTTPS. Tiene en cuenta el header
+ * `X-Forwarded-Proto` que ponen los proxies reversos (Caddy, ACA).
+ */
+function isHttps(req: import('fastify').FastifyRequest): boolean {
+  const proto = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
+  return proto === 'https';
+}
+
 app.post('/api/rooms', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' };
   const name = (body.name ?? 'Jugador').slice(0, 20);
@@ -33,8 +55,21 @@ app.post('/api/rooms', async (req, reply) => {
   // que se le una un amigo antes de repartir (si nadie entra, los huecos
   // se rellenan con bots al expirar la ventana).
   const mode: 'lobby' | 'bots' = body.mode === 'bots' ? 'bots' : 'lobby';
+
+  // Identidad anónima: si Cosmos está activo, leemos/creamos player.
+  // Si no, devolvemos un playerId en memoria (sin cookie ni persistencia).
+  let playerId: string;
+  if (cosmosHandles) {
+    const existing = readPlayerIdFromCookie(req);
+    const { playerId: id } = await ensurePlayer(cosmosHandles, existing);
+    playerId = id;
+    if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
+  } else {
+    playerId = globalThis.crypto.randomUUID();
+  }
+
   const room = createRoomWithBots({ fillWithBots: mode === 'bots' });
-  return { code: room.code, mode, name };
+  return { code: room.code, mode, name, playerId };
 });
 
 // "Jugar con jugadores": asignación a la mejor sala abierta a matchmaking
@@ -44,8 +79,19 @@ app.post('/api/rooms', async (req, reply) => {
 app.post('/api/rooms/matchmake', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string };
   const name = (body.name ?? 'Jugador').slice(0, 20);
+
+  let playerId: string;
+  if (cosmosHandles) {
+    const existing = readPlayerIdFromCookie(req);
+    const { playerId: id } = await ensurePlayer(cosmosHandles, existing);
+    playerId = id;
+    if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
+  } else {
+    playerId = globalThis.crypto.randomUUID();
+  }
+
   const { room, created } = findOrCreateMatchmakeRoom();
-  return { code: room.code, name, created };
+  return { code: room.code, name, created, playerId };
 });
 
 app.get('/api/health', async () => ({ ok: true }));
@@ -404,6 +450,7 @@ async function initPersistence(): Promise<void> {
   if (backend === 'cosmos') {
     const config = readCosmosConfig();
     const handles = await initCosmos(config);
+    cosmosHandles = handles;
     const cosmosStore = new CosmosRoomStore(handles);
     setRoomStore(cosmosStore);
     app.log.info(`persistence: CosmosRoomStore (db=${config.database})`);
