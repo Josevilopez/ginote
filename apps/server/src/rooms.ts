@@ -1,21 +1,36 @@
-import { createRoom, type Room } from './room.js';
 import { newRoomCode } from './roomCodes.js';
+import type { Room } from './room.js';
+import { MemoryRoomStore } from './persistence/memory.js';
+import type { RoomStore } from './persistence/types.js';
 
-const rooms = new Map<string, Room>();
+/**
+ * Singleton de `RoomStore`. Por defecto usa `MemoryRoomStore` (todo en
+ * RAM). Sprint 2-14 fase 2 lo sustituirá por `CosmosRoomStore` cuando
+ * haya credenciales de Azure, controlado por env var.
+ */
+let store: RoomStore = new MemoryRoomStore();
+
+/** Inyecta un backend distinto. Pensado para tests y para la fase 2. */
+export function setRoomStore(s: RoomStore): void {
+  store = s;
+}
+
+/** Acceso al backend activo. Útil para debug o para `CosmosRoomStore`. */
+export function getRoomStore(): RoomStore {
+  return store;
+}
 
 export function createRoomWithBots(opts: { fillWithBots?: boolean } = {}): Room {
   const code = newRoomCode(4);
-  const room = createRoom({ code, fillWithBots: opts.fillWithBots ?? false });
-  rooms.set(code, room);
-  return room;
+  return store.create({ code, fillWithBots: opts.fillWithBots ?? false });
 }
 
 export function getRoom(code: string): Room | undefined {
-  return rooms.get(code);
+  return store.get(code);
 }
 
 export function listRooms(): Room[] {
-  return Array.from(rooms.values());
+  return store.list();
 }
 
 /**
@@ -37,7 +52,7 @@ export function findOrCreateMatchmakeRoom(): { room: Room; created: boolean } {
   let best: Room | null = null;
   let bestHumans = -1;
   const now = Date.now();
-  for (const room of rooms.values()) {
+  for (const room of store.list()) {
     if (room.state !== null) continue; // partida empezada, no admitir más humanos
     // Saltar salas cuyo lobby esté a punto de expirar: el siguiente humano
     // que entre entraría justo cuando los bots van a aparecer. Mejor que
@@ -60,7 +75,6 @@ export function findOrCreateMatchmakeRoom(): { room: Room; created: boolean } {
   // No hay sala matcheable. Crear una nueva en modo lobby (sin bots;
   // se rellenarán al expirar la ventana si nadie más entra).
   const code = newRoomCode(4);
-  const room = createRoom({ code, fillWithBots: false });
-  rooms.set(code, room);
+  const room = store.create({ code, fillWithBots: false });
   return { room, created: true };
 }
