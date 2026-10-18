@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import { useGame } from '../store.js';
 import { CardView } from '../components/CardView.js';
 import { SuitGlyph } from '../components/SuitGlyph.js';
+import { LobbyScreen } from '../components/LobbyScreen.js';
 import {
   card,
   teamOf,
@@ -1902,85 +1903,6 @@ function computeLegalSet(view: ReturnType<typeof useGame.getState>['view'], you:
   return set;
 }
 
-/**
- * Pantalla de lobby: se muestra mientras el servidor espera a que se unan
- * más humanos antes de repartir. Sale sola cuando llega el primer VIEW.
- *
- * Muestra cuántos asientos están conectados (los bots placeholder NO
- * cuentan) y una cuenta atrás que refleja `lobby.endsAt` enviado por el
- * servidor. Cuando termina, el server rellena los huecos con bots y emite
- * el primer VIEW.
- */
-function LobbyScreen(): JSX.Element {
-  const lobby = useGame((s) => s.lobby)!;
-  const roomCode = useGame((s) => s.roomCode);
-  const leave = useGame((s) => s.leave);
-  // Re-render cada 100ms mientras hay endsAt, para que la cuenta atrás
-  // baje visualmente.
-  const [now, setNow] = useState<number>(Date.now());
-  useEffect(() => {
-    if (lobby.endsAt === null) return;
-    const id = window.setInterval(() => setNow(Date.now()), 100);
-    return () => window.clearInterval(id);
-  }, [lobby.endsAt]);
-  const remainingMs = lobby.endsAt !== null ? Math.max(0, lobby.endsAt - now) : 0;
-  const remainingSec = Math.ceil(remainingMs / 1000);
-  const filled = Math.min(lobby.seatsConnected, lobby.seatsTotal);
-  const empty = lobby.seatsTotal - filled;
-  return (
-    <div className="game lobby-screen">
-      <header className="topbar">
-        <div className="room-code">
-          <span className="room-code-label">Sala</span>
-          <b className="room-code-value">{roomCode ?? '????'}</b>
-        </div>
-        <button className="btn" onClick={leave} type="button">
-          Salir
-        </button>
-      </header>
-      <div className="lobby-card">
-        <h1 className="lobby-title">Esperando jugadores…</h1>
-        <p className="lobby-subtitle">
-          Comparte el código con tu compañero para que se una. Si nadie
-          viene, los huecos se rellenarán con bots y la partida empezará
-          automáticamente.
-        </p>
-        <div className="lobby-count">
-          <b>{filled}</b>
-          <span className="lobby-count-sep">/</span>
-          <span>{lobby.seatsTotal}</span>
-          <span className="lobby-count-label">conectados</span>
-        </div>
-        <div className="lobby-bar">
-          <div
-            className="lobby-bar-fill"
-            style={{
-              width: lobby.endsAt !== null
-                ? `${(remainingMs / lobby.windowMs * 100).toFixed(1)}%`
-                : '100%',
-            }}
-          />
-        </div>
-        {lobby.endsAt !== null && (
-          <p className="lobby-countdown">
-            Empezando en <b>{remainingSec}s</b>
-            {empty > 0 && (
-              <> · faltan {empty} jugador{empty === 1 ? '' : 'es'}</>
-            )}
-          </p>
-        )}
-        {lobby.endsAt === null && empty > 0 && (
-          <p className="lobby-countdown">
-            Esperando a {empty} jugador{empty === 1 ? '' : 'es'}…
-          </p>
-        )}
-        {lobby.endsAt === null && empty === 0 && (
-          <p className="lobby-countdown">Mesa llena · empezando…</p>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /**
  * Banner flotante de errores del server. Se muestra durante 3 s cuando

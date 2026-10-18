@@ -588,6 +588,9 @@ function connect(
           endsAt: msg.endsAt,
           windowMs: msg.windowMs,
         },
+        // Quién está sentado ya (la pantalla de espera pinta la mesa).
+        seatNames: msg.seatNames,
+        isBot: msg.isBot,
         // Limpiamos view cuando entramos en lobby (no debería llegar
         // nunca un VIEW mientras estamos en lobby, pero por si acaso).
         view: null,
