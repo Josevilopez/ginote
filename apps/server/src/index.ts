@@ -8,8 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { HEARTBEAT_MS, RECONNECT_WINDOW_MS, abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { HEARTBEAT_MS, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
+import { persistRoom, setSnapshotSink } from './persistHooks.js';
+import { isRoomSnapshot, roomFromSnapshot, serializeRoom } from './snapshot.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
 import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
 import { getCosmosHandles, setCosmosHandles } from './globalHandles.js';
@@ -302,6 +304,9 @@ app.register(async (instance) => {
       room.players[seat]!.name = url.searchParams.get('name') ?? `Jugador ${seat + 1}`;
       if (playerId) room.players[seat]!.playerId = playerId;
       room.players[seat]!.ws = socket as never;
+      // S2-14: con la partida ya repartida (mesa con bots), guardar el
+      // token del nuevo humano; si no, tras un reinicio no recuperaría su asiento.
+      if (room.state !== null) persistRoom(room, 'jugador se sienta');
     }
 
     send(socket, {
@@ -543,30 +548,7 @@ app.register(async (instance) => {
       // cliente vuelve a abrir un WS con `?token=T` en esa ventana, el
       // server reconoce el token y reusa el mismo seat. Pasados los
       // 45 s sin reconexión, liberamos el slot definitivamente.
-      p.ws = null;
-      p.reconnectDeadline = Date.now() + RECONNECT_WINDOW_MS;
-      broadcastSeats(room); // S2-15: los demás ven "desconectado"
-      // Si le tocaba a él, re-armamos el auto-play: con `ws = null` juega a
-      // los 2 s en vez de agotar los 10 s que quedaban del timer anterior.
-      if (room.state !== null && room.state.turn === seat) scheduleAutoPlay(room);
-      const tokenAtClose = p.token;
-      setTimeout(() => {
-        const now = room.players[seat];
-        if (!now) return;
-        // Sigue sin reconectar y el asiento es del MISMO jugador (no lo ha
-        // ocupado otro humano en el lobby mientras tanto).
-        if (now.ws !== null || now.token === null || now.token !== tokenAtClose) return;
-        if (room.state === null) {
-          now.token = null;
-          now.name = '?';
-          delete now.playerId;
-          delete now.reconnectDeadline;
-          scheduleLobbyCheck(room);
-        } else if (!room.matchFinished) {
-          // S2-12: 45 s sin volver → bot definitivo (sin reclamar).
-          substituteWithBot(room, seat as Seat, 'timeout');
-        }
-      }, RECONNECT_WINDOW_MS);
+      markDisconnected(room, seat as Seat);
     });
   });
 });
@@ -610,24 +592,37 @@ async function initPersistence(): Promise<void> {
     const cosmosStore = new CosmosRoomStore(handles);
     setRoomStore(cosmosStore);
     app.log.info(`persistence: CosmosRoomStore (db=${config.database})`);
-    // Rehidratación: por cada snapshot activo, crear la sala vacía con
-    // el código original. Los humanos vuelven como `token: null`
-    // (ausente), lo que la UI pintará como seat libre / bot.
+    // S2-14: los snapshots se guardan desde `room.ts` (reparto, fin de
+    // mano, votación, sustitución) a través de este sink.
+    setSnapshotSink({
+      save: async (room) => {
+        const snap = serializeRoom(room);
+        if (snap) await cosmosStore.saveSnapshot(room.code, snap);
+      },
+      remove: (code) => cosmosStore.deleteSnapshot(code),
+    });
+    // Rehidratación: cada snapshot válido vuelve a ser una sala con su
+    // partida tal cual se guardó. Los humanos empiezan desconectados (45 s
+    // para reconectar; sus clientes reintentan solos con el token).
     try {
-      const snapshots = await cosmosStore.loadActiveSnapshots<{ code: string }>();
+      const snapshots = await cosmosStore.loadActiveSnapshots();
       let rehydrated = 0;
-      for (const snap of snapshots) {
-        try {
-          cosmosStore.create({ code: snap.tableId, fillWithBots: false });
-          rehydrated++;
-        } catch {
-          // Ya existe una sala con ese código (no debería pasar tras
-          // un reinicio limpio, pero por si acaso).
+      const seen = new Set<string>();
+      for (const doc of snapshots) {
+        const snap = doc.payload;
+        if (!isRoomSnapshot(snap) || snap.matchFinished || seen.has(doc.tableId)) {
+          // Snapshot antiguo (`{ code }`), duplicado o de un match cerrado → fuera.
+          await cosmosStore.deleteSnapshotDoc(doc.id, doc.tableId).catch(() => undefined);
+          continue;
         }
+        seen.add(doc.tableId);
+        const room = roomFromSnapshot(snap);
+        cosmosStore.adopt(room);
+        resumeRestoredRoom(room, { postgameOpen: snap.postgameOpen });
+        rehydrated++;
+        app.log.info(`rehydrated room ${room.code} (vuelta=${room.state?.vuelta} phase=${room.state?.phase} matchWins=${JSON.stringify(room.matchWins)})`);
       }
-      if (rehydrated > 0) {
-        app.log.info(`rehydrated ${rehydrated} room(s) from Cosmos snapshots`);
-      }
+      app.log.info(`rehydrated ${rehydrated} room(s) from Cosmos snapshots`);
     } catch (err) {
       app.log.warn({ err }, 'rehydrate failed (continuing without snapshots)');
     }
@@ -654,12 +649,21 @@ async function snapshotOnSigterm(): Promise<void> {
     app.log.info('no Cosmos backend active, skipping snapshot');
     return;
   }
+  // S2-14: estado completo y actual (también a mitad de mano: es más
+  // reciente que el del último fin de mano). Lobbies y matches cerrados no.
+  let n = 0;
   for (const room of store.list()) {
-    // MVP: solo guardamos `{ code }`. La serialización del estado del
-    // motor y de los seats queda para S2-14 fase completa.
-    await cosmosStore.saveSnapshot(room.code, { code: room.code });
+    if (room.matchFinished) continue;
+    const snap = serializeRoom(room);
+    if (!snap) continue;
+    try {
+      await cosmosStore.saveSnapshot(room.code, snap);
+      n++;
+    } catch (err) {
+      app.log.warn({ err }, `snapshot failed for ${room.code}`);
+    }
   }
-  app.log.info(`snapshotted ${store.list().length} rooms`);
+  app.log.info(`snapshotted ${n} rooms`);
 }
 
 process.on('SIGTERM', async () => {

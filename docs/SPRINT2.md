@@ -86,16 +86,13 @@
 - Ventana de reconexión: **45 segundos** (`RECONNECT_WINDOW_MS`; era 90 s, reducida el 2026-10-18).
 - ~1 d.
 
-### S2-14 — Persistencia Cosmos — ⏳ no empezado
-- Hoy: todo en `apps/server/src/rooms.ts:4` (`const rooms = new Map<string, Room>()`). Reiniciar el server borra todas las mesas.
-- Plan:
-  - Contenedor Cosmos con throughput compartido 1000 RU/s.
-  - 3 contenedores: `players` (PK `/id`), `matches` (PK `/id`), `snapshots` (PK `/tableId`, TTL 24 h).
-  - Cliente `@azure/cosmos`.
-  - Escrituras solo al final de mano, fin de partida y SIGTERM (no por acción).
-  - Rehidratación al arrancar: cargar snapshots no caducados, reconstruir `Room` con `replay()` o estado directo, marcar asientos humanos como `human_disconnected`.
-  - Variables de entorno: `COSMOS_ENDPOINT`, `COSMOS_KEY`, `COSMOS_DATABASE`.
-- ~2 d.
+### S2-14 — Persistencia Cosmos — ✅ cerrado (2026-10-18)
+- Snapshot completo de la sala (`apps/server/src/snapshot.ts`): estado del motor, asientos (nombre, token, `playerId`, sustituto), `matchWins`, votación abierta, abandonos. En `snapshots` con `id = tableId` (un documento por mesa; antes el upsert sin `id` acumulaba documentos) y TTL 24 h.
+- Cuándo se guarda (decisión 2026-10-18: **al final de cada mano**, no por baza): fin de mano (también la cortada por cante), reparto de cada mano, apertura de la votación de revancha, humano que se sienta en una mesa ya repartida, sustitución por bot, y SIGTERM (estado actual). Al cerrarse el match se borra. Los lobbies no se guardan.
+- Si el server cae a mitad de mano, la mano se reanuda desde el reparto (mismas cartas); lo jugado en esa mano se pierde.
+- Rehidratación al arrancar (`resumeRestoredRoom` en `room.ts`): los humanos empiezan desconectados con su ventana de 45 s (el cliente reconecta solo con su token, S2-15); a los 8 s se reanuda: mano en curso → se juega; mano terminada → siguiente mano o votación; votación abierta → se reabre con 20 s nuevos sin volver a contar la partida. Snapshots antiguos (`{ code }`), duplicados o de matches cerrados se borran.
+- `room.ts` no importa nada de Cosmos: guarda vía `persistHooks.ts` (sink registrado en `index.ts`; con backend `memory` es no-op).
+- Tests: `apps/server/tests/snapshot.test.ts` (8).
 
 ### S2-15 — Web: indicador de seat desconectado + reconexión — ✅ cerrado (2026-10-18)
 - Asientos: `SEATS` trae `seatKinds` + `reconnectDeadlines`; la mesa pinta "📡 N s" (cuenta atrás de los 45 s, avatar atenuado) y "🤖 bot" (avatar con borde discontinuo) para el sustituto.

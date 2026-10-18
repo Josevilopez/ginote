@@ -16,6 +16,7 @@ import { stepHeuristicBot, heuristicBotAction } from '@guinote/bots';
 import { applyElo, applyEloTeam } from './elo.js';
 import { updatePlayerRating } from './players.js';
 import { getCosmosHandles } from './globalHandles.js';
+import { forgetRoom, persistRoom } from './persistHooks.js';
 
 /**
  * Nombres típicos aragoneses para los bots de la sala. Pensado para
@@ -405,6 +406,7 @@ function startMatchAndDeal(room: Room): void {
   // pero aquí ya es no-null. stepBots arranca por si el primer turno
   // cae en un bot (mesa recién creada con dealer aleatorio).
   broadcastView(room);
+  persistRoom(room, 'reparto');
   void stepBots(room).catch(() => undefined);
 }
 
@@ -529,8 +531,11 @@ export function applyActionWithResolveEvent(
   // de ELO (S2-17). Si `matchEnded` pasa de false a true en esta
   // acción, calculamos y persistimos los nuevos ratings.
   const matchEndedBefore = room.state.matchEnded;
+  const phaseBefore = room.state.phase;
   const ok = applyAction(room, seat, action);
   if (!ok) return false;
+  // S2-14: snapshot al final de cada mano (por baza o cortada por cante).
+  if (phaseBefore !== 'finished' && room.state.phase === 'finished') persistRoom(room, 'fin de mano');
   const matchEndedAfter = room.state.matchEnded;
   if (!matchEndedBefore && matchEndedAfter && room.state.matchWinner !== null) {
     // Hook S2-17: actualizar ELO de los humanos al final de la partida.
@@ -788,6 +793,7 @@ export function triggerNextHand(room: Room): void {
 function dealAndResume(room: Room): void {
   startNextHand(room);
   broadcastView(room);
+  persistRoom(room, 'reparto');
   // Si el turno cae en un bot, arrancar automáticamente.
   void stepBots(room).catch(() => undefined);
   // Y si cae en un humano, armar la red de seguridad del auto-play.
@@ -909,6 +915,7 @@ function openPostgame(room: Room): void {
     resolvePostgame(room, 'timeout');
   }, REMATCH_VOTE_TIMEOUT_MS);
   room.postgame = { deadline, votes, timer };
+  persistRoom(room, 'votación de revancha');
   broadcastRematchStatus(room);
   console.log(`[postgame] opened code=${room.code} matchWins=${JSON.stringify(room.matchWins)}`);
 }
@@ -983,6 +990,7 @@ function closeMatch(room: Room, winner: 0 | 1 | null, reason: MatchEndReason): v
     matchWins: room.matchWins,
   });
   console.log(`[match] ended code=${room.code} reason=${reason} champion=${winner ?? 'empate'} matchWins=${JSON.stringify(room.matchWins)}`);
+  forgetRoom(room.code); // S2-14: match cerrado → nada que rehidratar
 }
 
 /** ¿Todos los humanos sentados han votado `yes`? */
@@ -1107,6 +1115,7 @@ export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'tim
   p.substitute = true;
   // El nombre se conserva: la UI marca el asiento con "🤖 bot" (SEATS.seatKinds).
   console.log(`[seat] code=${room.code} seat=${seat} sustituido por bot (${reason}) penaliza=${penalize}`);
+  persistRoom(room, 'sustitución'); // si no, tras un reinicio se le volvería a penalizar
   broadcastSeats(room);
 
   if (abandoner) void penalizeAbandon(room, abandoner.playerId, opponents);
@@ -1123,6 +1132,72 @@ export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'tim
     clearAutoPlayTimer(room);
     void stepBots(room).catch(() => undefined);
   }
+}
+
+/**
+ * S2-12/S2-15: el WS de un humano se ha caído (o el server se ha
+ * reiniciado). Abre la ventana de reconexión (45 s): si no vuelve con su
+ * token, un bot ocupa el asiento para siempre (o, en lobby, se libera).
+ * `rescheduleAutoPlay`: si le tocaba, su turno se juega a los 2 s.
+ */
+export function markDisconnected(room: Room, seat: Seat, opts: { rescheduleAutoPlay?: boolean } = {}): void {
+  const p = room.players[seat];
+  if (!p || p.token === null) return;
+  p.ws = null;
+  p.reconnectDeadline = Date.now() + RECONNECT_WINDOW_MS;
+  broadcastSeats(room); // S2-15: los demás ven "desconectado"
+  if (opts.rescheduleAutoPlay !== false && room.state !== null && room.state.turn === seat) scheduleAutoPlay(room);
+  const tokenAtClose = p.token;
+  setTimeout(() => {
+    const now = room.players[seat];
+    if (!now) return;
+    // Sigue sin reconectar y el asiento es del MISMO jugador (no lo ha
+    // ocupado otro humano en el lobby mientras tanto).
+    if (now.ws !== null || now.token === null || now.token !== tokenAtClose) return;
+    if (room.state === null) {
+      now.token = null;
+      now.name = '?';
+      delete now.playerId;
+      delete now.reconnectDeadline;
+      scheduleLobbyCheck(room);
+    } else if (!room.matchFinished) {
+      // S2-12: 45 s sin volver → bot definitivo (sin reclamar).
+      substituteWithBot(room, seat, 'timeout');
+    }
+  }, RECONNECT_WINDOW_MS);
+}
+
+/** Margen tras rehidratar antes de reanudar bots / auto-play, para que los clientes reconecten. */
+export const RESUME_GRACE_MS = 8_000;
+
+/**
+ * S2-14: reanuda una sala recién rehidratada desde Cosmos tras un
+ * reinicio. Todos los humanos empiezan desconectados con su ventana de
+ * 45 s (sus clientes ya reintentan solos con el token, S2-15). Tras un
+ * margen de 8 s:
+ *  - match cerrado → nada;
+ *  - había votación de revancha → se reabre con 20 s nuevos;
+ *  - mano terminada → se sigue con la siguiente (o se abre la votación);
+ *  - mano en curso (snapshot del reparto) → se juega desde ahí.
+ */
+export function resumeRestoredRoom(room: Room, opts: { postgameOpen: boolean }): void {
+  for (const p of room.players) {
+    if (p.token !== null) markDisconnected(room, p.seat, { rescheduleAutoPlay: false });
+  }
+  setTimeout(() => {
+    if (room.matchFinished || room.state === null) return;
+    if (opts.postgameOpen) {
+      openPostgame(room);
+      return;
+    }
+    if (room.state.phase === 'finished') {
+      triggerNextHand(room);
+      return;
+    }
+    broadcastView(room);
+    void stepBots(room).catch(() => undefined);
+    scheduleAutoPlay(room);
+  }, RESUME_GRACE_MS);
 }
 
 /**

@@ -64,24 +64,47 @@ export class CosmosRoomStore implements RoomStore {
    * `apps/server/src/room.ts`.
    */
   async saveSnapshot(tableId: string, payload: unknown): Promise<void> {
+    // `id = tableId`: un único documento por mesa que se sobrescribe. Antes
+    // no se pasaba `id` y el SDK generaba uno nuevo en cada upsert, así
+    // que se acumulaban documentos por mesa.
     await this.cosmos.snapshots.items.upsert({
+      id: tableId,
       tableId,
       payload,
       savedAt: new Date().toISOString(),
     });
   }
 
-  /**
-   * Lee todos los snapshots no caducados y los devuelve sin
-   * reconstruir `Room` (eso lo hace `rehydrate.ts` que conoce el shape).
-   */
-  async loadActiveSnapshots<T = unknown>(): Promise<Array<{ tableId: string; payload: T }>> {
+  /** S2-14: borra todos los snapshots de una mesa (incluidos los antiguos con id aleatorio). */
+  async deleteSnapshot(tableId: string): Promise<void> {
+    const { resources } = await this.cosmos.snapshots.items
+      .query<{ id: string }>({
+        query: 'SELECT s.id FROM snapshots s WHERE s.tableId = @t',
+        parameters: [{ name: '@t', value: tableId }],
+      })
+      .fetchAll();
+    for (const r of resources) {
+      await this.cosmos.snapshots.item(r.id, tableId).delete();
+    }
+  }
+
+  /** S2-14: borra un documento concreto de `snapshots` (limpieza al rehidratar). */
+  async deleteSnapshotDoc(id: string, tableId: string): Promise<void> {
+    await this.cosmos.snapshots.item(id, tableId).delete();
+  }
+
+  /** S2-14: mete en memoria una sala rehidratada desde su snapshot. */
+  adopt(room: Room): void {
+    this.rooms.set(room.code, room);
+  }
+
+  async loadActiveSnapshots<T = unknown>(): Promise<Array<{ id: string; tableId: string; payload: T }>> {
     const { resources } = await this.cosmos.snapshots.items
       .query({
-        query: 'SELECT s.tableId, s.payload FROM snapshots s WHERE s.savedAt > @since',
+        query: 'SELECT s.id, s.tableId, s.payload FROM snapshots s WHERE s.savedAt > @since',
         parameters: [{ name: '@since', value: new Date(Date.now() - 86_400_000).toISOString() }],
       })
       .fetchAll();
-    return resources as Array<{ tableId: string; payload: T }>;
+    return resources as Array<{ id: string; tableId: string; payload: T }>;
   }
 }
