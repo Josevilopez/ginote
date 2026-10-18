@@ -4,6 +4,7 @@ import { useGame } from '../store.js';
 import { CardView } from '../components/CardView.js';
 import { SuitGlyph } from '../components/SuitGlyph.js';
 import { LobbyScreen } from '../components/LobbyScreen.js';
+import './Game.css';
 import {
   card,
   teamOf,
@@ -797,9 +798,23 @@ export function Game() {
             })()}
             <span className="score-label">Nosotros</span>
           </div>
-          <span className={`phase-pill phase-${view.vuelta === 1 ? 'idas' : 'vueltas'}`}>
-            {view.vuelta === 1 ? 'Idas' : 'Vueltas'}
-          </span>
+          {/* Centro: fase de la partida (Idas / Vueltas) y, debajo, el
+              marcador del match (partidas ganadas; gana quien llegue a 3).
+              Antes el marcador de partidas flotaba sobre la mesa. */}
+          <div className="score-center">
+            <span className={`phase-name phase-${view.vuelta === 1 ? 'idas' : 'vueltas'}`}>
+              {view.vuelta === 1 ? 'Idas' : 'Vueltas'}
+            </span>
+            <span
+              className="match-wins"
+              title="Partidas ganadas. Gana la pareja que llegue a 3."
+              aria-label={`Partidas: nosotros ${matchWins[(you % 2) as 0 | 1]}, ellos ${matchWins[(1 - (you % 2)) as 0 | 1]}. Gana quien llegue a 3.`}
+            >
+              Partidas <b className="is-mine">{matchWins[(you % 2) as 0 | 1]}</b>
+              <span aria-hidden="true">–</span>
+              <b className="is-theirs">{matchWins[(1 - (you % 2)) as 0 | 1]}</b>
+            </span>
+          </div>
           <div className="score-team is-theirs">
             {(() => {
               const team = (1 - you % 2) as 0 | 1;
@@ -991,35 +1006,6 @@ export function Game() {
           })}
         </div>
         </div>
-
-        {/* Marcador "estilo tenis" — fuera del tablero (dentro de `.game`)
-            para que su `position: absolute` se refiera a la pantalla y no
-            al board. En escritorio va anclado a la izquierda de la pantalla
-            (esquina superior izquierda). En móvil (`@media max-width: 768px`)
-            se estira de borde a borde del board (que en móvil ocupa todo el
-            ancho) con las dos cifras en una fila "0-3" — ver
-            `.match-tennis-dash` y la media query asociada en styles.css. */}
-        {(() => {
-          const myTeam = (you % 2) as 0 | 1;
-          const otherTeam = (1 - (you % 2)) as 0 | 1;
-          return (
-            <div className="match-tennis">
-              {/* Caja "Partidas": partidas ganadas en el match (S2-13,
-                  gana el primero que llegue a 3). Ya no hay cotos. */}
-              <div className="match-tennis-board">
-                <div className="match-tennis-label">Partidas · a 3</div>
-                <div className="match-tennis-row is-mine">
-                  <span className="match-tennis-count">{matchWins[myTeam]}</span>
-                </div>
-                {/* El guion solo se ve en móvil (display: none por defecto). */}
-                <span className="match-tennis-dash" aria-hidden="true">-</span>
-                <div className="match-tennis-row is-theirs">
-                  <span className="match-tennis-count">{matchWins[otherTeam]}</span>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
 
         {/* Mano + acciones agrupadas en .hand-area. En móvil se apilan
             verticalmente (mano arriba, acciones abajo); en escritorio (≥
