@@ -11,7 +11,8 @@ import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } 
 import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
-import { initCosmos, readCosmosConfig, type CosmosHandles } from './persistence/cosmosClient.js';
+import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
+import { setCosmosHandles } from './globalHandles.js';
 import {
   ensurePlayer,
   readPlayerIdFromCookie,
@@ -29,14 +30,6 @@ const app = Fastify({ logger: true });
 
 await app.register(cors, { origin: true });
 await app.register(websocket);
-
-/**
- * Handles de Cosmos guardados a nivel de módulo para que los handlers
- * HTTP y el WS puedan acceder al contenedor `players` sin tener que
- * pasarlo por todas las funciones. Es `null` cuando el backend es
- * `memory` (los handlers caen al modo anónimo sin cookie).
- */
-let cosmosHandles: CosmosHandles | null = null;
 
 /**
  * Detecta si el request viene por HTTPS. Tiene en cuenta el header
@@ -59,9 +52,10 @@ app.post('/api/rooms', async (req, reply) => {
   // Identidad anónima: si Cosmos está activo, leemos/creamos player.
   // Si no, devolvemos un playerId en memoria (sin cookie ni persistencia).
   let playerId: string;
-  if (cosmosHandles) {
+  const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
+  if (cosmos) {
     const existing = readPlayerIdFromCookie(req);
-    const { playerId: id } = await ensurePlayer(cosmosHandles, existing);
+    const { playerId: id } = await ensurePlayer(cosmos, existing);
     playerId = id;
     if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
   } else {
@@ -81,9 +75,10 @@ app.post('/api/rooms/matchmake', async (req, reply) => {
   const name = (body.name ?? 'Jugador').slice(0, 20);
 
   let playerId: string;
-  if (cosmosHandles) {
+  const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
+  if (cosmos) {
     const existing = readPlayerIdFromCookie(req);
-    const { playerId: id } = await ensurePlayer(cosmosHandles, existing);
+    const { playerId: id } = await ensurePlayer(cosmos, existing);
     playerId = id;
     if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
   } else {
@@ -189,11 +184,20 @@ app.register(async (instance) => {
     let seat = -1;
     const url = new URL(req.url, 'http://x');
     const token = url.searchParams.get('token');
+    // Identidad anónima para ELO: el cliente manda `?pid=<uuid>` (UUID
+    // que recibió en POST /api/rooms). Si no, cae a la cookie leída
+    // del upgrade request. Si tampoco hay cookie (modo memory), es
+    // null y el seat queda sin playerId (no se actualiza ELO).
+    const pidFromQuery = url.searchParams.get('pid');
+    const pidFromCookie = pidFromQuery ? null : readPlayerIdFromCookie(req as unknown as import('fastify').FastifyRequest);
+    const playerId = pidFromQuery ?? pidFromCookie ?? null;
+
     if (token) {
       const idx = room.players.findIndex((p) => p.token === token);
       if (idx >= 0) {
         seat = idx;
         room.players[seat]!.ws = socket as never;
+        if (playerId) room.players[seat]!.playerId = playerId;
       }
     }
     if (seat < 0) {
@@ -206,6 +210,7 @@ app.register(async (instance) => {
       seat = free;
       room.players[seat]!.token = cryptoToken();
       room.players[seat]!.name = url.searchParams.get('name') ?? `Jugador ${seat + 1}`;
+      if (playerId) room.players[seat]!.playerId = playerId;
       room.players[seat]!.ws = socket as never;
     }
 
@@ -450,7 +455,7 @@ async function initPersistence(): Promise<void> {
   if (backend === 'cosmos') {
     const config = readCosmosConfig();
     const handles = await initCosmos(config);
-    cosmosHandles = handles;
+    setCosmosHandles(handles);
     const cosmosStore = new CosmosRoomStore(handles);
     setRoomStore(cosmosStore);
     app.log.info(`persistence: CosmosRoomStore (db=${config.database})`);

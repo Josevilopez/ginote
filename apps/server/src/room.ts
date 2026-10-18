@@ -13,6 +13,9 @@ import {
   type GameEvent,
 } from '@guinote/engine';
 import { stepHeuristicBot, heuristicBotAction } from '@guinote/bots';
+import { applyEloTeam } from './elo.js';
+import { updatePlayerRating } from './players.js';
+import { getCosmosHandles } from './globalHandles.js';
 
 /**
  * Nombres típicos aragoneses para los bots de la sala. Pensado para
@@ -69,6 +72,13 @@ export interface PlayerSlot {
    * cliente intenta reconectar). Sprint 2.12.
    */
   leaving?: boolean;
+  /**
+   * UUID de identidad anónima del jugador (cookie `guinote_pid` o
+   * `?pid=<uuid>` del WS handshake). Se asigna en el WS handshake
+   * y lo lee el hook de fin de mano de S2-17 para calcular ELO.
+   * `undefined` = slot de bot (no juega ELO).
+   */
+  playerId?: string;
 }
 
 export interface Room {
@@ -482,8 +492,19 @@ export function applyActionWithResolveEvent(
 ): boolean {
   if (room.state === null) return false;
   const before = room.state.finishedTricks.length;
+  // Capturamos el estado de `matchEnded` ANTES de aplicar la acción
+  // para detectar la transición a "fin de partida" y disparar el hook
+  // de ELO (S2-17). Si `matchEnded` pasa de false a true en esta
+  // acción, calculamos y persistimos los nuevos ratings.
+  const matchEndedBefore = room.state.matchEnded;
   const ok = applyAction(room, seat, action);
   if (!ok) return false;
+  const matchEndedAfter = room.state.matchEnded;
+  if (!matchEndedBefore && matchEndedAfter && room.state.matchWinner !== null) {
+    // Hook S2-17: actualizar ELO de los humanos al final de la partida.
+    // Fire-and-forget: no bloqueamos la respuesta de la acción al cliente.
+    void updateEloOnHandEnd(room, room.state.matchWinner);
+  }
   const after = room.state.finishedTricks.length;
   if (after > before) {
     const last = room.state.finishedTricks[after - 1]!;
@@ -824,4 +845,78 @@ function checkMatchOver(room: Room): void {
       vuelta: room.state.vuelta,
     } as any);
   }
+}
+
+/**
+ * Hook S2-17: actualiza ELO de los humanos al final de una partida
+ * (cuando `state.matchEnded` pasa de false a true).
+ *
+ * Decisiones:
+ *  - **Solo con ≥2 humanos** (partidas con bots no cuentan para ELO,
+ *    según plan original). Si todos los seats son bots, no-op.
+ *  - **Rating medio del equipo**: cada equipo tiene un rating (medio
+ *    de sus humanos), y `applyEloTeam` calcula el delta sobre ese
+ *    rating. Cada humano del equipo recibe el mismo delta.
+ *  - **Fire-and-forget**: la respuesta al cliente no espera a Cosmos.
+ *    Si Cosmos falla, log pero no afecta a la partida.
+ *  - **No persistimos el documento `match` aquí** (queda para S2-17
+ *    pieza 4 si el usuario quiere histórico); solo actualizamos los
+ *    ratings de los 4 humanos.
+ */
+async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
+  const cosmos = getCosmosHandles();
+  if (!cosmos) return; // memory backend, no persistimos nada
+
+  type HumanRating = { playerId: string; rating: number; games: number };
+  const humans: Record<0 | 1, HumanRating[]> = { 0: [], 1: [] };
+
+  for (const slot of room.players) {
+    if (slot.token === null || !slot.playerId) continue; // bot o sin identidad
+    // Seats 0,2 → equipo 0; seats 1,3 → equipo 1
+    const team: 0 | 1 = (slot.seat % 2 === 0 ? 0 : 1) as 0 | 1;
+    try {
+      const { resource } = await cosmos.players.item(slot.playerId, slot.playerId).read();
+      if (!resource) continue;
+      const r = resource as { rating?: number; games?: number };
+      humans[team].push({
+        playerId: slot.playerId,
+        rating: r.rating ?? 1000,
+        games: r.games ?? 0,
+      });
+    } catch {
+      // 404 o similar — saltamos este humano
+    }
+  }
+
+  // Si algún equipo no tiene humanos, no se juega ELO (partida con bots).
+  if (humans[0].length === 0 || humans[1].length === 0) return;
+
+  const meanRating = (xs: HumanRating[]) => xs.reduce((a, b) => a + b.rating, 0) / xs.length;
+  const meanGames = (xs: HumanRating[]) => Math.round(xs.reduce((a, b) => a + b.games, 0) / xs.length);
+  const winnerTeam: 0 | 1 = winner;
+  const loserTeam: 0 | 1 = (1 - winner) as 0 | 1;
+  const ratingA = meanRating(humans[winnerTeam]);
+  const ratingB = meanRating(humans[loserTeam]);
+  const gamesA = meanGames(humans[winnerTeam]);
+  const gamesB = meanGames(humans[loserTeam]);
+
+  const elo = applyEloTeam(ratingA, ratingB, 1, gamesA, gamesB);
+
+  const apply = async (hs: HumanRating[], delta: number, won: boolean): Promise<void> => {
+    for (const h of hs) {
+      try {
+        await updatePlayerRating(cosmos, h.playerId, {
+          rating: h.rating + delta,
+          games: h.games + 1,
+          wins: won ? 1 : 0,
+          losses: won ? 0 : 1,
+        });
+      } catch {
+        // Si falla un player, seguimos con los demás (no rompemos la partida).
+      }
+    }
+  };
+
+  await apply(humans[winnerTeam], elo.deltaA, true);
+  await apply(humans[loserTeam], elo.deltaB, false);
 }
