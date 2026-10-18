@@ -19,11 +19,8 @@
 
 ## Pasos del sprint
 
-### S2-01 — Entorno de desarrollo: ESLint + CI — 🟡 parcial
-- Ya tenemos: monorepo npm workspaces, TS estricto (`tsconfig.base.json`), prettier.
-- Falta: `eslint.config.*`, workflows de GitHub Actions para `pnpm test` (cambiar a `npm test`) y `npm run typecheck` en cada PR.
-- Hecho cuando CI verde en PR con `npm test` + `npm run typecheck` + `npm run lint`.
-- ~0.25 d.
+### S2-01 — Entorno de desarrollo: ESLint + CI — ❌ eliminado (2026-10-18)
+- Fuera del sprint por decisión del usuario.
 
 ### S2-02..S2-05 — Motor — ✅ ya cerrado
 - Modelo de cartas, mazo 40, RNG con semilla (FNV-1a equivalente a mulberry32).
@@ -33,10 +30,12 @@
 - Tests: 26 tests en `packages/engine/tests/` (deal, scoring, flow, lastTrickTiming, legalPlays, arrastreEntrance, cantes, swapSeven, swapSevenBotE2E).
 - 0 d (no tocar).
 
-### S2-06 — Motor: MatchScoring — 🟡 parcial
-- Hoy: `VueltasScoring` con `threshold: 100` y `PartidaScore {buenas, malas}` viven en `packages/engine/src/rules.ts:121-125` y `state.ts:74`. El cierre de coto/match (`partidas/cotos/matchFinished`) está en el server (`apps/server/src/room.ts:113-139`), no en el motor.
-- Falta: extraer la lógica de cierre a una interfaz `MatchScoring` en el motor, con una implementación provisional hasta cerrar las reglas de "malas/buenas/vueltas" (decisión §10 del plan original).
-- ~0.5 d.
+### S2-06 — Motor: MatchScoring — ✅ cerrado (2026-10-18)
+- `packages/engine/src/matchScoring.ts`: interfaz `MatchScoring` (`start`, `recordPartida`, `champion`, `leader`) con la implementación `firstToN(n)` / `FIRST_TO_3` (partidas rápidas, S2-13). Inmutable y pura.
+- `nextHandSetup(prev)`: dealer ("el que corta, reparte") y continuación de la siguiente mano (misma partida → vuelta + 1; partida cerrada → vuelta 1 y marcadores a cero). Antes estaba copiado en el server y en los tests.
+- El server (`room.ts`) ya no decide el formato del match: usa `MATCH_SCORING = FIRST_TO_3` y `nextHandSetup`. Los "cotos" de partidas privadas (S3+) serán otra implementación de `MatchScoring`.
+- El cierre de la PARTIDA (umbral de 100) sigue en `apply` (`maybeEndMatch`), como estaba.
+- Tests: `packages/engine/tests/matchScoring.test.ts` (7).
 
 ### S2-07 — Protocolo — ❌ cancelado en este sprint
 - Por decisión del usuario: no migrar al envelope `{v:1, t:..., seq, expectSeq}` ni añadir `seq`/`clientActionId`. `commandId` UUID sigue siendo la fuente de idempotencia.
@@ -50,10 +49,12 @@
 - Máquina de estados en `apps/server/src/room.ts:74-203`, `autoPlayTimer` con heurística de fallback, `scheduleAutoPlay` (10 s), `broadcastView` por seat, `viewFor` redactado en `packages/engine/src/viewFor.ts:57-93`.
 - 0 d (no tocar).
 
-### S2-10 — Bots nivel 1 y 2 + retardo de pensar — 🟡 parcial
-- Hoy: 1 bot heurístico (`packages/bots/src/heuristic.ts`) + 1 bot random (`packages/bots/src/random.ts`).
-- Falta: parametrizar como `level: 1 | 2` (L1 = random, L2 = heurístico), añadir delay artificial de 600-1500 ms por acción (hoy el delay lo aplica el server con `setTimeout(1000)` entre bazas en `apps/server/src/index.ts:295`, no el bot), test de stress de 10 000 partidas bot-vs-bot por modo sin acciones ilegales.
-- ~0.7 d.
+### S2-10 — Bots nivel 1 y 2 + retardo de pensar — ✅ cerrado (2026-10-18)
+- `packages/bots/src/level.ts`: `BotLevel = 1 | 2` y `botAction(state, seat, level)` (L1 = acción legal al azar, L2 = heurística). `Room.botLevel` (por defecto 2, se guarda en el snapshot); `POST /api/rooms` acepta `botLevel` opcional (aún sin selector en la UI).
+- Retardo de "pensar": `botThinkDelayMs()` aleatorio de 600-1500 ms antes de cada acción de bot (sustituye al 1 s fijo de `stepBots` y del handler de ACTION).
+- Test de estrés `packages/bots/tests/stress.test.ts`: partidas completas bot contra bot en 3 modos (L1 vs L1, L2 vs L2, L1 vs L2), comprobando en cada acción que es legal y que el motor no lanza, y en cada mano completa 40 cartas y 120 + 10 + cantes puntos. Determinista (semillas + PRNG). 300 partidas/modo en `npm test`; completo con `STRESS_GAMES=10000 npm run stress -w @guinote/bots`.
+- Resultado con 10 000 partidas por modo (30 000 en ~10 s): 0 acciones ilegales, 0 cuelgues, invariantes OK. L2 gana a L1 el 84 % de las partidas.
+- Pendiente (S3): elegir el nivel del bot de relleno según el rating medio de la mesa (parte de S2-11).
 
 ### S2-11 — Matchmaking con rating — 🟡 parcial
 - Hoy: `apps/server/src/rooms.ts:36-66` (`findOrCreateMatchmakeRoom`) prioriza "más humanos primero" con ventana de lobby de 30 s. **No hay rating**.
@@ -102,16 +103,8 @@
 - Servidor: un token de la sala que ya no corresponde a ningún asiento (partida empezada) recibe `SEAT_LOST` en vez de otro asiento libre.
 - Latido WS (ping cada 5 s, `HEARTBEAT_MS`): un móvil sin red se detecta en ~5-10 s (antes el WS no se cerraba y la mesa esperaba 10 s por turno). Con el jugador desconectado, su turno lo juega el auto-play a los 2 s.
 
-### S2-16 — Despliegue: Azure Container Apps — ⏳ no empezado
-- Hoy: `apps/server/Dockerfile` (multi-stage, `node:22-alpine`), con `HEALTHCHECK` comentado.
-- Plan:
-  - Activar `HEALTHCHECK` con `wget --spider http://127.0.0.1:3001/healthz` (el endpoint ya existe en `apps/server/src/index.ts:51`).
-  - Definir `infra/` con bicep o terraform para ACA (env: `bicep` por familiarity).
-  - Container App con `minReplicas = maxReplicas = 1`, ingress HTTP+WS, secrets de Cosmos/JWT/CORS, variables de entorno, ping cada ~25 s para mantener WS activas.
-  - `terminationGracePeriodSeconds` suficientemente alto (≥ 60 s) para que `SIGTERM` dispare la escritura de snapshots.
-  - GitHub Actions: workflow `deploy.yml` que construye la imagen y la sube a ACR + actualiza la Container App.
-  - Smoke e2e post-deploy: dos pestañas, misma sala, una mano completa (sustituye al smoke cancelado del Sprint 1).
-- ~1 d.
+### S2-16 — Despliegue: Azure Container Apps — 🧑‍💻 manual (usuario)
+- Lo hace el usuario a mano (decisión 2026-10-18). Notas útiles: `PERSISTENCE_BACKEND=cosmos` + `COSMOS_ENDPOINT` / `COSMOS_DATABASE`; `minReplicas = maxReplicas = 1` (las salas viven en memoria); ingress con WebSocket; dar margen al SIGTERM (`terminationGracePeriodSeconds` ≥ 30) para que se guarden los snapshots; `/healthz` para el health probe.
 
 ### S2-17 — ELO anónimo con cookie — ⏳ no empezado
 - Plan:

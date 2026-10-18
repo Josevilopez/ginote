@@ -3,7 +3,6 @@ import {
   GUINOTE_ARAGONES,
   legalActions,
   newHand,
-  nextDealer,
   type GameState,
   type Seat,
   type Play,
@@ -11,8 +10,11 @@ import {
   type PlayerView,
   type Card,
   type GameEvent,
+  FIRST_TO_3,
+  nextHandSetup,
+  type MatchScoring,
 } from '@guinote/engine';
-import { stepHeuristicBot, heuristicBotAction } from '@guinote/bots';
+import { botAction as decideBotAction, botThinkDelayMs, DEFAULT_BOT_LEVEL, heuristicBotAction, type BotLevel } from '@guinote/bots';
 import { applyElo, applyEloTeam } from './elo.js';
 import { updatePlayerRating } from './players.js';
 import { getCosmosHandles } from './globalHandles.js';
@@ -163,6 +165,8 @@ export interface Room {
   matchEndReason: MatchEndReason | null;
   /** S2-12: playerIds que abandonaron esta sala (no pueden volver a sentarse). */
   abandonedPlayerIds: Set<string>;
+  /** S2-10: nivel de los bots de esta mesa (1 = fácil/aleatorio, 2 = heurístico). */
+  botLevel: BotLevel;
 }
 
 export type MatchEndReason = 'won' | 'declined' | 'timeout' | 'abandoned';
@@ -176,8 +180,13 @@ export const RECONNECT_WINDOW_MS = 45_000;
 /** Latido WS: ping cada N ms; si no llega el pong antes del siguiente, se corta. */
 export const HEARTBEAT_MS = 5_000;
 
-/** Constante del plan: 3 partidas para ganar el match. */
-export const MATCH_WINS_TO_WIN = 3;
+/**
+ * S2-06: formato del match (regla en el motor, `matchScoring.ts`).
+ * Partidas rápidas: primero a 3 partidas.
+ */
+export const MATCH_SCORING: MatchScoring = FIRST_TO_3;
+/** @deprecated usar `MATCH_SCORING.winsToWin`. */
+export const MATCH_WINS_TO_WIN = MATCH_SCORING.winsToWin;
 /** Ventana de votacion de revancha: 20 segundos. */
 export const REMATCH_VOTE_TIMEOUT_MS = 20_000;
 
@@ -189,6 +198,7 @@ export const REMATCH_VOTE_TIMEOUT_MS = 20_000;
 export function createRoom(opts: {
   code: string;
   fillWithBots?: boolean;
+  botLevel?: BotLevel;
 }): Room {
   const fill = opts.fillWithBots !== false;
   const players: PlayerSlot[] = [];
@@ -235,12 +245,13 @@ export function createRoom(opts: {
     lobbyTimer: null,
     lobbyEndsAt: null,
     lobbyWindowMs: 30000,
-    matchWins: { 0: 0, 1: 0 },
+    matchWins: MATCH_SCORING.start(),
     postgame: null,
     matchFinished: false,
     matchChampion: null,
     matchEndReason: null,
     abandonedPlayerIds: new Set(),
+    botLevel: opts.botLevel ?? DEFAULT_BOT_LEVEL,
   };
 }
 
@@ -625,7 +636,8 @@ function sameAction(
  */
 export async function stepBots(
   room: Room,
-  delayMs = 1000,
+  // S2-10: sin valor → "tiempo de pensar" aleatorio de 600-1500 ms por acción.
+  delayMs?: number,
   trickPauseMs = 2000,
   // Sprint 2.19: pausa extra larga cuando la baza resuelta es la
   // última de la mano. Da tiempo al usuario a leer la jugada final
@@ -661,7 +673,7 @@ export async function stepBots(
     // `stepHeuristicBot` que aplicaba el motor en crudo y se saltaba
     // esos broadcasts: por eso sólo se mostraba el aviso de cambio
     // del 7 cuando lo hacías TÚ, no cuando lo hacía un bot.
-    const botAction = heuristicBotAction(room.state, turn);
+    const botAction = decideBotAction(room.state, turn, room.botLevel);
     if (!botAction) return acted;
     // Sprint 2.15+: log adicional para confirmar qué decidió el bot
     // ante el filtro del motor. Útil cuando un usuario reporta "el bot
@@ -696,7 +708,7 @@ export async function stepBots(
       }
     } else {
       emitAfterChange(room);
-      await sleep(delayMs);
+      await sleep(delayMs ?? botThinkDelayMs());
     }
   }
   // Tras la cadena de bots, si el turno quedó en un humano, armamos la
@@ -773,11 +785,11 @@ export function triggerNextHand(room: Room): void {
   // 1. Procesar la mano recién terminada, si la hay.
   if (room.state.matchEnded && room.state.matchWinner !== null) {
     const winner = room.state.matchWinner;
-    room.matchWins[winner]++;
-
-    if (room.matchWins[winner] >= MATCH_WINS_TO_WIN) {
-      // Match terminado: 3 partidas ganadas por winner.
-      closeMatch(room, winner, 'won');
+    room.matchWins = MATCH_SCORING.recordPartida(room.matchWins, winner);
+    const champion = MATCH_SCORING.champion(room.matchWins);
+    if (champion !== null) {
+      // Match terminado: alguien llegó a las partidas necesarias (3).
+      closeMatch(room, champion, 'won');
       return;
     }
     // No llega a 3: abrir postgame de revancha.
@@ -846,31 +858,15 @@ function broadcastMatchOver(room: Room): void {
  */
 export function startNextHand(room: Room): void {
   if (room.state === null) return; // startNextHand asume state no-null; se llama solo desde triggerNextHand que ya lo garantiza
-  const lastHandLastTrick = room.state.finishedTricks[room.state.finishedTricks.length - 1];
-  const lastTrickWinner = lastHandLastTrick ? lastHandLastTrick.winner : null;
-  const newDealer = nextDealer(lastTrickWinner, room.state.dealer);
-  // Si el juego anterior terminó por match end → reset vuelta a 1.
-  // Si fue una mano normal dentro del mismo juego → incrementa.
-  const newVuelta = room.state.matchEnded ? 1 : room.state.vuelta + 1;
+  // S2-06: dealer y continuación (misma partida o partida nueva) los
+  // decide el motor (`nextHandSetup`).
+  const { dealer, continuation } = nextHandSetup(room.state);
   room.state = newHand({
-    id: `g-${room.code}-v${newVuelta}`,
+    id: `g-${room.code}-v${continuation.vuelta}`,
     seed: cryptoToken(),
     rules: GUINOTE_ARAGONES,
-    dealer: newDealer,
-    continuation: {
-      vuelta: newVuelta,
-      // Partida nueva (revancha) → buenas/malas a cero. Misma partida → se conservan.
-      score: room.state.matchEnded
-        ? { buenas: { 0: 0, 1: 0 }, malas: { 0: 0, 1: 0 } }
-        : room.state.score,
-      // cumulativeTeamPts también se resetea: cada juego empieza con 0/0
-      // (un coto = un juego = 0..100 raw, sin acumular entre cotos).
-      cumulativeTeamPts: room.state.matchEnded
-        ? { 0: 0, 1: 0 }
-        : room.state.cumulativeTeamPts,
-      matchEnded: false,
-      matchWinner: null,
-    },
+    dealer,
+    continuation,
   });
   room.seenCommandIds.clear();
 }
@@ -966,9 +962,7 @@ function serializeVotes(votes: Record<number, 'pending' | 'yes' | 'no'>): Record
 
 /** Equipo con más `matchWins`, o `null` si van empatados. */
 function leaderByMatchWins(room: Room): 0 | 1 | null {
-  if (room.matchWins[0] > room.matchWins[1]) return 0;
-  if (room.matchWins[1] > room.matchWins[0]) return 1;
-  return null;
+  return MATCH_SCORING.leader(room.matchWins);
 }
 
 /**

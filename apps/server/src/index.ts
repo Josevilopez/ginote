@@ -7,6 +7,7 @@ import { resolve as resolvePath, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
+import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
 import { HEARTBEAT_MS, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
@@ -65,6 +66,9 @@ app.post('/api/rooms', async (req, reply) => {
   }
 
   const room = createRoomWithBots({ fillWithBots: mode === 'bots' });
+  // S2-10: nivel de los bots (opcional; por defecto 2). Aún sin selector en la UI.
+  const bodyLevel = (req.body as { botLevel?: unknown } | undefined)?.botLevel;
+  if (bodyLevel === 1 || bodyLevel === 2) room.botLevel = bodyLevel;
   return { code: room.code, mode, name, playerId };
 });
 
@@ -497,7 +501,7 @@ app.register(async (instance) => {
         } else {
           // Pausa para que el humano vea su carta antes de que el siguiente
           // bot actúe (como en una partida real).
-          await new Promise<void>((r) => setTimeout(r, 1000));
+          await new Promise<void>((r) => setTimeout(r, botThinkDelayMs()));
         }
 
         if (wasLastTrick) {

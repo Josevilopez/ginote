@@ -29,6 +29,8 @@ export interface RoomSnapshot {
   matchEndReason: MatchEndReason | null;
   abandonedPlayerIds: string[];
   lobbyWindowMs: number;
+  /** S2-10 (opcional: snapshots anteriores no lo traen → nivel por defecto). */
+  botLevel?: 1 | 2;
 }
 
 /** null si la sala no merece snapshot (lobby sin repartir). */
@@ -52,6 +54,7 @@ export function serializeRoom(room: Room): RoomSnapshot | null {
     matchEndReason: room.matchEndReason,
     abandonedPlayerIds: [...room.abandonedPlayerIds],
     lobbyWindowMs: room.lobbyWindowMs,
+    botLevel: room.botLevel,
   };
 }
 
@@ -103,5 +106,6 @@ export function roomFromSnapshot(snap: RoomSnapshot): Room {
     matchChampion: snap.matchChampion,
     matchEndReason: snap.matchEndReason,
     abandonedPlayerIds: new Set(snap.abandonedPlayerIds),
+    botLevel: snap.botLevel ?? 2,
   };
 }

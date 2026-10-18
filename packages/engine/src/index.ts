@@ -8,3 +8,4 @@ export * from './apply.js';
 export * from './viewFor.js';
 export { buildShuffledDeck } from './deck.js';
 export { rngFromSeed, shuffle, type Rng } from './shuffle.js';
+export * from './matchScoring.js';
