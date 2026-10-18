@@ -12,7 +12,7 @@ import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, 
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
 import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
-import { setCosmosHandles } from './globalHandles.js';
+import { getCosmosHandles, setCosmosHandles } from './globalHandles.js';
 import {
   ensurePlayer,
   readPlayerIdFromCookie,
@@ -172,6 +172,58 @@ app.get<{ Params: { '*': string } }>('/*', async (req, reply) => {
 });
 
 app.register(async (instance) => {
+  // ───────────── WS: matchmaking ─────────────
+  // El cliente abre este WS con `?pid=<uuid>&mode=2|4&fill=bots|humansOnly`
+  // y entra a la cola. Cuando se forma match, recibe `QUEUE_MATCHED`
+  // con el `roomCode` y un `seat`. Tras eso, abre `/ws/<roomCode>` con
+  // su token para jugar.
+  instance.get('/ws/matchmake', { websocket: true }, async (socket: WsSocket, req) => {
+    const url = new URL(req.url, 'http://x');
+    const pidFromQuery = url.searchParams.get('pid');
+    const pidFromCookie = pidFromQuery ? null : readPlayerIdFromCookie(req as unknown as import('fastify').FastifyRequest);
+    const playerId = pidFromQuery ?? pidFromCookie;
+    const modeRaw = url.searchParams.get('mode');
+    const fillRaw = url.searchParams.get('fill');
+    const mode: 2 | 4 = modeRaw === '2' ? 2 : 4;
+    const fill: 'bots' | 'humansOnly' = fillRaw === 'humansOnly' ? 'humansOnly' : 'bots';
+    if (!playerId) {
+      send(socket, { type: 'ERROR', code: 'BAD_MESSAGE', message: 'pid requerido' });
+      socket.close();
+      return;
+    }
+    // Leer rating de Cosmos (o 1000 si no está / sin Cosmos).
+    let rating = 1000;
+    const cosmos = getCosmosHandles();
+    if (cosmos) {
+      try {
+        const { resource } = await cosmos.players.item(playerId, playerId).read();
+        if (resource && typeof (resource as { rating?: number }).rating === 'number') {
+          rating = (resource as { rating: number }).rating;
+        }
+      } catch {
+        // doc no existe: rating inicial
+      }
+    }
+    const { enqueue: qEnqueue } = await import('./matchmaking.js');
+    qEnqueue({
+      playerId,
+      mode,
+      fill,
+      rating,
+      enqueuedAt: Date.now(),
+      ws: socket as unknown as import('ws').WebSocket,
+      name: url.searchParams.get('name') ?? 'Jugador',
+    });
+    app.log.info(`matchmake: enqueued pid=${playerId} mode=${mode} fill=${fill} rating=${rating}`);
+    send(socket, { type: 'QUEUE_STATUS', state: 'searching', waitedMs: 0, humansFound: 1 });
+    socket.on('close', () => {
+      void (async () => {
+        const { dequeue: qDequeue } = await import('./matchmaking.js');
+        qDequeue(playerId);
+      })();
+    });
+  });
+
   instance.get('/ws/:code', { websocket: true }, (socket: WsSocket, req) => {
     const code = (req.params as { code: string }).code.toUpperCase();
     const room = getRoom(code);
@@ -520,12 +572,70 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
+/**
+ * Tick del matchmaking. Cada 1s llama `tryFormMatch` y, para cada
+ * mesa formada, crea la Room, asigna seats según equipos (a,d vs b,c
+ * por rating descendente), y notifica a los 4 WS con `QUEUE_MATCHED`.
+ */
+let matchmakingTimer: NodeJS.Timeout | null = null;
+
+async function tickMatchmaking(): Promise<void> {
+  const { tryFormMatch } = await import('./matchmaking.js');
+  const formed = tryFormMatch();
+  if (formed.length === 0) return;
+  for (const match of formed) {
+    // Ordenar por rating desc; ranked[0]+ranked[3] = equipo 0,
+    // ranked[1]+ranked[2] = equipo 1. Seats 0,2 = equipo 0; 1,3 = eq 1.
+    const ranked = match.tickets
+      .slice()
+      .sort((a, b) => b.rating - a.rating);
+    const seatByPlayer = new Map<string, number>();
+    seatByPlayer.set(ranked[0]!.playerId, 0);
+    seatByPlayer.set(ranked[3]!.playerId, 2);
+    if (ranked[1]) seatByPlayer.set(ranked[1].playerId, 1);
+    if (ranked[2]) seatByPlayer.set(ranked[2].playerId, 3);
+    // Crear la sala con fillWithBots=true (los 4 humanos ocupan los 4
+    // seats; no quedan huecos para bots, pero si quedaran se rellenarian).
+    const room = createRoomWithBots({ fillWithBots: true });
+    // Asignar playerId a cada slot para que el hook de ELO reconozca
+    // a los humanos cuando termine la mano.
+    for (const [playerId, seat] of seatByPlayer) {
+      room.players[seat]!.playerId = playerId;
+    }
+    // Notificar a cada WS con `QUEUE_MATCHED`.
+    for (const t of match.tickets) {
+      const seat = seatByPlayer.get(t.playerId);
+      if (t.ws && seat !== undefined) {
+        try {
+          t.ws.send(JSON.stringify({
+            type: 'QUEUE_MATCHED',
+            roomCode: room.code,
+            seat,
+          }));
+          t.ws.close();
+        } catch {
+          // WS ya cerrado; lo ignoramos
+        }
+      }
+    }
+    app.log.info(`matchmaking: formed room=${room.code} seats=[${[...seatByPlayer.entries()].map(([p, s]) => `${p}@${s}`).join(', ')}]`);
+  }
+}
+
+function startMatchmakingTick(): void {
+  if (matchmakingTimer !== null) return;
+  matchmakingTimer = setInterval(() => {
+    tickMatchmaking().catch((err) => app.log.error({ err }, 'matchmaking tick failed'));
+  }, 1000);
+}
+
 initPersistence()
-  .then(() =>
-    app
+  .then(() => {
+    startMatchmakingTick();
+    return app
       .listen({ port, host: '0.0.0.0' })
-      .then(() => app.log.info(`guinote server listening on :${port}`)),
-  )
+      .then(() => app.log.info(`guinote server listening on :${port}`));
+  })
   .catch((err) => {
     app.log.error(err);
     process.exit(1);

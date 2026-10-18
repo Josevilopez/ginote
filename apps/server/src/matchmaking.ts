@@ -60,8 +60,9 @@ const queue: Ticket[] = [];
 
 /** Resultado de `tryFormMatch`: cuántas mesas se formaron. */
 export interface FormedMatch {
-  ticketIds: string[];
-  ratings: number[];
+  /** Tickets completos (no solo IDs) para que el caller pueda
+   *  notificar al WS y leer el nombre del jugador. */
+  tickets: Ticket[];
 }
 
 /**
@@ -112,8 +113,7 @@ export function tryFormMatch(now: number = Date.now()): FormedMatch[] {
         if (gIdx >= 0) group.splice(gIdx, 1);
       }
       formed.push({
-        ticketIds: picked.map((t) => t.playerId),
-        ratings: picked.map((t) => t.rating),
+        tickets: picked,
       });
     }
   }

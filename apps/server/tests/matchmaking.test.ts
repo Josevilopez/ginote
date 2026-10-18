@@ -67,8 +67,8 @@ describe('matchmaking.tryFormMatch', () => {
     enqueue(ticket(1100, { playerId: 'd' }));
     const formed = tryFormMatch();
     expect(formed).toHaveLength(1);
-    expect(formed[0]!.ticketIds).toHaveLength(4);
-    expect(new Set(formed[0]!.ticketIds)).toEqual(new Set(['a', 'b', 'c', 'd']));
+    expect(formed[0]!.tickets).toHaveLength(4);
+    expect(new Set(formed[0]!.tickets.map((t) => t.playerId))).toEqual(new Set(['a', 'b', 'c', 'd']));
   });
 
   it('NO forma si las ratings exceden la ventana', () => {
@@ -123,8 +123,8 @@ describe('matchmaking.tryFormMatch', () => {
     enqueue(ticket(1010, { playerId: 'h', mode: 4 }));
     const formed = tryFormMatch();
     expect(formed).toHaveLength(3);
-    expect(formed.filter((m) => m.ticketIds.length === 2)).toHaveLength(2);
-    expect(formed.filter((m) => m.ticketIds.length === 4)).toHaveLength(1);
+    expect(formed.filter((m) => m.tickets.length === 2)).toHaveLength(2);
+    expect(formed.filter((m) => m.tickets.length === 4)).toHaveLength(1);
   });
 
   it('después de formar, los tickets sobrantes siguen en cola', () => {

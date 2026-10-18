@@ -46,6 +46,14 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('NEXT_HAND'),
   }),
+  z.object({
+    type: z.literal('QUEUE_JOIN'),
+    mode: z.union([z.literal(2), z.literal(4)]),
+    fill: z.enum(['bots', 'humansOnly']),
+  }),
+  z.object({
+    type: z.literal('QUEUE_LEAVE'),
+  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -132,6 +140,17 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
       malas: z.object({ '0': z.number(), '1': z.number() }),
     }),
     vuelta: z.number().int(),
+  }),
+  z.object({
+    type: z.literal('QUEUE_STATUS'),
+    state: z.enum(['searching', 'filling']),
+    waitedMs: z.number().int().min(0),
+    humansFound: z.number().int().min(0),
+  }),
+  z.object({
+    type: z.literal('QUEUE_MATCHED'),
+    roomCode: z.string(),
+    seat: z.number().int().min(0).max(3),
   }),
   /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
    *  El cliente lo usa para mostrar el overlay centrado (igual que el
