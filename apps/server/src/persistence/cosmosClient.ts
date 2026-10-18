@@ -2,8 +2,7 @@ import { CosmosClient, type Database, type Container } from '@azure/cosmos';
 import { DefaultAzureCredential } from '@azure/identity';
 
 /**
- * Inicializa el cliente de Cosmos y asegura que la base de datos y los
- * tres contenedores (`players`, `matches`, `snapshots`) existen.
+ * Inicializa el cliente de Cosmos y abre referencias a los contenedores.
  *
  * Autenticación (decidida el 2026-10-18):
  *  - **Managed Identity** vía `DefaultAzureCredential` (orden de prueba:
@@ -14,13 +13,17 @@ import { DefaultAzureCredential } from '@azure/identity';
  *  - Si `COSMOS_KEY` está presente en el entorno, se usa como fallback
  *    explícito (útil para CI sin `az login` o para tests rápidos).
  *
- * Idempotente: se puede llamar varias veces al arrancar (útil si el
- * server rehidrata varias veces). Los contenedores se crean con
- * `createIfNotExists` para no fallar cuando ya están.
+ * NO crea los contenedores (decidido el 2026-10-18). El data plane RBAC
+ * de Cosmos con "Built-in Data Contributor" no permite `POST /colls`
+ * ni siquiera con scope raíz — la creación de contenedores es control
+ * plane y hay que hacerla una vez por entorno desde el portal (o con
+ * `az cosmosdb sql container create`). Los contenedores necesarios son:
+ *   - `players` (PK `/id`)
+ *   - `matches` (PK `/id`)
+ *   - `snapshots` (PK `/tableId`, defaultTtl = 86_400 s = 24 h)
  *
- * El contenedor `snapshots` lleva TTL por defecto de 24h sobre el campo
- * `ttl` de cada documento. Esto cumple el compromiso de "una partida
- * abandonada se rehidrata como mucho 24h después".
+ * Si los contenedores faltan, las escrituras fallarán con 404 "Resource
+ * not found" y el caller lo verá claro.
  *
  * Lanza si falta `COSMOS_ENDPOINT`. El caller decide si cae el server
  * o usa memoria como fallback.
@@ -55,8 +58,8 @@ export function readCosmosConfig(env: NodeJS.ProcessEnv = process.env): CosmosCo
 }
 
 /**
- * Crea la base de datos y los tres contenedores si no existen.
- * Pensado para invocarse UNA vez al arrancar.
+ * Abre el cliente y los handles. NO crea la base de datos ni los
+ * contenedores (ver comentario de la cabecera).
  */
 export async function initCosmos(config: CosmosConfig): Promise<CosmosHandles> {
   // Dos rutas de autenticación según haya key explícita o no:
@@ -70,23 +73,12 @@ export async function initCosmos(config: CosmosConfig): Promise<CosmosHandles> {
         aadCredentials: new DefaultAzureCredential(),
       });
 
-  const { database } = await client.databases.createIfNotExists({ id: config.database });
-  const players = (
-    await database.containers.createIfNotExists({ id: 'players', partitionKey: '/id' })
-  ).container;
-  const matches = (
-    await database.containers.createIfNotExists({ id: 'matches', partitionKey: '/id' })
-  ).container;
-  // `snapshots` lleva defaultTtl = 86_400 s (24 h) sobre el campo `ttl`
-  // de cada documento. Si el server no reescribe el snapshot, Cosmos
-  // lo borra automáticamente. Esto evita que mesas abandonadas vivan
-  // para siempre y consuman RU.
-  const snapshots = (
-    await database.containers.createIfNotExists({
-      id: 'snapshots',
-      partitionKey: '/tableId',
-      defaultTtl: 86_400,
-    })
-  ).container;
-  return { client, database, players, matches, snapshots };
+  // La base de datos `ginote` debe existir (creada en el portal).
+  const players = client.database(config.database).container('players');
+  const matches = client.database(config.database).container('matches');
+  const snapshots = client.database(config.database).container('snapshots');
+  // Si quisieras crear la BD por código, sería aquí con
+  //   await client.databases.createIfNotExists({ id: config.database })
+  // pero eso requiere control plane RBAC, no data plane.
+  return { client, database: client.database(config.database), players, matches, snapshots };
 }

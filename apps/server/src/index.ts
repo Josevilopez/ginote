@@ -54,6 +54,18 @@ app.get('/api/health', async () => ({ ok: true }));
 // sepa si el server está vivo. NO toca la base de datos ni nada caro.
 app.get('/healthz', async () => ({ ok: true, version: Date.now() }));
 
+/**
+ * Shutdown graceful vía HTTP. Útil en Windows (donde `taskkill` sin
+ * `/F` no llega a procesos Node sin ventana) y en CI/CD que no puede
+ * enviar SIGINT directamente. Hace lo mismo que el handler de SIGTERM:
+ * snapshot de todas las salas + `process.exit(0)`.
+ */
+app.post('/admin/shutdown', async (_req, reply) => {
+  reply.send({ ok: true, msg: 'snapshotting and shutting down' });
+  await snapshotOnSigterm();
+  process.exit(0);
+});
+
 // ───────────── Static serving del bundle web ─────────────
 // En dev seguimos sirviendo el web con `vite` (puerto 5173) y el
 // server queda en :3001, conectado por CORS. En prod (y con túnel)
@@ -374,8 +386,13 @@ const port = Number(process.env.PORT ?? 3001);
  *    las salas se pierden al reiniciar.
  *  - `PERSISTENCE_BACKEND=cosmos`: salas activas en RAM + snapshots
  *    en Azure Cosmos DB con TTL de 24h. Sobrevive a SIGTERM y a
- *    reinicios del contenedor. Requiere COSMOS_ENDPOINT, COSMOS_KEY
- *    y COSMOS_DATABASE en el entorno (ver apps/server/.env.example).
+ *    reinicios del contenedor. Requiere COSMOS_ENDPOINT y
+ *    COSMOS_DATABASE en el entorno (ver apps/server/.env.example).
+ *
+ * Si el backend es Cosmos, además de montar el store, lee los snapshots
+ * no caducados y recrea cada sala con su código original. El `state`
+ * del juego (mano en curso, bazas, etc.) se pierde en esta versión —
+ * queda como mejora para cuando se serialice el motor completo.
  */
 async function initPersistence(): Promise<void> {
   const backend = process.env.PERSISTENCE_BACKEND ?? 'memory';
@@ -387,8 +404,30 @@ async function initPersistence(): Promise<void> {
   if (backend === 'cosmos') {
     const config = readCosmosConfig();
     const handles = await initCosmos(config);
-    setRoomStore(new CosmosRoomStore(handles));
+    const cosmosStore = new CosmosRoomStore(handles);
+    setRoomStore(cosmosStore);
     app.log.info(`persistence: CosmosRoomStore (db=${config.database})`);
+    // Rehidratación: por cada snapshot activo, crear la sala vacía con
+    // el código original. Los humanos vuelven como `token: null`
+    // (ausente), lo que la UI pintará como seat libre / bot.
+    try {
+      const snapshots = await cosmosStore.loadActiveSnapshots<{ code: string }>();
+      let rehydrated = 0;
+      for (const snap of snapshots) {
+        try {
+          cosmosStore.create({ code: snap.tableId, fillWithBots: false });
+          rehydrated++;
+        } catch {
+          // Ya existe una sala con ese código (no debería pasar tras
+          // un reinicio limpio, pero por si acaso).
+        }
+      }
+      if (rehydrated > 0) {
+        app.log.info(`rehydrated ${rehydrated} room(s) from Cosmos snapshots`);
+      }
+    } catch (err) {
+      app.log.warn({ err }, 'rehydrate failed (continuing without snapshots)');
+    }
     return;
   }
   throw new Error(`PERSISTENCE_BACKEND desconocido: ${backend}`);
@@ -397,7 +436,7 @@ async function initPersistence(): Promise<void> {
 /**
  * Snapshot de emergencia al recibir SIGTERM. Antes de cerrar, persiste
  * el estado actual de cada sala activa para que el próximo arranque
- * pueda rehidratarlas (los humanos vuelven como disconnected).
+ * pueda rehidratarlas.
  *
  * Esto depende de `gracefulShutdown` del hosting (ACA, Fly, etc.):
  * si el orchestrador mata el proceso sin dar tiempo, no hay nada
@@ -413,23 +452,20 @@ async function snapshotOnSigterm(): Promise<void> {
     return;
   }
   for (const room of store.list()) {
-    // El shape del payload se concreta en S2-14 fase 2 completa; por
-    // ahora guardamos el estado serializado del motor y los seats.
-    await cosmosStore.saveSnapshot(room.code, {
-      code: room.code,
-      state: room.state,
-      seats: room.players,
-      seq: room.state?.version ?? 0,
-    });
+    // MVP: solo guardamos `{ code }`. La serialización del estado del
+    // motor y de los seats queda para S2-14 fase completa.
+    await cosmosStore.saveSnapshot(room.code, { code: room.code });
   }
   app.log.info(`snapshotted ${store.list().length} rooms`);
 }
 
-process.on('SIGTERM', () => {
-  void snapshotOnSigterm().finally(() => process.exit(0));
+process.on('SIGTERM', async () => {
+  await snapshotOnSigterm();
+  process.exit(0);
 });
-process.on('SIGINT', () => {
-  void snapshotOnSigterm().finally(() => process.exit(0));
+process.on('SIGINT', async () => {
+  await snapshotOnSigterm();
+  process.exit(0);
 });
 
 initPersistence()
