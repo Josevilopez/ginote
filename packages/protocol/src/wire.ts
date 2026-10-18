@@ -101,7 +101,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('ERROR'),
-    code: z.enum(['BAD_MESSAGE', 'NOT_YOUR_TURN', 'ILLEGAL_ACTION', 'ROOM_NOT_FOUND', 'INTERNAL']),
+    code: z.enum(['BAD_MESSAGE', 'NOT_YOUR_TURN', 'ILLEGAL_ACTION', 'ROOM_NOT_FOUND', 'SEAT_LOST', 'INTERNAL']),
     message: z.string(),
   }),
   z.object({
@@ -171,6 +171,14 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     /** Motivo del cierre: alguien llegó a 3, rechazo/timeout de revancha, o abandono. */
     reason: z.enum(['won', 'declined', 'timeout', 'abandoned']),
     matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }),
+  }),
+  /** S2-12/S2-15: estado de cada asiento. Se emite al cambiar (desconexión,
+   *  reconexión, sustitución por bot). `substitute` = bot que ha tomado
+   *  definitivamente el asiento de un humano que abandonó o no volvió en 90 s. */
+  z.object({
+    type: z.literal('SEATS'),
+    seatNames: z.array(z.string()),
+    seatKinds: z.array(z.enum(['human', 'disconnected', 'bot', 'substitute'])),
   }),
   /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
    *  El cliente lo usa para mostrar el overlay centrado (igual que el

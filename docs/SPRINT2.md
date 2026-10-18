@@ -60,10 +60,15 @@
 - Falta: introducir rating (depende de S2-17), cola con tickets `{playerId, mode, fill, rating, enqueuedAt}`, ventana ±100/+50 cada 5 s con tope ±400, formación de equipos `(a, d) vs (b, c)` (compañeros enfrentados), relleno con bots de nivel acorde al rating medio.
 - ~0.7 d.
 
-### S2-12 — Desconexión, sustitución por bot, reclamar asiento — 🟡 parcial
-- Hoy: `socket.on('close')` con 90 s de backoff (`apps/server/src/index.ts:322-352`); `scheduleAutoPlay` juega heurística mientras el humano está desconectado.
-- Falta: al expirar los 90 s, **convertir el seat en bot definitivamente** (cambiar `kind` en `SeatInfo` a `'bot_substitute'` y asignar un bot L1 al slot), reclamar el seat al volver (`seat.reclaim`) queda pendiente para la siguiente baza.
-- ~0.7 d.
+### S2-12 — Desconexión, sustitución por bot — ✅ cerrado (2026-10-18)
+- Decisiones (2026-10-18): **sin reclamar** el asiento tras los 90 s; **abandonar a mitad de partida = derrota de ELO**.
+- `substituteWithBot` (`apps/server/src/room.ts`): tras 90 s sin reconectar, o al instante con `LEAVE` a mitad de partida, el asiento pasa a bot definitivo (`substitute: true`, nombre "X (bot)", token y `playerId` borrados). Si le tocaba, el bot juega ya.
+- ELO del abandono: derrota contra el rating medio de los rivales humanos (sin rivales humanos no cuenta). El que abandona sale del cálculo de fin de partida (no se le penaliza dos veces).
+- Sin reclamar: `room.abandonedPlayerIds` + asientos `substitute` no ocupables; si vuelve recibe `ERROR SEAT_LOST` y el cliente olvida la sala.
+- Mientras el humano está desconectado (ventana de 90 s) el auto-play juega a los 3 s en vez de 10 s.
+- Mensaje nuevo `SEATS {seatNames, seatKinds: human|disconnected|bot|substitute}` → base para la UI de S2-15.
+- En lobby, `LEAVE`/expiración liberan el asiento y borran el `playerId` (nadie hereda ELO ajeno).
+- Tests: `apps/server/tests/substitute.test.ts` (6).
 
 ### S2-13 — Revancha (primera a 3 partidas) — ✅ cerrado (2026-10-18)
 - Implementado: `Room.matchWins` / `postgame` / `matchEndReason` en `apps/server/src/room.ts` (`openPostgame`, `castRematchVote`, `resolvePostgame`, `closeMatch`, `abandonDuringPostgame`, `sendPostgameStateTo`); `REMATCH_VOTE` → `REMATCH_STATUS` / `MATCH_ENDED {winner|null, reason, matchWins}` en `packages/protocol/src/wire.ts` (único cambio de protocolo del sprint: mensajes nuevos, sin tocar el envelope); panel de votación con cuenta atrás + marcador "Partidas · a 3" en `apps/web/src/pages/Game.tsx`; tests en `apps/server/tests/rematch.test.ts` (8).

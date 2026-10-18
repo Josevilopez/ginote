@@ -13,7 +13,7 @@ import {
   type GameEvent,
 } from '@guinote/engine';
 import { stepHeuristicBot, heuristicBotAction } from '@guinote/bots';
-import { applyEloTeam } from './elo.js';
+import { applyElo, applyEloTeam } from './elo.js';
 import { updatePlayerRating } from './players.js';
 import { getCosmosHandles } from './globalHandles.js';
 
@@ -79,6 +79,12 @@ export interface PlayerSlot {
    * `undefined` = slot de bot (no juega ELO).
    */
   playerId?: string;
+  /**
+   * S2-12: `true` si este asiento era de un humano que abandonó (LEAVE a
+   * mitad de partida) o no volvió en 90 s, y ahora lo juega un bot hasta
+   * el final del match. No se puede reclamar.
+   */
+  substitute?: boolean;
 }
 
 export interface Room {
@@ -152,6 +158,8 @@ export interface Room {
   matchChampion: 0 | 1 | null;
   /** Motivo del cierre del match (estado `closed`). null mientras siga abierto. */
   matchEndReason: MatchEndReason | null;
+  /** S2-12: playerIds que abandonaron esta sala (no pueden volver a sentarse). */
+  abandonedPlayerIds: Set<string>;
 }
 
 export type MatchEndReason = 'won' | 'declined' | 'timeout' | 'abandoned';
@@ -220,6 +228,7 @@ export function createRoom(opts: {
     matchFinished: false,
     matchChampion: null,
     matchEndReason: null,
+    abandonedPlayerIds: new Set(),
   };
 }
 
@@ -407,7 +416,11 @@ export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
   if (room.state.phase === 'finished') return;
   const turn = room.state.turn;
   if (turn === null) return;
-  if (room.players[turn]!.token === null) return; // es un bot, los bots no necesitan red de seguridad
+  const player = room.players[turn]!;
+  if (player.token === null) return; // es un bot, los bots no necesitan red de seguridad
+  // S2-12: si el humano está desconectado (en la ventana de 90 s) no tiene
+  // sentido esperarle 10 s por turno: juega el auto-play a los 3 s.
+  if (player.ws === null) delayMs = Math.min(delayMs, 3_000);
   room.autoPlayTimer = setTimeout(() => {
     room.autoPlayTimer = null;
     autoPlayForHuman(room, turn);
@@ -1014,6 +1027,130 @@ export function abandonDuringPostgame(room: Room, seat: Seat): void {
   room.postgame.votes[seat] = 'no';
   broadcastRematchStatus(room);
   resolvePostgame(room, 'abandoned');
+}
+
+// ─────────────── S2-12: desconexión y sustitución por bot ───────────────
+
+export type SeatKind = 'human' | 'disconnected' | 'bot' | 'substitute';
+
+/** Estado visible de cada asiento (para el mensaje SEATS). */
+export function seatKinds(room: Room): SeatKind[] {
+  return room.players.map((p) => {
+    if (p.token === null) return p.substitute ? 'substitute' : 'bot';
+    return p.ws && p.ws.readyState === 1 ? 'human' : 'disconnected';
+  });
+}
+
+/** Emite SEATS a todos los humanos conectados. No-op en lobby (lo cubre LOBBY_STATUS). */
+export function broadcastSeats(room: Room): void {
+  if (room.state === null) return;
+  broadcast(room, {
+    type: 'SEATS',
+    seatNames: room.players.map((p) => p.name),
+    seatKinds: seatKinds(room),
+  });
+}
+
+/**
+ * ¿Hay una partida en juego? (no en lobby, no entre partidas esperando
+ * revancha, no con el match cerrado). Abandonar en este estado cuenta
+ * como derrota para ELO.
+ */
+export function isMidPartida(room: Room): boolean {
+  return room.state !== null && !room.matchFinished && !room.state.matchEnded && room.postgame === null;
+}
+
+const teamOfSeat = (seat: number): 0 | 1 => (seat % 2 === 0 ? 0 : 1);
+
+/**
+ * S2-12: un bot toma DEFINITIVAMENTE el asiento de un humano, porque
+ * abandonó (LEAVE) o porque pasaron 90 s sin reconectar. Decisiones
+ * (2026-10-18):
+ *  - No se puede reclamar: el token se invalida y el asiento queda como
+ *    `substitute` hasta el final del match.
+ *  - Si ocurre a mitad de partida, cuenta como DERROTA de ELO para quien
+ *    abandona (contra el rating medio de los rivales humanos; si no hay
+ *    rivales humanos no cuenta, igual que las partidas contra bots).
+ *  - El `playerId` se borra del asiento: el hook de fin de partida ya no
+ *    lo verá (no se le penaliza dos veces ni hereda nadie su ELO).
+ */
+export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'timeout'): void {
+  const p = room.players[seat];
+  if (!p || p.token === null) return;
+  const penalize = isMidPartida(room) && p.playerId !== undefined;
+  const abandoner = penalize ? { playerId: p.playerId!, team: teamOfSeat(seat) } : null;
+  // Rivales humanos en este momento (para el ELO del abandono).
+  const opponents = room.players
+    .filter((o) => o.token !== null && o.playerId && teamOfSeat(o.seat) !== teamOfSeat(seat))
+    .map((o) => o.playerId!);
+
+  if (p.playerId) room.abandonedPlayerIds.add(p.playerId);
+  p.token = null;
+  p.ws = null;
+  p.leaving = false;
+  delete p.playerId;
+  p.substitute = true;
+  p.name = `${p.name.replace(/ \(bot\)$/, '')} (bot)`;
+  console.log(`[seat] code=${room.code} seat=${seat} sustituido por bot (${reason}) penaliza=${penalize}`);
+  broadcastSeats(room);
+
+  if (abandoner) void penalizeAbandon(room, abandoner.playerId, opponents);
+
+  // Postgame: el bot sustituto vota yes; si con eso hay unanimidad, resolver.
+  if (room.postgame) {
+    room.postgame.votes[seat] = 'yes';
+    broadcastRematchStatus(room);
+    if (allHumansYes(room)) resolvePostgame(room, 'timeout');
+    return;
+  }
+  // Si le tocaba a él, el bot juega ya (sin esperar al auto-play).
+  if (room.state && room.state.phase !== 'finished' && room.state.turn === seat) {
+    clearAutoPlayTimer(room);
+    void stepBots(room).catch(() => undefined);
+  }
+}
+
+/**
+ * ELO del abandono: derrota (score 0) del que se va contra el rating
+ * medio de los rivales humanos. Fire-and-forget, como el hook de fin de
+ * partida.
+ */
+async function penalizeAbandon(room: Room, playerId: string, opponentIds: string[]): Promise<void> {
+  const cosmos = getCosmosHandles();
+  if (!cosmos) return;
+  if (opponentIds.length === 0) {
+    console.log(`[elo] abandono code=${room.code} ${playerId.slice(0, 8)}: sin rivales humanos, no cuenta`);
+    return;
+  }
+  type Doc = { rating?: number; games?: number; wins?: number; losses?: number };
+  const read = async (id: string): Promise<Doc | null> => {
+    try {
+      const { resource } = await cosmos.players.item(id, id).read();
+      return (resource as Doc | undefined) ?? null;
+    } catch (err) {
+      console.log(`[elo] error leyendo player ${id}: ${(err as Error).message}`);
+      return null;
+    }
+  };
+  const me = await read(playerId);
+  if (!me) return;
+  const opp = (await Promise.all(opponentIds.map(read))).filter((d): d is Doc => d !== null);
+  if (opp.length === 0) return;
+  const oppRating = opp.reduce((a, d) => a + (d.rating ?? 1000), 0) / opp.length;
+  const rating = me.rating ?? 1000;
+  const games = me.games ?? 0;
+  const { deltaA } = applyElo(rating, oppRating, 0, games);
+  try {
+    await updatePlayerRating(cosmos, playerId, {
+      rating: rating + deltaA,
+      games: games + 1,
+      wins: me.wins ?? 0,
+      losses: (me.losses ?? 0) + 1,
+    });
+    console.log(`[elo] abandono code=${room.code} ${playerId.slice(0, 8)} ${rating} → ${rating + deltaA} (derrota por abandono)`);
+  } catch (err) {
+    console.log(`[elo] error actualizando ${playerId}: ${(err as Error).message}`);
+  }
 }
 
 /**

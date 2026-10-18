@@ -94,6 +94,8 @@ interface State {
     deadline: number;
     votes: Record<string, 'pending' | 'yes' | 'no'>;
   } | null;
+  /** S2-12/S2-15: estado de cada asiento (humano, desconectado, bot, bot sustituto). */
+  seatKinds: Array<'human' | 'disconnected' | 'bot' | 'substitute'>;
   /** Cierre del match recibido del servidor (MATCH_ENDED). */
   matchEnded: {
     winner: 0 | 1 | null;
@@ -131,6 +133,7 @@ const MATCH_RESET = {
   matchChampion: null,
   rematch: null,
   matchEnded: null,
+  seatKinds: [] as State['seatKinds'],
 } satisfies Partial<State>;
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -246,6 +249,7 @@ export const useGame = create<State>((set, get) => ({
   matchChampion: null,
   rematch: null,
   matchEnded: null,
+  seatKinds: [],
 
 async createRoom(mode: 'bots' | 'lobby') {
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
@@ -555,6 +559,13 @@ function connect(
         matchOver: msg,
         pendingActionCardId: null,
       });
+    } else if (msg.type === 'SEATS') {
+      // S2-12: un asiento se desconecta, vuelve o lo toma un bot definitivo.
+      set({
+        seatNames: msg.seatNames,
+        seatKinds: msg.seatKinds,
+        isBot: msg.seatKinds.map((k) => k === 'bot' || k === 'substitute'),
+      });
     } else if (msg.type === 'REMATCH_STATUS') {
       // S2-13: votación de revancha abierta (o actualizada con un voto).
       set({
@@ -594,7 +605,9 @@ function connect(
       // Limpiamos el token Y el lastRoomCode para que la próxima vez
       // que el usuario pulse "Jugar con jugadores" caiga en matchmake
       // normal, en vez de seguir intentando esta sala fantasma.
-      if (msg.code === 'ROOM_NOT_FOUND') {
+      // SEAT_LOST (S2-12): abandonaste esta mesa y un bot ocupa tu asiento;
+      // no se puede volver, así que la olvidamos igual que una sala inexistente.
+      if (msg.code === 'ROOM_NOT_FOUND' || msg.code === 'SEAT_LOST') {
         const lastCode = getLastRoomCode();
         if (lastCode) clearStoredToken(lastCode);
         clearLastRoomCode();

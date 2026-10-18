@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
 import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
@@ -260,8 +260,17 @@ app.register(async (instance) => {
         if (playerId) room.players[seat]!.playerId = playerId;
       }
     }
+    if (seat < 0 && room.state !== null && playerId && room.abandonedPlayerIds.has(playerId)) {
+      // S2-12: quien abandonó (o no volvió en 90 s) no puede reclamar ni
+      // ocupar otro asiento de esta mesa.
+      send(socket, { type: 'ERROR', code: 'SEAT_LOST', message: 'Abandonaste esta partida; un bot ha ocupado tu asiento' });
+      socket.close();
+      return;
+    }
     if (seat < 0) {
-      const free = room.players.findIndex((p) => p.token === null);
+      // Los asientos `substitute` (bot que reemplazó a un humano) no se
+      // pueden ocupar: S2-12, sin reclamar.
+      const free = room.players.findIndex((p) => p.token === null && !p.substitute);
       if (free < 0) {
         send(socket, { type: 'ERROR', code: 'INTERNAL', message: 'Sala llena' });
         socket.close();
@@ -305,6 +314,8 @@ app.register(async (instance) => {
       // S2-13: si la mesa está votando revancha (o el match ya se cerró),
       // el cliente que (re)conecta necesita ese estado para pintar el panel.
       sendPostgameStateTo(room, socket);
+      // S2-12: avisar a todos de que este asiento vuelve a estar conectado.
+      broadcastSeats(room);
     }
 
     socket.on('message', async (raw: unknown) => {
@@ -352,20 +363,24 @@ app.register(async (instance) => {
         // al siguiente seat libre → el mismo cliente aparecía como 2
         // humanos en la sala.
         const p = room.players[seat];
-        if (p) {
+        if (p && p.token !== null) {
           p.leaving = true;
-          // S2-13: abandonar durante la votación de revancha = voto `no`
-          // → la mesa se cierra para todos.
-          abandonDuringPostgame(room, seat as Seat);
           if (room.state === null) {
-            // Sala en lobby: liberar el slot YA. Si la partida ya
-            // empezó, no liberamos el seat (el humano que se va deja un
-            // hueco, pero como no podemos sustituir a media partida, el
-            // bot heurístico asume el control por el backoff estándar).
+            // Sala en lobby: liberar el slot YA (sin penalización).
             p.token = null;
             p.name = '?';
             p.ws = null;
+            delete p.playerId; // que nadie herede su ELO
+            p.leaving = false;
             scheduleLobbyCheck(room);
+          } else if (room.postgame !== null) {
+            // S2-13: abandonar durante la votación de revancha = voto `no`
+            // → la mesa se cierra para todos. Sin penalización.
+            abandonDuringPostgame(room, seat as Seat);
+          } else if (!room.matchFinished) {
+            // S2-12: abandono con la mesa en juego → bot definitivo. Si es a
+            // mitad de partida, `substituteWithBot` aplica la derrota de ELO.
+            substituteWithBot(room, seat as Seat, 'leave');
           }
         }
         socket.close();
@@ -486,14 +501,22 @@ app.register(async (instance) => {
       // server reconoce el token y reusa el mismo seat. Pasados los
       // 90 s sin reconexión, liberamos el slot definitivamente.
       p.ws = null;
+      broadcastSeats(room); // S2-15: los demás ven "desconectado"
+      const tokenAtClose = p.token;
       setTimeout(() => {
         const now = room.players[seat];
         if (!now) return;
-        // Si `ws` sigue null y nadie ha reclamado el seat, libéralo.
-        if (now.ws === null && now.token !== null) {
+        // Sigue sin reconectar y el asiento es del MISMO jugador (no lo ha
+        // ocupado otro humano en el lobby mientras tanto).
+        if (now.ws !== null || now.token === null || now.token !== tokenAtClose) return;
+        if (room.state === null) {
           now.token = null;
           now.name = '?';
-          if (room.state === null) scheduleLobbyCheck(room);
+          delete now.playerId;
+          scheduleLobbyCheck(room);
+        } else if (!room.matchFinished) {
+          // S2-12: 90 s sin volver → bot definitivo (sin reclamar).
+          substituteWithBot(room, seat as Seat, 'timeout');
         }
       }, 90_000);
     });
