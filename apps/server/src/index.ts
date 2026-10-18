@@ -1,13 +1,17 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
+import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { resolve as resolvePath, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
-import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom } from './rooms.js';
+import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
 import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
+import { MemoryRoomStore } from './persistence/memory.js';
+import { CosmosRoomStore } from './persistence/cosmos.js';
+import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -362,9 +366,78 @@ function cryptoToken(): string {
 }
 
 const port = Number(process.env.PORT ?? 3001);
-app
-  .listen({ port, host: '0.0.0.0' })
-  .then(() => app.log.info(`guinote server listening on :${port}`))
+
+/**
+ * Selección del backend de persistencia.
+ *
+ *  - `PERSISTENCE_BACKEND=memory` (default, dev local): todo en RAM,
+ *    las salas se pierden al reiniciar.
+ *  - `PERSISTENCE_BACKEND=cosmos`: salas activas en RAM + snapshots
+ *    en Azure Cosmos DB con TTL de 24h. Sobrevive a SIGTERM y a
+ *    reinicios del contenedor. Requiere COSMOS_ENDPOINT, COSMOS_KEY
+ *    y COSMOS_DATABASE en el entorno (ver apps/server/.env.example).
+ */
+async function initPersistence(): Promise<void> {
+  const backend = process.env.PERSISTENCE_BACKEND ?? 'memory';
+  if (backend === 'memory') {
+    setRoomStore(new MemoryRoomStore());
+    app.log.info('persistence: MemoryRoomStore (RAM only)');
+    return;
+  }
+  if (backend === 'cosmos') {
+    const config = readCosmosConfig();
+    const handles = await initCosmos(config);
+    setRoomStore(new CosmosRoomStore(handles));
+    app.log.info(`persistence: CosmosRoomStore (db=${config.database})`);
+    return;
+  }
+  throw new Error(`PERSISTENCE_BACKEND desconocido: ${backend}`);
+}
+
+/**
+ * Snapshot de emergencia al recibir SIGTERM. Antes de cerrar, persiste
+ * el estado actual de cada sala activa para que el próximo arranque
+ * pueda rehidratarlas (los humanos vuelven como disconnected).
+ *
+ * Esto depende de `gracefulShutdown` del hosting (ACA, Fly, etc.):
+ * si el orchestrador mata el proceso sin dar tiempo, no hay nada
+ * que hacer. ACA permite configurar `terminationGracePeriodSeconds`,
+ * que en SPRINT2.md S2-16 se fija a ≥60s.
+ */
+async function snapshotOnSigterm(): Promise<void> {
+  app.log.info('SIGTERM received, snapshotting active rooms…');
+  const store = (await import('./rooms.js')).getRoomStore();
+  const cosmosStore = store as unknown as { saveSnapshot?: (id: string, payload: unknown) => Promise<void> };
+  if (typeof cosmosStore.saveSnapshot !== 'function') {
+    app.log.info('no Cosmos backend active, skipping snapshot');
+    return;
+  }
+  for (const room of store.list()) {
+    // El shape del payload se concreta en S2-14 fase 2 completa; por
+    // ahora guardamos el estado serializado del motor y los seats.
+    await cosmosStore.saveSnapshot(room.code, {
+      code: room.code,
+      state: room.state,
+      seats: room.players,
+      seq: room.state?.version ?? 0,
+    });
+  }
+  app.log.info(`snapshotted ${store.list().length} rooms`);
+}
+
+process.on('SIGTERM', () => {
+  void snapshotOnSigterm().finally(() => process.exit(0));
+});
+process.on('SIGINT', () => {
+  void snapshotOnSigterm().finally(() => process.exit(0));
+});
+
+initPersistence()
+  .then(() =>
+    app
+      .listen({ port, host: '0.0.0.0' })
+      .then(() => app.log.info(`guinote server listening on :${port}`)),
+  )
   .catch((err) => {
     app.log.error(err);
     process.exit(1);
