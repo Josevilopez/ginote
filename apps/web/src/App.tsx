@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useGame } from './store.js';
 import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
+import { ConnectionBanner } from './components/ConnectionBanner.js';
 
 export function App() {
   const you = useGame((s) => s.you);
@@ -30,6 +31,7 @@ export function App() {
   return (
     <main className="app">
       {you === null ? <Home /> : <Game />}
+      {you !== null && <ConnectionBanner />}
     </main>
   );
 }

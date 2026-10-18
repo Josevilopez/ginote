@@ -2065,3 +2065,92 @@ body {
 .lobby-countdown b {
   font-variant-numeric: tabular-nums;
 }
+
+/* ───── S2-15: estado de la conexión y de los asientos ───── */
+.seat.disconnected .seat-avatar,
+.seat.disconnected .seat-name {
+  opacity: 0.45;
+}
+.seat.substitute .seat-avatar {
+  border-style: dashed;
+}
+.seat-status {
+  margin-top: 2px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  background: rgba(6, 36, 27, 0.85);
+}
+.seat-status.is-away {
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.seat-status.is-bot {
+  color: var(--fg-mute);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.conn-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.conn-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: conn-spin 0.8s linear infinite;
+}
+@keyframes conn-spin {
+  to { transform: rotate(360deg); }
+}
+.conn-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.6);
+}
+.conn-card {
+  width: 100%;
+  max-width: 360px;
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--bg-2);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.conn-card h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--accent);
+}
+.conn-card p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-mute);
+  line-height: 1.4;
+}

@@ -61,11 +61,11 @@
 - ~0.7 d.
 
 ### S2-12 — Desconexión, sustitución por bot — ✅ cerrado (2026-10-18)
-- Decisiones (2026-10-18): **sin reclamar** el asiento tras los 90 s; **abandonar a mitad de partida = derrota de ELO**.
-- `substituteWithBot` (`apps/server/src/room.ts`): tras 90 s sin reconectar, o al instante con `LEAVE` a mitad de partida, el asiento pasa a bot definitivo (`substitute: true`, nombre "X (bot)", token y `playerId` borrados). Si le tocaba, el bot juega ya.
+- Decisiones (2026-10-18): **sin reclamar** el asiento tras los 45 s; **abandonar a mitad de partida = derrota de ELO**.
+- `substituteWithBot` (`apps/server/src/room.ts`): tras 45 s sin reconectar, o al instante con `LEAVE` a mitad de partida, el asiento pasa a bot definitivo (`substitute: true`, se conserva el nombre y la UI lo marca con "🤖 bot"; token y `playerId` borrados). Si le tocaba, el bot juega ya.
 - ELO del abandono: derrota contra el rating medio de los rivales humanos (sin rivales humanos no cuenta). El que abandona sale del cálculo de fin de partida (no se le penaliza dos veces).
 - Sin reclamar: `room.abandonedPlayerIds` + asientos `substitute` no ocupables; si vuelve recibe `ERROR SEAT_LOST` y el cliente olvida la sala.
-- Mientras el humano está desconectado (ventana de 90 s) el auto-play juega a los 3 s en vez de 10 s.
+- Mientras el humano está desconectado (ventana de 45 s) el auto-play juega a los 2 s en vez de 10 s.
 - Mensaje nuevo `SEATS {seatNames, seatKinds: human|disconnected|bot|substitute}` → base para la UI de S2-15.
 - En lobby, `LEAVE`/expiración liberan el asiento y borran el `playerId` (nadie hereda ELO ajeno).
 - Tests: `apps/server/tests/substitute.test.ts` (6).
@@ -83,7 +83,7 @@
 - Contador `matchWins: Record<TeamId, number>` en `Room` (inicial 0-0 al crear la sala).
 - Implementación: mensajes `rematch.vote` (cliente → server), `rematch.status` (server → cliente), `matchEnded` (server → cliente).
 - "Coto" como concepto se **reserva para partidas privadas en Sprint 3+** (cuando haya cuentas y lobbies privados con código).
-- Ventana de reconexión: **90 segundos** (lo que ya está implementado en `apps/server/src/index.ts:322-352`). Confirmado el 2026-10-17 — sin debate sobre 30 s vs 90 s.
+- Ventana de reconexión: **45 segundos** (`RECONNECT_WINDOW_MS`; era 90 s, reducida el 2026-10-18).
 - ~1 d.
 
 ### S2-14 — Persistencia Cosmos — ⏳ no empezado
@@ -97,10 +97,13 @@
   - Variables de entorno: `COSMOS_ENDPOINT`, `COSMOS_KEY`, `COSMOS_DATABASE`.
 - ~2 d.
 
-### S2-15 — Web: indicador de seat desconectado — 🟡 parcial
-- Hoy: home con "Jugar con bots" / "Jugar con jugadores" (`apps/web/src/pages/Home.tsx:43,49`), mesa completa con resaltado de legales (`Game.tsx:1052`), animaciones FLIP (`Game.tsx:122-200`), overlays de cante/arrastre/swap. **Falta indicador visual de "seat desconectado"**: la UI pinta avatares con `seatNames` y `isBot` pero no refleja el estado de la WS.
-- Falta: añadir `kind` a la info de seat visible en la UI, pintar "📡 reconectando…" / "sin conexión" durante los 90 s de backoff, transicionar a "🤖 bot toma el control" cuando expira.
-- ~0.5 d.
+### S2-15 — Web: indicador de seat desconectado + reconexión — ✅ cerrado (2026-10-18)
+- Asientos: `SEATS` trae `seatKinds` + `reconnectDeadlines`; la mesa pinta "📡 N s" (cuenta atrás de los 45 s, avatar atenuado) y "🤖 bot" (avatar con borde discontinuo) para el sustituto.
+- Mi conexión (`store.ts`): al caerse el WS, aviso "Conexión perdida — reconectando…" y reintentos con mi token (1 s, 2 s, 4 s, máx. 5 s) durante 45 s; reintento inmediato al volver la app al primer plano (`visibilitychange`) o recuperar la red (`online`). `SEAT_LOST` / `ROOM_NOT_FOUND` / ventana agotada → tarjeta "Has perdido tu asiento" + "Volver al inicio" (`components/ConnectionBanner.tsx`).
+- Misma partida en otra pestaña: `ERROR SESSION_REPLACED` a la vieja, que deja de reconectar (evita que dos pestañas se roben el asiento en bucle).
+- "Jugar con jugadores" ya no vuelve a ciegas a `lastRoomCode`: pregunta `GET /api/rooms/:code/seat?token=` y, si la sala está muerta/cerrada o el asiento ya no es suyo, va al matchmaking normal.
+- Servidor: un token de la sala que ya no corresponde a ningún asiento (partida empezada) recibe `SEAT_LOST` en vez de otro asiento libre.
+- Latido WS (ping cada 5 s, `HEARTBEAT_MS`): un móvil sin red se detecta en ~5-10 s (antes el WS no se cerraba y la mesa esperaba 10 s por turno). Con el jugador desconectado, su turno lo juega el auto-play a los 2 s.
 
 ### S2-16 — Despliegue: Azure Container Apps — ⏳ no empezado
 - Hoy: `apps/server/Dockerfile` (multi-stage, `node:22-alpine`), con `HEALTHCHECK` comentado.

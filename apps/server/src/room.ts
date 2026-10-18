@@ -68,7 +68,7 @@ export interface PlayerSlot {
    * que el WS cerrase. Lo usa el handler `socket.on('close')` para
    * distinguir un abandono intencional (LEAVE → liberar el slot
    * inmediatamente, sin backoff) de un drop accidental (WS closes
-   * solo → backoff de 90s antes de liberar el token por si el
+   * solo → backoff de 45 s antes de liberar el token por si el
    * cliente intenta reconectar). Sprint 2.12.
    */
   leaving?: boolean;
@@ -81,10 +81,12 @@ export interface PlayerSlot {
   playerId?: string;
   /**
    * S2-12: `true` si este asiento era de un humano que abandonó (LEAVE a
-   * mitad de partida) o no volvió en 90 s, y ahora lo juega un bot hasta
+   * mitad de partida) o no volvió en 45 s, y ahora lo juega un bot hasta
    * el final del match. No se puede reclamar.
    */
   substitute?: boolean;
+  /** S2-15: epoch ms en que vence la ventana de reconexión (solo con ws caído). */
+  reconnectDeadline?: number;
 }
 
 export interface Room {
@@ -163,6 +165,15 @@ export interface Room {
 }
 
 export type MatchEndReason = 'won' | 'declined' | 'timeout' | 'abandoned';
+
+/**
+ * S2-12/S2-15: ventana para reconectar y recuperar el asiento tras una
+ * caída del WS. Pasado este tiempo, un bot ocupa el asiento para siempre.
+ * (45 s → 45 s el 2026-10-18.) El cliente usa el mismo valor en `store.ts`.
+ */
+export const RECONNECT_WINDOW_MS = 45_000;
+/** Latido WS: ping cada N ms; si no llega el pong antes del siguiente, se corta. */
+export const HEARTBEAT_MS = 5_000;
 
 /** Constante del plan: 3 partidas para ganar el match. */
 export const MATCH_WINS_TO_WIN = 3;
@@ -418,9 +429,9 @@ export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
   if (turn === null) return;
   const player = room.players[turn]!;
   if (player.token === null) return; // es un bot, los bots no necesitan red de seguridad
-  // S2-12: si el humano está desconectado (en la ventana de 90 s) no tiene
-  // sentido esperarle 10 s por turno: juega el auto-play a los 3 s.
-  if (player.ws === null) delayMs = Math.min(delayMs, 3_000);
+  // S2-12: si el humano está desconectado (en la ventana de reconexión) no
+  // tiene sentido esperarle 10 s por turno: juega el auto-play a los 2 s.
+  if (player.ws === null) delayMs = Math.min(delayMs, 2_000);
   room.autoPlayTimer = setTimeout(() => {
     room.autoPlayTimer = null;
     autoPlayForHuman(room, turn);
@@ -1048,6 +1059,9 @@ export function broadcastSeats(room: Room): void {
     type: 'SEATS',
     seatNames: room.players.map((p) => p.name),
     seatKinds: seatKinds(room),
+    reconnectDeadlines: room.players.map((p) =>
+      p.token !== null && p.ws === null && p.reconnectDeadline !== undefined ? p.reconnectDeadline : null,
+    ),
   });
 }
 
@@ -1064,7 +1078,7 @@ const teamOfSeat = (seat: number): 0 | 1 => (seat % 2 === 0 ? 0 : 1);
 
 /**
  * S2-12: un bot toma DEFINITIVAMENTE el asiento de un humano, porque
- * abandonó (LEAVE) o porque pasaron 90 s sin reconectar. Decisiones
+ * abandonó (LEAVE) o porque pasaron 45 s sin reconectar. Decisiones
  * (2026-10-18):
  *  - No se puede reclamar: el token se invalida y el asiento queda como
  *    `substitute` hasta el final del match.
@@ -1089,8 +1103,9 @@ export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'tim
   p.ws = null;
   p.leaving = false;
   delete p.playerId;
+  delete p.reconnectDeadline;
   p.substitute = true;
-  p.name = `${p.name.replace(/ \(bot\)$/, '')} (bot)`;
+  // El nombre se conserva: la UI marca el asiento con "🤖 bot" (SEATS.seatKinds).
   console.log(`[seat] code=${room.code} seat=${seat} sustituido por bot (${reason}) penaliza=${penalize}`);
   broadcastSeats(room);
 

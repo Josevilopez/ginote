@@ -14,7 +14,7 @@ const fakeCosmos = {
 };
 vi.mock('../src/globalHandles.js', () => ({ getCosmosHandles: () => fakeCosmos, setCosmosHandles: () => undefined }));
 
-const { createRoom, substituteWithBot, seatKinds, isMidPartida, triggerNextHand, castRematchVote } = await import('../src/room.js');
+const { createRoom, substituteWithBot, seatKinds, broadcastSeats, isMidPartida, triggerNextHand, castRematchVote } = await import('../src/room.js');
 type Room = ReturnType<typeof createRoom>;
 
 const player = (id: string, rating = 1000) => docs.set(id, { id, rating, games: 0, wins: 0, losses: 0 });
@@ -50,17 +50,23 @@ describe('S2-12 sustitución por bot', () => {
     expect(p.token).toBeNull();
     expect(p.substitute).toBe(true);
     expect(p.playerId).toBeUndefined();
-    expect(p.name).toBe('H1 (bot)');
+    expect(p.name).toBe('H1'); // el nombre no cambia; la UI pinta la insignia 🤖
     expect(room.abandonedPlayerIds.has('pB')).toBe(true);
     expect(seatKinds(room)).toEqual(['human', 'substitute', 'bot', 'bot']);
     const seats = [...inbox[0]!].reverse().find((m) => m.type === 'SEATS');
     expect(seats.seatKinds[1]).toBe('substitute');
   });
 
-  it('un humano desconectado (ws null) se ve como "disconnected"', () => {
-    const { room } = mkRoom({ 0: 'pA', 1: 'pB' });
+  it('un humano desconectado (ws null) se ve como "disconnected" con su deadline en SEATS', () => {
+    const { room, inbox } = mkRoom({ 0: 'pA', 1: 'pB' });
     room.players[1]!.ws = null;
+    room.players[1]!.reconnectDeadline = 123456;
     expect(seatKinds(room)[1]).toBe('disconnected');
+    broadcastSeats(room);
+    const seats = [...inbox[0]!].reverse().find((m) => m.type === 'SEATS');
+    expect(seats.reconnectDeadlines).toEqual([null, 123456, null, null]);
+    substituteWithBot(room, 1, 'timeout');
+    expect(room.players[1]!.reconnectDeadline).toBeUndefined();
   });
 
   it('abandonar a mitad de partida cuenta como derrota de ELO contra los rivales humanos', async () => {

@@ -89,6 +89,9 @@ export function Game() {
   const rematch = useGame((s) => s.rematch);
   const matchEnded = useGame((s) => s.matchEnded);
   const voteRematch = useGame((s) => s.voteRematch);
+  // S2-15: estado de cada asiento (desconectado / bot sustituto).
+  const seatKinds = useGame((s) => s.seatKinds);
+  const seatDeadlines = useGame((s) => s.seatDeadlines);
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
   // IDs en el orden actual; `null` = orden por defecto (palo + fuerza).
@@ -845,7 +848,9 @@ export function Game() {
           // Iniciales para el avatar (sin hardcodear 'T'): primera letra
           // de las dos primeras palabras. Funciona igual para bots
           // (Pilar, Ramiro → PR) y para el humano.
-          const parts = rawName.trim().split(/\s+/);
+          // Solo palabras que empiezan por letra: así "(bot)", emojis o
+          // números no acaban en el avatar.
+          const parts = rawName.trim().split(/\s+/).filter((w) => /^\p{L}/u.test(w));
           const first = (parts[0] ?? '').charAt(0);
           const second = parts.length >= 2 ? (parts[1] ?? '').charAt(0) : '';
           const initials = (first + second).toUpperCase() || '?';
@@ -858,7 +863,7 @@ export function Game() {
                 seatElsRef.current[seat] = el;
               }}
               key={seat}
-              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''}`}
+              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''} ${!isYou && seatKinds[seat] === 'disconnected' ? 'disconnected' : ''} ${seatKinds[seat] === 'substitute' ? 'substitute' : ''}`}
             >
               <div className="seat-avatar">
                 {initials}
@@ -918,6 +923,13 @@ export function Game() {
                 {displayName}
                 {view.lastWinner === seat && ' 👑'}
               </div>
+              {/* S2-15: insignia de estado del asiento. */}
+              {!isYou && seatKinds[seat] === 'disconnected' && (
+                <SeatReconnecting deadline={seatDeadlines[seat] ?? null} />
+              )}
+              {seatKinds[seat] === 'substitute' && (
+                <div className="seat-status is-bot" title="Un bot juega en lugar de este jugador">🤖 bot</div>
+              )}
               {/* Cantes fijos de este jugador durante la mano actual: chips
                   pequeños con el valor y el palo, coloreados por suit. Yacen al
                   final del seat para no chocar con avatar/nombre. Si el
@@ -1977,6 +1989,27 @@ function LobbyScreen(): JSX.Element {
  * `state.error` pero no se pintaban en la UI durante una partida, así
  * que el usuario no sabía qué había pasado.
  */
+/**
+ * S2-15: "📡 reconectando… 45 s" bajo el nombre de un jugador cuyo WS se
+ * ha caído. La cuenta atrás es la ventana de 45 s del servidor; al vencer,
+ * llega un SEATS con el asiento ya como `substitute`.
+ */
+function SeatReconnecting(props: { deadline: number | null }): JSX.Element {
+  const { deadline } = props;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (deadline === null) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [deadline]);
+  const secs = deadline !== null ? Math.max(0, Math.ceil((deadline - now) / 1000)) : null;
+  return (
+    <div className="seat-status is-away" title="Este jugador ha perdido la conexión">
+      📡 {secs !== null ? `${secs} s` : 'sin conexión'}
+    </div>
+  );
+}
+
 /** Texto del cierre del match según `MATCH_ENDED` (S2-13). */
 function matchEndedText(
   ended: { winner: 0 | 1 | null; reason: 'won' | 'declined' | 'timeout' | 'abandoned' } | null,

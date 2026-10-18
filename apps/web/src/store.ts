@@ -96,6 +96,18 @@ interface State {
   } | null;
   /** S2-12/S2-15: estado de cada asiento (humano, desconectado, bot, bot sustituto). */
   seatKinds: Array<'human' | 'disconnected' | 'bot' | 'substitute'>;
+  /** S2-15: epoch ms en que vence la ventana de 45 s de cada asiento desconectado. */
+  seatDeadlines: Array<number | null>;
+  /**
+   * S2-15: estado de MI conexión con la mesa.
+   *  - `connected`: todo bien.
+   *  - `reconnecting`: se cayó el WS; reintentando con mi token (máx. 45 s).
+   *  - `lost`: no hay vuelta (asiento ocupado por un bot, sala cerrada…).
+   *  - `replaced`: he abierto la misma partida en otra pestaña/ventana.
+   */
+  connection: 'connected' | 'reconnecting' | 'lost' | 'replaced';
+  /** Texto a mostrar cuando `connection` es `lost` o `replaced`. */
+  connectionMessage: string | null;
   /** Cierre del match recibido del servidor (MATCH_ENDED). */
   matchEnded: {
     winner: 0 | 1 | null;
@@ -134,7 +146,76 @@ const MATCH_RESET = {
   rematch: null,
   matchEnded: null,
   seatKinds: [] as State['seatKinds'],
+  seatDeadlines: [] as State['seatDeadlines'],
+  connection: 'connected' as State['connection'],
+  connectionMessage: null,
 } satisfies Partial<State>;
+
+// ─────────────── S2-15: reconexión automática ───────────────
+/** Ventana del servidor para reclamar el asiento tras una caída. */
+/** Igual que `RECONNECT_WINDOW_MS` del server (`apps/server/src/room.ts`). */
+const RECONNECT_WINDOW_MS = 45_000;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+/** Epoch ms hasta el que seguimos intentando; null = no hay reconexión en curso. */
+let reconnectUntil: number | null = null;
+let reconnectAttempt = 0;
+/** Código de la sala a la que estamos reconectando. */
+let reconnectCode: string | null = null;
+
+function stopReconnect(): void {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+  reconnectUntil = null;
+  reconnectAttempt = 0;
+  reconnectCode = null;
+}
+
+/**
+ * Programa el siguiente intento de reconexión con backoff (1 s, 2 s, 4 s,
+ * máx. 5 s). `immediate` = intentar ya (p. ej. al volver la app al primer
+ * plano en el móvil). Pasados los 45 s nos damos por vencidos: el server
+ * ya habrá metido un bot en nuestro asiento.
+ */
+function scheduleReconnect(code: string, immediate = false): void {
+  const { setState } = useGame;
+  if (reconnectUntil === null) reconnectUntil = Date.now() + RECONNECT_WINDOW_MS;
+  reconnectCode = code;
+  if (Date.now() > reconnectUntil) {
+    stopReconnect();
+    setState({
+      connection: 'lost',
+      connectionMessage: 'No se ha podido recuperar la conexión a tiempo. Un bot ha ocupado tu asiento.',
+    });
+    return;
+  }
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  const delay = immediate ? 0 : Math.min(5_000, 1_000 * 2 ** reconnectAttempt);
+  reconnectAttempt++;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect(code, (p) => setState(p), () => useGame.getState());
+  }, delay);
+}
+
+// En el móvil, al bloquear la pantalla o cambiar de app el WS suele morir
+// sin avisar. Al volver al primer plano (o recuperar la red) reintentamos
+// en el acto en vez de esperar al siguiente backoff.
+if (typeof window !== 'undefined') {
+  const retryNow = () => {
+    const st = useGame.getState();
+    if (st.you === null || st.connection === 'lost' || st.connection === 'replaced') return;
+    const code = reconnectCode ?? st.roomCode;
+    if (!code) return;
+    if (st.connection === 'reconnecting' || !wsRef || wsRef.readyState === WebSocket.CLOSED) {
+      useGame.setState({ connection: 'reconnecting' });
+      scheduleReconnect(code, true);
+    }
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') retryNow();
+  });
+  window.addEventListener('online', retryNow);
+}
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -250,8 +331,12 @@ export const useGame = create<State>((set, get) => ({
   rematch: null,
   matchEnded: null,
   seatKinds: [],
+  seatDeadlines: [],
+  connection: 'connected',
+  connectionMessage: null,
 
 async createRoom(mode: 'bots' | 'lobby') {
+    stopReconnect();
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
     try {
       const name = getPlayerName();
@@ -268,9 +353,22 @@ async createRoom(mode: 'bots' | 'lobby') {
         const lastCode = getLastRoomCode();
         const lastToken = lastCode ? getStoredToken(lastCode) : null;
         if (lastCode && lastToken) {
-          history.replaceState(null, '', `#${lastCode}`);
-          connect(lastCode, set, get);
-          return;
+          // S2-15: solo volvemos si la sala sigue viva y el asiento sigue
+          // siendo nuestro. Si no (sala cerrada, server reiniciado, un bot
+          // ocupó el asiento), la olvidamos y vamos al matchmaking normal.
+          const stillMine = await fetch(
+            `/api/rooms/${lastCode}/seat?token=${encodeURIComponent(lastToken)}`,
+          )
+            .then((r) => (r.ok ? (r.json() as Promise<{ ok?: boolean }>) : { ok: false }))
+            .then((j) => j.ok === true)
+            .catch(() => false);
+          if (stillMine) {
+            history.replaceState(null, '', `#${lastCode}`);
+            connect(lastCode, set, get);
+            return;
+          }
+          clearStoredToken(lastCode);
+          clearLastRoomCode();
         }
         // Sin sala previa → matchmaking normal: el server asigna a la
         // sala con más humanos en lobby o crea una nueva.
@@ -318,6 +416,7 @@ async createRoom(mode: 'bots' | 'lobby') {
       set({ error: `Código de sala inválido: "${code}". Debe ser 4 letras/números.` });
       return;
     }
+    stopReconnect();
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
     // Mantenemos la URL con el hash sincronizado al código de la sala.
     // Si el usuario llegó con `#WXYZ` y se une, normalizamos al código
@@ -392,6 +491,7 @@ async createRoom(mode: 'bots' | 'lobby') {
   },
 
   leave() {
+    stopReconnect();
     if (wsRef) {
       // Solo enviamos LEAVE si el socket sigue abierto — `readyState`
       // 1 = OPEN. Si ya está CLOSING/CLOSED/CONNECTING, `send` lanza
@@ -428,8 +528,12 @@ function connect(
   // por cada conexión — el mismo cliente terminaba ocupando los 4
   // seats con un WS por cabeza. (Bug reportado en Sprint 2.11.)
   if (wsRef) {
-    try { wsRef.close(); } catch { /* ignore */ }
+    // S2-15: es un cierre intencionado; que su `onclose` no dispare la
+    // reconexión automática.
+    const old = wsRef;
     wsRef = null;
+    old.onclose = null;
+    try { old.close(); } catch { /* ignore */ }
   }
   const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   // Enviamos `name` y `token` como query params para que el server
@@ -564,6 +668,7 @@ function connect(
       set({
         seatNames: msg.seatNames,
         seatKinds: msg.seatKinds,
+        seatDeadlines: msg.reconnectDeadlines,
         isBot: msg.seatKinds.map((k) => k === 'bot' || k === 'substitute'),
       });
     } else if (msg.type === 'REMATCH_STATUS') {
@@ -610,7 +715,24 @@ function connect(
       if (msg.code === 'ROOM_NOT_FOUND' || msg.code === 'SEAT_LOST') {
         const lastCode = getLastRoomCode();
         if (lastCode) clearStoredToken(lastCode);
+        if (code !== lastCode) clearStoredToken(code);
         clearLastRoomCode();
+      }
+      // S2-15: errores sin vuelta atrás mientras estamos en una mesa →
+      // paramos la reconexión y mostramos el motivo.
+      if (get().you !== null && (msg.code === 'ROOM_NOT_FOUND' || msg.code === 'SEAT_LOST')) {
+        stopReconnect();
+        set({
+          connection: 'lost',
+          connectionMessage:
+            msg.code === 'SEAT_LOST' ? 'Un bot ha ocupado tu asiento en esta partida.' : 'La sala ya no existe.',
+        });
+        return;
+      }
+      if (msg.code === 'SESSION_REPLACED') {
+        stopReconnect();
+        set({ connection: 'replaced', connectionMessage: msg.message });
+        return;
       }
       // El server rechazó nuestra acción (probablemente porque re-enviamos
       // la misma antes de recibir VIEW — esto ya no debería pasar con el
@@ -625,7 +747,28 @@ function connect(
     }
   };
 
-  ws.onopen = () => set({ ws });
-  ws.onclose = () => set({ ws: null });
-  ws.onerror = () => set({ error: 'Conexión perdida' });
+  ws.onopen = () => {
+    // Conectado (o reconectado). El WELCOME/VIEW que llega a continuación
+    // repinta la mesa con el estado actual.
+    reconnectAttempt = 0;
+    reconnectUntil = null;
+    set({ ws, connection: 'connected', connectionMessage: null });
+  };
+  ws.onclose = () => {
+    if (ws !== wsRef) return; // socket viejo (ya sustituido o cerrado a propósito)
+    wsRef = null;
+    set({ ws: null });
+    const st = get();
+    // Nunca llegamos a sentarnos (WELCOME): no hay asiento que recuperar.
+    if (st.you === null) {
+      set({ error: 'No se pudo conectar con la sala' });
+      return;
+    }
+    // Estados terminales o match cerrado: no reconectamos.
+    if (st.connection === 'lost' || st.connection === 'replaced' || st.matchFinished) return;
+    set({ connection: 'reconnecting' });
+    scheduleReconnect(code);
+  };
+  // `onerror` siempre viene seguido de `onclose`, que es quien decide.
+  ws.onerror = () => undefined;
 }

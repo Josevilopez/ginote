@@ -101,7 +101,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     type: z.literal('ERROR'),
-    code: z.enum(['BAD_MESSAGE', 'NOT_YOUR_TURN', 'ILLEGAL_ACTION', 'ROOM_NOT_FOUND', 'SEAT_LOST', 'INTERNAL']),
+    code: z.enum(['BAD_MESSAGE', 'NOT_YOUR_TURN', 'ILLEGAL_ACTION', 'ROOM_NOT_FOUND', 'SEAT_LOST', 'SESSION_REPLACED', 'INTERNAL']),
     message: z.string(),
   }),
   z.object({
@@ -179,6 +179,9 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('SEATS'),
     seatNames: z.array(z.string()),
     seatKinds: z.array(z.enum(['human', 'disconnected', 'bot', 'substitute'])),
+    /** Epoch ms en que vence la ventana de reconexión de cada asiento
+     *  `disconnected` (null en el resto). Para la cuenta atrás de la UI. */
+    reconnectDeadlines: z.array(z.number().int().nullable()),
   }),
   /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
    *  El cliente lo usa para mostrar el overlay centrado (igual que el

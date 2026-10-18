@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { HEARTBEAT_MS, RECONNECT_WINDOW_MS, abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
 import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
@@ -90,6 +90,18 @@ app.post('/api/rooms/matchmake', async (req, reply) => {
 });
 
 app.get('/api/health', async () => ({ ok: true }));
+
+/**
+ * S2-15: ¿sigue siendo mío el asiento de esta sala? El cliente lo
+ * pregunta antes de volver a su `lastRoomCode`, para no meterse a ciegas
+ * en una sala muerta, cerrada o donde ya le sustituyó un bot.
+ */
+app.get<{ Params: { code: string }; Querystring: { token?: string } }>('/api/rooms/:code/seat', async (req) => {
+  const room = getRoom(req.params.code.toUpperCase());
+  const token = req.query.token;
+  const ok = !!room && !!token && !room.matchFinished && room.players.some((p) => p.token === token);
+  return { ok };
+});
 
 // Health check simple para que el hosting (Cloudflare Tunnel, Fly, etc.)
 // sepa si el server está vivo. NO toca la base de datos ni nada caro.
@@ -253,15 +265,24 @@ app.register(async (instance) => {
         // con aviso, en vez de quedarse congelada sin recibir nada.
         const prev = room.players[seat]!.ws as unknown as WsSocket | null;
         if (prev && prev !== socket && prev.readyState === 1) {
-          send(prev, { type: 'ERROR', code: 'INTERNAL', message: 'Has abierto esta partida en otra pestaña o ventana' });
+          send(prev, { type: 'ERROR', code: 'SESSION_REPLACED', message: 'Has abierto esta partida en otra pestaña o ventana' });
           try { prev.close(); } catch { /* ignore */ }
         }
         room.players[seat]!.ws = socket as never;
+        delete room.players[seat]!.reconnectDeadline;
         if (playerId) room.players[seat]!.playerId = playerId;
       }
     }
+    if (seat < 0 && token && room.state !== null) {
+      // S2-15/S2-12: trae token de ESTA sala pero ya no es de nadie → su
+      // asiento lo ocupó un bot (o la partida se cerró). Sin reclamar: no
+      // le damos otro asiento libre.
+      send(socket, { type: 'ERROR', code: 'SEAT_LOST', message: 'Tu asiento lo ha ocupado un bot' });
+      socket.close();
+      return;
+    }
     if (seat < 0 && room.state !== null && playerId && room.abandonedPlayerIds.has(playerId)) {
-      // S2-12: quien abandonó (o no volvió en 90 s) no puede reclamar ni
+      // S2-12: quien abandonó (o no volvió en 45 s) no puede reclamar ni
       // ocupar otro asiento de esta mesa.
       send(socket, { type: 'ERROR', code: 'SEAT_LOST', message: 'Abandonaste esta partida; un bot ha ocupado tu asiento' });
       socket.close();
@@ -318,7 +339,29 @@ app.register(async (instance) => {
       broadcastSeats(room);
     }
 
+    // S2-15: latido. Un móvil que pierde la red (modo avión, cobertura) NO
+    // cierra el WS: sin esto el server lo daba por conectado durante
+    // minutos y la mesa esperaba 10 s por turno. Ping cada 5 s; si no
+    // contesta (pong) antes del siguiente, cortamos → 'close' → se marca
+    // desconectado y su turno lo juega el auto-play a los 2 s.
+    const rawWs = socket as unknown as import('ws').WebSocket;
+    let alive = true;
+    rawWs.on('pong', () => { alive = true; });
+    const heartbeat = setInterval(() => {
+      if (rawWs.readyState !== 1) { clearInterval(heartbeat); return; }
+      if (!alive) {
+        console.log(`[ws] code=${room.code} seat=${seat} sin respuesta al ping → cerrando`);
+        clearInterval(heartbeat);
+        rawWs.terminate();
+        return;
+      }
+      alive = false;
+      try { rawWs.ping(); } catch { /* ignore */ }
+    }, HEARTBEAT_MS);
+    socket.on('close', () => clearInterval(heartbeat));
+
     socket.on('message', async (raw: unknown) => {
+      alive = true;
       const text = raw instanceof Buffer ? raw.toString() : String(raw);
       // Log de cada mensaje entrante para diagnóstico. Si una partida
       // se queda colgada, este log muestra qué envió el cliente por
@@ -481,7 +524,7 @@ app.register(async (instance) => {
       if (!p) return;
       // Si el seat ya lo tiene otra conexión (misma sesión en otra
       // pestaña, o reconexión), el cierre de ESTE socket viejo no debe
-      // tocar nada: antes ponía `ws = null` y a los 90 s liberaba el seat
+      // tocar nada: antes ponía `ws = null` y a los 45 s liberaba el seat
       // del jugador que sí seguía conectado.
       if ((p.ws as unknown) !== socket) return;
       // LEAVE previo (Sprint 2.12): el cliente abandonó voluntariamente.
@@ -496,12 +539,16 @@ app.register(async (instance) => {
       }
       // Drop ACCIDENTAL: WS se cierra sin LEAVE (p.ej. el cliente
       // pierde la red o cierra la pestaña). Para permitir la
-      // re-conexión por token guardamos el token durante 90 s. Si el
+      // re-conexión por token guardamos el token durante 45 s. Si el
       // cliente vuelve a abrir un WS con `?token=T` en esa ventana, el
       // server reconoce el token y reusa el mismo seat. Pasados los
-      // 90 s sin reconexión, liberamos el slot definitivamente.
+      // 45 s sin reconexión, liberamos el slot definitivamente.
       p.ws = null;
+      p.reconnectDeadline = Date.now() + RECONNECT_WINDOW_MS;
       broadcastSeats(room); // S2-15: los demás ven "desconectado"
+      // Si le tocaba a él, re-armamos el auto-play: con `ws = null` juega a
+      // los 2 s en vez de agotar los 10 s que quedaban del timer anterior.
+      if (room.state !== null && room.state.turn === seat) scheduleAutoPlay(room);
       const tokenAtClose = p.token;
       setTimeout(() => {
         const now = room.players[seat];
@@ -513,12 +560,13 @@ app.register(async (instance) => {
           now.token = null;
           now.name = '?';
           delete now.playerId;
+          delete now.reconnectDeadline;
           scheduleLobbyCheck(room);
         } else if (!room.matchFinished) {
-          // S2-12: 90 s sin volver → bot definitivo (sin reclamar).
+          // S2-12: 45 s sin volver → bot definitivo (sin reclamar).
           substituteWithBot(room, seat as Seat, 'timeout');
         }
-      }, 90_000);
+      }, RECONNECT_WINDOW_MS);
     });
   });
 });
