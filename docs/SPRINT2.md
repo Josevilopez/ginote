@@ -65,8 +65,9 @@
 - Falta: al expirar los 90 s, **convertir el seat en bot definitivamente** (cambiar `kind` en `SeatInfo` a `'bot_substitute'` y asignar un bot L1 al slot), reclamar el seat al volver (`seat.reclaim`) queda pendiente para la siguiente baza.
 - ~0.7 d.
 
-### S2-13 — Revancha (primera a 3 partidas) — ⏳ no empezado
-- Hoy: el estado post-match dice literalmente "🏆 Match terminado — crea una sala nueva para jugar otra." en `apps/web/src/pages/Game.tsx:1542`.
+### S2-13 — Revancha (primera a 3 partidas) — ✅ cerrado (2026-10-18)
+- Implementado: `Room.matchWins` / `postgame` / `matchEndReason` en `apps/server/src/room.ts` (`openPostgame`, `castRematchVote`, `resolvePostgame`, `closeMatch`, `abandonDuringPostgame`, `sendPostgameStateTo`); `REMATCH_VOTE` → `REMATCH_STATUS` / `MATCH_ENDED {winner|null, reason, matchWins}` en `packages/protocol/src/wire.ts` (único cambio de protocolo del sprint: mensajes nuevos, sin tocar el envelope); panel de votación con cuenta atrás + marcador "Partidas · a 3" en `apps/web/src/pages/Game.tsx`; tests en `apps/server/tests/rematch.test.ts` (8).
+- Detalles: los bots votan `yes` automáticamente; `LEAVE` durante el postgame = `no`; un `no` cierra al instante; empate en el cierre → `winner: null`; quien reconecta recibe el `REMATCH_STATUS` / `MATCH_ENDED` vigente; `triggerNextHand` es no-op con postgame abierto (evita contar la partida dos veces); la partida nueva resetea `cumulativeTeamPts` y buenas/malas.
 - Diseño (decidido el 2026-10-17): **se elimina el concepto de "coto" del flujo de revancha**. Una "partida" = una mano completa con su score de equipo (≤ 100 puntos). El flujo es:
   1. Termina una partida.
   2. El server abre un `postgame` de 20 s con `rematch.status` (votos `pending`/`yes`/`no` por seat).

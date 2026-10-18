@@ -54,6 +54,10 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('QUEUE_LEAVE'),
   }),
+  z.object({
+    type: z.literal('REMATCH_VOTE'),
+    accept: z.boolean(),
+  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -92,6 +96,8 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     cotoEnMatch: z.number().int().optional(),
     matchFinished: z.boolean().optional(),
     matchChampion: z.union([z.literal(0), z.literal(1)]).nullable().optional(),
+    /** S2-13: partidas ganadas por equipo en el match (primero a 3). */
+    matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }).optional(),
   }),
   z.object({
     type: z.literal('ERROR'),
@@ -151,6 +157,20 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('QUEUE_MATCHED'),
     roomCode: z.string(),
     seat: z.number().int().min(0).max(3),
+  }),
+  z.object({
+    type: z.literal('REMATCH_STATUS'),
+    deadline: z.number().int().min(0), // epoch ms del server
+    votes: z.record(z.enum(['pending', 'yes', 'no'])),
+    matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }),
+  }),
+  z.object({
+    type: z.literal('MATCH_ENDED'),
+    /** Equipo campeón, o `null` si el match se cerró en empate de matchWins. */
+    winner: z.union([z.literal(0), z.literal(1)]).nullable(),
+    /** Motivo del cierre: alguien llegó a 3, rechazo/timeout de revancha, o abandono. */
+    reason: z.enum(['won', 'declined', 'timeout', 'abandoned']),
+    matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }),
   }),
   /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
    *  El cliente lo usa para mostrar el overlay centrado (igual que el

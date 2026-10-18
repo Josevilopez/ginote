@@ -80,22 +80,25 @@ interface State {
   lastError: { message: string; ts: number } | null;
   error: string | null;
 
-  // Progresión partida → coto → match (gestionada por el servidor).
-  // Usamos Record<0 | 1, number> en vez de `{ '0': ..., '1': ... }` para
-  // poder indexar con `team` (que es `0 | 1`) sin casts feos. En
-  // runtime son objetos idénticos (las keys se serializan a '0'/'1').
-  /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
-  partidas: Record<0 | 1, number>;
-  /** Cotos (sets de 3 partidas) ganados en el match, por equipo. */
-  cotos: Record<0 | 1, number>;
-  /** Partida actual dentro del coto (1..3). */
-  partidaEnCoto: number;
-  /** Coto actual dentro del match (1..2). */
-  cotoEnMatch: number;
-  /** El match entero ha terminado (alguien hizo 2 cotos). */
+  // Progresión del match (S2-13, gestionada por el servidor): gana el
+  // primer equipo que llegue a 3 partidas. Ya no hay "cotos".
+  // Usamos Record<0 | 1, number> para poder indexar con `team` sin casts.
+  /** Partidas ganadas en el match, por equipo. */
+  matchWins: Record<0 | 1, number>;
+  /** El match entero ha terminado (mesa cerrada). */
   matchFinished: boolean;
-  /** Ganador del match (0 o 1). */
+  /** Ganador del match (0 o 1), o null si sigue abierto o acabó en empate. */
   matchChampion: 0 | 1 | null;
+  /** Votación de revancha abierta (postgame de 20 s). null fuera de postgame. */
+  rematch: {
+    deadline: number;
+    votes: Record<string, 'pending' | 'yes' | 'no'>;
+  } | null;
+  /** Cierre del match recibido del servidor (MATCH_ENDED). */
+  matchEnded: {
+    winner: 0 | 1 | null;
+    reason: 'won' | 'declined' | 'timeout' | 'abandoned';
+  } | null;
 
   // Acciones
   /**
@@ -114,10 +117,21 @@ interface State {
   /** Pide al servidor que reparta la siguiente mano. Lo dispara el botón
    *  "Continuar" del panel de resumen tras un GAME_OVER (o MATCH_OVER). */
   requestNextHand: () => void;
+  /** Vota en la revancha (S2-13). `true` = otra partida, `false` = terminar. */
+  voteRematch: (accept: boolean) => void;
   leave: () => void;
 }
 
 let wsRef: WebSocket | null = null;
+
+/** Estado de match limpio para una sala nueva (create / join / leave). */
+const MATCH_RESET = {
+  matchWins: { 0: 0, 1: 0 } as Record<0 | 1, number>,
+  matchFinished: false,
+  matchChampion: null,
+  rematch: null,
+  matchEnded: null,
+} satisfies Partial<State>;
 let justResolvedTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
@@ -227,15 +241,14 @@ export const useGame = create<State>((set, get) => ({
 
   // Estado de progresión partida → coto → match (lo envía el servidor
   // en cada VIEW). Inicializado a "1ª partida del 1er coto, todo a 0".
-  partidas: { 0: 0, 1: 0 },
-  cotos: { 0: 0, 1: 0 },
-  partidaEnCoto: 1,
-  cotoEnMatch: 1,
+  matchWins: { 0: 0, 1: 0 },
   matchFinished: false,
   matchChampion: null,
+  rematch: null,
+  matchEnded: null,
 
 async createRoom(mode: 'bots' | 'lobby') {
-    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null });
+    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
     try {
       const name = getPlayerName();
       if (mode === 'lobby') {
@@ -301,7 +314,7 @@ async createRoom(mode: 'bots' | 'lobby') {
       set({ error: `Código de sala inválido: "${code}". Debe ser 4 letras/números.` });
       return;
     }
-    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null });
+    set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
     // Mantenemos la URL con el hash sincronizado al código de la sala.
     // Si el usuario llegó con `#WXYZ` y se une, normalizamos al código
     // canónico que devolvió el server (mismas letras, mismo orden).
@@ -363,6 +376,17 @@ async createRoom(mode: 'bots' | 'lobby') {
     ws.send(JSON.stringify({ type: 'NEXT_HAND' } satisfies ClientMessage));
   },
 
+  voteRematch(accept: boolean) {
+    const { ws, rematch, you } = get();
+    if (!ws || ws.readyState !== 1 || !rematch) return;
+    // Optimista: marcamos nuestro voto ya; el REMATCH_STATUS del server
+    // lo confirmará (o cerrará el match si alguien dijo que no).
+    if (you !== null) {
+      set({ rematch: { ...rematch, votes: { ...rematch.votes, [String(you)]: accept ? 'yes' : 'no' } } });
+    }
+    ws.send(JSON.stringify({ type: 'REMATCH_VOTE', accept } satisfies ClientMessage));
+  },
+
   leave() {
     if (wsRef) {
       // Solo enviamos LEAVE si el socket sigue abierto — `readyState`
@@ -385,7 +409,7 @@ async createRoom(mode: 'bots' | 'lobby') {
     const code = get().roomCode;
     if (code) clearStoredToken(code);
     clearLastRoomCode();
-    set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null });
+    set({ ws: null, roomCode: null, you: null, view: null, gameOver: null, matchOver: null, seatNames: [], isBot: [], justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
   },
 }));
 
@@ -485,15 +509,13 @@ function connect(
         // Lock anti-doble-click: llega VIEW nuevo → la acción anterior
         // se procesó → podemos aceptar otra.
         pendingActionCardId: null,
-        // Estado de progresión partida → coto → match. Si el servidor
-        // aún no lo manda (cliente viejo, sin el nuevo campo), nos
-        // quedamos con el estado anterior.
-        partidas: msg.partidas ?? get().partidas,
-        cotos: msg.cotos ?? get().cotos,
-        partidaEnCoto: msg.partidaEnCoto ?? get().partidaEnCoto,
-        cotoEnMatch: msg.cotoEnMatch ?? get().cotoEnMatch,
+        // Progresión del match (S2-13). Si el servidor no lo manda,
+        // conservamos el estado anterior.
+        matchWins: msg.matchWins ?? get().matchWins,
         matchFinished: msg.matchFinished ?? get().matchFinished,
-        matchChampion: msg.matchChampion ?? get().matchChampion,
+        matchChampion: msg.matchChampion !== undefined ? msg.matchChampion : get().matchChampion,
+        // Empieza una mano nueva (p. ej. revancha aceptada) → se acabó la votación.
+        rematch: isNewHand ? null : get().rematch,
       });
     } else if (msg.type === 'TRICK_JUST_RESOLVED') {
       // Mostrar el overlay durante 2,5 s. Si llega otro antes, se resetea.
@@ -531,6 +553,23 @@ function connect(
     } else if (msg.type === 'MATCH_OVER') {
       set({
         matchOver: msg,
+        pendingActionCardId: null,
+      });
+    } else if (msg.type === 'REMATCH_STATUS') {
+      // S2-13: votación de revancha abierta (o actualizada con un voto).
+      set({
+        rematch: { deadline: msg.deadline, votes: msg.votes },
+        matchWins: msg.matchWins,
+        pendingActionCardId: null,
+      });
+    } else if (msg.type === 'MATCH_ENDED') {
+      // S2-13: la mesa se cierra (alguien llegó a 3, rechazo, timeout o abandono).
+      set({
+        rematch: null,
+        matchEnded: { winner: msg.winner, reason: msg.reason },
+        matchWins: msg.matchWins,
+        matchFinished: true,
+        matchChampion: msg.winner,
         pendingActionCardId: null,
       });
     } else if (msg.type === 'SWAP_HAPPENED') {

@@ -120,34 +120,46 @@ export interface Room {
    *  menor (ver `scheduleLobbyCheck`). */
   lobbyWindowMs: number;
 
-  // ─── Estructura del match completo (coto → partida → juego) ───
-  // Terminología usada en este código (alineada con el cliente y el
-  // dominio del juego):
-  //   - partida: una ida o vuelta individual. Gana el equipo que cruza
-  //     los 100 puntos raw del coto (lo que el motor llama
-  //     `state.matchEnded`). Aquí se cuentan como `partidas[team]`.
-  //   - coto: un set de 3 partidas consecutivas ganadas. Se cuentan
-  //     como `cotos[team]`.
-  //   - match: la serie entera. Lo gana el primer equipo que suma
-  //     2 cotos (`cotos[team] >= 2`).
+  // ─── Estructura del match completo (Sprint 2-13) ───
+  // Decisión 2026-10-17: eliminar el concepto de "coto". Una partida
+  // = una mano completa con su score de equipo. Gana el match el
+  // primer equipo que llegue a 3 partidas (no 2 cotos de 3 partidas).
   //
-  // El motor solo rastrea el coto actual. La capa del servidor
-  // (Room) lleva la cuenta de partidas/cotos/match y orquesta las
-  // transiciones en `triggerNextHand`.
+  // Cuando termina una mano (state.matchEnded === true), se incrementa
+  // matchWins[winner]. Si llega a 3, el match termina. Si no, se abre
+  // un `postgame` de 20s para votar revancha: si todos votan yes, se
+  // inicia una nueva partida; si alguien vota no o expira el timer,
+  // se cierra el match con el equipo que tenga más matchWins.
 
-  /** Partidas (idas/vueltas) ganadas en el coto actual, por equipo. */
-  partidas: { 0: number; 1: number };
-  /** Cotos (sets de 3 partidas) ganados en el match, por equipo. */
-  cotos: { 0: number; 1: number };
-  /** Partida actual dentro del coto (1..3). */
-  partidaEnCoto: number;
-  /** Coto actual dentro del match (1..2). */
-  cotoEnMatch: number;
-  /** El match entero ha terminado (una pareja ha hecho 2 cotos). */
+  /** Partidas ganadas por equipo en este match. Gana el primero en llegar a 3. */
+  matchWins: { 0: number; 1: number };
+  /**
+   * Estado de postgame: ventana de 20s con votación de revancha.
+   * `null` cuando no estamos en postgame. Cuando se llena, se
+   * decide si iniciar nueva partida (unanime yes) o cerrar el match.
+   */
+  postgame: {
+    /** epoch ms del deadline (server time). */
+    deadline: number;
+    /** Voto de cada seat humano (los bots no votan, default 'pending' que cuenta como no). */
+    votes: Record<number, 'pending' | 'yes' | 'no'>;
+    /** Timer para cerrar el postgame si nadie vota o expira. */
+    timer: NodeJS.Timeout | null;
+  } | null;
+  /** El match entero ha terminado (una pareja ha hecho 3 partidas). */
   matchFinished: boolean;
-  /** Equipo ganador del match (0 o 1), null mientras no haya terminado. */
+  /** Equipo ganador del match (0 o 1). null mientras no haya terminado, o si se cerró en empate. */
   matchChampion: 0 | 1 | null;
+  /** Motivo del cierre del match (estado `closed`). null mientras siga abierto. */
+  matchEndReason: MatchEndReason | null;
 }
+
+export type MatchEndReason = 'won' | 'declined' | 'timeout' | 'abandoned';
+
+/** Constante del plan: 3 partidas para ganar el match. */
+export const MATCH_WINS_TO_WIN = 3;
+/** Ventana de votacion de revancha: 20 segundos. */
+export const REMATCH_VOTE_TIMEOUT_MS = 20_000;
 
 /**
  * Crea una sala vacía. Los seats se rellenan al conectarse los clientes.
@@ -203,12 +215,11 @@ export function createRoom(opts: {
     lobbyTimer: null,
     lobbyEndsAt: null,
     lobbyWindowMs: 30000,
-    partidas: { 0: 0, 1: 0 },
-    cotos: { 0: 0, 1: 0 },
-    partidaEnCoto: 1,
-    cotoEnMatch: 1,
+    matchWins: { 0: 0, 1: 0 },
+    postgame: null,
     matchFinished: false,
     matchChampion: null,
+    matchEndReason: null,
   };
 }
 
@@ -243,10 +254,7 @@ function broadcastView(room: Room): void {
         // Estado de la progresión partida → coto → match, gestionado
         // por el servidor. El cliente lo lee para mostrar el marcador
         // y decidir qué panel de fin de mano enseñar.
-        partidas: room.partidas,
-        cotos: room.cotos,
-        partidaEnCoto: room.partidaEnCoto,
-        cotoEnMatch: room.cotoEnMatch,
+        matchWins: room.matchWins,
         matchFinished: room.matchFinished,
         matchChampion: room.matchChampion,
       } satisfies ServerMessage));
@@ -509,6 +517,14 @@ export function applyActionWithResolveEvent(
   if (after > before) {
     const last = room.state.finishedTricks[after - 1]!;
     broadcastTrickResolved(room, last);
+  } else if (room.state.phase === 'finished') {
+    // La mano se cerró SIN baza: un cante en vueltas que cruza el umbral
+    // (el motor corta la mano en `apply`). Los callers solo programan
+    // `triggerNextHand` cuando resuelve la última baza, así que aquí no
+    // lo haría nadie y la mesa se quedaba congelada en "Contando la
+    // partida…". Misma pausa que tras la última baza.
+    console.log(`[hand] cerrada por cante code=${room.code} → triggerNextHand en 4,5 s`);
+    setTimeout(() => triggerNextHand(room), 4500);
   }
   // Swap del 7: el motor ya intercambió `state.trumpCard` ↔
   // `state.hands[seat]`, así que `state.trumpCard` ahora es el 7 que
@@ -687,27 +703,35 @@ export function emitAfterChange(room: Room, opts: { skipGameOver?: boolean } = {
 
 /**
  * Dispara la siguiente mano: procesa la partida que acaba de terminar
- * (si matchEnded), actualiza el contador de partidas y posiblemente de
- * cotos, y luego reparte. Llamado desde el handler del mensaje NEXT_HAND
- * y desde la auto-cadencia del servidor.
+ * (si matchEnded), actualiza `matchWins`, y luego reparte. Llamado
+ * desde el handler del mensaje NEXT_HAND y desde la auto-cadencia
+ * del servidor.
  *
- * Reglas de progresión (partida → coto → match):
- *  - Si la partida actual terminó (matchEnded + matchWinner), el ganador
- *    recibe +1 partida. Si llega a 3 → gana el coto: +1 coto, reset
- *    partidas, siguiente coto. Si llega a 2 → matchFinished.
- *  - Si la partida NO terminó (falsa alarma) o seguimos en la misma
- *    partida, simplemente se reparte la siguiente mano con vuelta
- *    incrementada.
+ * Reglas de progresión (Sprint 2-13, 2026-10-17):
+ *  - Si la mano actual terminó (`state.matchEnded + matchWinner`), el
+ *    ganador recibe +1 partida (`matchWins[winner]++`).
+ *  - Si `matchWins[winner] >= 3` → match termina con ese ganador.
+ *  - Si `matchWins[winner] < 3` → se abre `postgame` de 20s con
+ *    votación de revancha. Si todos los humanos votan `yes` antes
+ *    del deadline, se inicia nueva partida (mismos seats, nuevo
+ *    `matchWins` no, se mantiene). Si expira o alguien vota `no`,
+ *    se cierra el match con el que tenga más `matchWins` (o empate).
+ *  - Si la mano NO terminó, simplemente se reparte la siguiente
+ *    mano con vuelta incrementada.
  *
- * No-op si el match ya terminó (matchFinished) o si no estamos en
+ * No-op si el match ya terminó (`matchFinished`) o si no estamos en
  * `phase: 'finished'`.
  */
 export function triggerNextHand(room: Room): void {
-  // DEBUG: log temporal para diagnosticar por qué una mano a veces
-  // no avanza al estado "Repartiendo siguiente mano…". Borrar tras
-  // cerrar el ticket.
   if (room.matchFinished) {
     console.log(`[triggerNextHand] no-op: matchFinished=true code=${room.code}`);
+    return;
+  }
+  // Ya hay una votación de revancha abierta: la partida terminada ya se
+  // contó en `matchWins`. Sin este guard, la auto-cadencia (setTimeout
+  // 4,5 s) + un NEXT_HAND del cliente sumarían la misma partida 2 veces.
+  if (room.postgame !== null) {
+    console.log(`[triggerNextHand] no-op: postgame abierto code=${room.code}`);
     return;
   }
   if (room.state === null) return; // sala en lobby, no hay partida que avanzar
@@ -717,41 +741,28 @@ export function triggerNextHand(room: Room): void {
   }
   console.log(`[triggerNextHand] proceeding code=${room.code} vuelta=${room.state.vuelta} matchEnded=${room.state.matchEnded}`);
 
-  // 1. Procesar la partida recién terminada, si la hay.
+  // 1. Procesar la mano recién terminada, si la hay.
   if (room.state.matchEnded && room.state.matchWinner !== null) {
-    const partidaWinner = room.state.matchWinner;
-    room.partidas[partidaWinner]++;
+    const winner = room.state.matchWinner;
+    room.matchWins[winner]++;
 
-    if (room.partidas[partidaWinner] >= 3) {
-      // Coto ganado por partidaWinner
-      room.cotos[partidaWinner]++;
-      room.partidas = { 0: 0, 1: 0 };
-      room.partidaEnCoto = 1;
-      room.cotoEnMatch++;
-
-      if (room.cotos[partidaWinner] >= 2) {
-        // Match terminado: no se reparten más juegos. El cliente
-        // mostrará el panel de "Match terminado" sin botón de continuar.
-        room.matchFinished = true;
-        room.matchChampion = partidaWinner;
-        broadcastView(room);
-        return;
-      }
-      // Coto ganado pero match no: cae al reparto de abajo (cae
-      // sin return), para que el nuevo coto arranque sin click
-      // del usuario.
-    } else {
-      // Siguiente partida del mismo coto
-      room.partidaEnCoto++;
+    if (room.matchWins[winner] >= MATCH_WINS_TO_WIN) {
+      // Match terminado: 3 partidas ganadas por winner.
+      closeMatch(room, winner, 'won');
+      return;
     }
+    // No llega a 3: abrir postgame de revancha.
+    openPostgame(room);
+    return;
   }
 
-  // 2. Repartir la siguiente mano (siguiente vuelta del mismo juego, o
-  // vuelta 1 del siguiente juego si el coto terminó por match end, o
-  // vuelta 1 de la siguiente partida si la anterior la acaba de ganar
-  // el mismo equipo).
+  // 2. Repartir la siguiente mano (siguiente vuelta del mismo juego).
+  dealAndResume(room);
+}
+
+/** Reparte la siguiente mano, emite VIEW y arranca bots / auto-play. */
+function dealAndResume(room: Room): void {
   startNextHand(room);
-  if (room.state.matchEnded) return;
   broadcastView(room);
   // Si el turno cae en un bot, arrancar automáticamente.
   void stepBots(room).catch(() => undefined);
@@ -818,7 +829,10 @@ export function startNextHand(room: Room): void {
     dealer: newDealer,
     continuation: {
       vuelta: newVuelta,
-      score: room.state.score,
+      // Partida nueva (revancha) → buenas/malas a cero. Misma partida → se conservan.
+      score: room.state.matchEnded
+        ? { buenas: { 0: 0, 1: 0 }, malas: { 0: 0, 1: 0 } }
+        : room.state.score,
       // cumulativeTeamPts también se resetea: cada juego empieza con 0/0
       // (un coto = un juego = 0..100 raw, sin acumular entre cotos).
       cumulativeTeamPts: room.state.matchEnded
@@ -848,6 +862,161 @@ function checkMatchOver(room: Room): void {
 }
 
 /**
+ * Abre la ventana de postgame: votación de revancha de 20s. Si todos
+ * los humanos votan `yes` antes del deadline, se inicia nueva partida.
+ * Si expira o alguien vota `no`, se cierra el match.
+ *
+ * Los bots votan `yes` automáticamente (no bloquean la revancha). Si no
+ * queda ningún humano en la mesa, la revancha no tiene sentido y se
+ * cierra el match directamente.
+ */
+function openPostgame(room: Room): void {
+  clearAutoPlayTimer(room);
+  const humanSeats = room.players.filter((p) => p.token !== null).map((p) => p.seat);
+  if (humanSeats.length === 0) {
+    closeMatch(room, leaderByMatchWins(room), 'abandoned');
+    return;
+  }
+  const deadline = Date.now() + REMATCH_VOTE_TIMEOUT_MS;
+  const votes: Record<number, 'pending' | 'yes' | 'no'> = {};
+  for (const p of room.players) votes[p.seat] = p.token === null ? 'yes' : 'pending';
+  const timer = setTimeout(() => {
+    if (room.postgame) room.postgame.timer = null;
+    resolvePostgame(room, 'timeout');
+  }, REMATCH_VOTE_TIMEOUT_MS);
+  room.postgame = { deadline, votes, timer };
+  broadcastRematchStatus(room);
+  console.log(`[postgame] opened code=${room.code} matchWins=${JSON.stringify(room.matchWins)}`);
+}
+
+/** Mensaje REMATCH_STATUS con el estado actual de la votación (o null si no hay postgame). */
+function rematchStatusMessage(room: Room): ServerMessage | null {
+  if (!room.postgame) return null;
+  return {
+    type: 'REMATCH_STATUS',
+    deadline: room.postgame.deadline,
+    votes: serializeVotes(room.postgame.votes),
+    matchWins: room.matchWins,
+  };
+}
+
+function broadcastRematchStatus(room: Room): void {
+  const msg = rematchStatusMessage(room);
+  if (msg) broadcast(room, msg);
+}
+
+/**
+ * Para un cliente que (re)conecta: si la sala está en postgame le manda
+ * el REMATCH_STATUS vigente; si el match ya se cerró, el MATCH_ENDED.
+ */
+export function sendPostgameStateTo(room: Room, ws: { send: (data: string) => void; readyState: number }): void {
+  if (ws.readyState !== 1) return;
+  const status = rematchStatusMessage(room);
+  if (status) {
+    ws.send(JSON.stringify(status));
+    return;
+  }
+  if (room.matchFinished && room.matchEndReason !== null) {
+    ws.send(JSON.stringify({
+      type: 'MATCH_ENDED',
+      winner: room.matchChampion,
+      reason: room.matchEndReason,
+      matchWins: room.matchWins,
+    } satisfies ServerMessage));
+  }
+}
+
+/** Convierte el Record<number, vote> a Record<string, vote> para zod. */
+function serializeVotes(votes: Record<number, 'pending' | 'yes' | 'no'>): Record<string, 'pending' | 'yes' | 'no'> {
+  const out: Record<string, 'pending' | 'yes' | 'no'> = {};
+  for (const k of Object.keys(votes)) out[k] = votes[Number(k)]!;
+  return out;
+}
+
+/** Equipo con más `matchWins`, o `null` si van empatados. */
+function leaderByMatchWins(room: Room): 0 | 1 | null {
+  if (room.matchWins[0] > room.matchWins[1]) return 0;
+  if (room.matchWins[1] > room.matchWins[0]) return 1;
+  return null;
+}
+
+/**
+ * Cierra el match (estado `closed`). `winner` es el equipo campeón o
+ * `null` si se cerró en empate. Tras esto la sala ya no reparte más.
+ */
+function closeMatch(room: Room, winner: 0 | 1 | null, reason: MatchEndReason): void {
+  if (room.postgame?.timer) clearTimeout(room.postgame.timer);
+  room.postgame = null;
+  clearAutoPlayTimer(room);
+  room.matchFinished = true;
+  room.matchChampion = winner;
+  room.matchEndReason = reason;
+  broadcastView(room);
+  broadcast(room, {
+    type: 'MATCH_ENDED',
+    winner,
+    reason,
+    matchWins: room.matchWins,
+  });
+  console.log(`[match] ended code=${room.code} reason=${reason} champion=${winner ?? 'empate'} matchWins=${JSON.stringify(room.matchWins)}`);
+}
+
+/** ¿Todos los humanos sentados han votado `yes`? */
+function allHumansYes(room: Room): boolean {
+  const pg = room.postgame;
+  if (!pg) return false;
+  return room.players.every((p) => p.token === null || pg.votes[p.seat] === 'yes');
+}
+
+/**
+ * Resuelve el postgame: unanimidad de humanos en `yes` → nueva partida
+ * (mismos seats, dealer rotado, mazo nuevo, `matchWins` se conserva).
+ * Cualquier otra cosa → match cerrado con el que lleve más `matchWins`.
+ */
+function resolvePostgame(room: Room, reasonIfClosed: MatchEndReason): void {
+  const pg = room.postgame;
+  if (!pg) return;
+  if (allHumansYes(room)) {
+    if (pg.timer) clearTimeout(pg.timer);
+    room.postgame = null;
+    console.log(`[postgame] rematch accepted code=${room.code}`);
+    dealAndResume(room);
+    return;
+  }
+  closeMatch(room, leaderByMatchWins(room), reasonIfClosed);
+}
+
+/**
+ * Procesa un voto de revancha desde el cliente. Un `no` cierra el match
+ * al instante; si tras el voto todos los humanos son `yes`, arranca la
+ * nueva partida sin esperar al deadline. Devuelve `false` si no había
+ * votación abierta (o el seat no es humano).
+ */
+export function castRematchVote(room: Room, seat: Seat, accept: boolean): boolean {
+  if (!room.postgame) return false;
+  if (room.players[seat]?.token == null) return false;
+  room.postgame.votes[seat] = accept ? 'yes' : 'no';
+  broadcastRematchStatus(room);
+  if (!accept) {
+    resolvePostgame(room, 'declined');
+  } else if (allHumansYes(room)) {
+    resolvePostgame(room, 'timeout');
+  }
+  return true;
+}
+
+/**
+ * Un humano abandona la mesa (LEAVE) durante el postgame: cuenta como
+ * voto `no` → la mesa se cierra (S2-13 punto 5).
+ */
+export function abandonDuringPostgame(room: Room, seat: Seat): void {
+  if (!room.postgame) return;
+  room.postgame.votes[seat] = 'no';
+  broadcastRematchStatus(room);
+  resolvePostgame(room, 'abandoned');
+}
+
+/**
  * Hook S2-17: actualiza ELO de los humanos al final de una partida
  * (cuando `state.matchEnded` pasa de false a true).
  *
@@ -865,31 +1034,50 @@ function checkMatchOver(room: Room): void {
  */
 async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
   const cosmos = getCosmosHandles();
-  if (!cosmos) return; // memory backend, no persistimos nada
+  if (!cosmos) {
+    console.log(`[elo] skip code=${room.code}: sin Cosmos (PERSISTENCE_BACKEND=memory)`);
+    return;
+  }
+  const seatsInfo = room.players
+    .map((p) => `s${p.seat}:${p.token === null ? 'bot' : p.playerId ? p.playerId.slice(0, 8) : 'humano-sin-pid'}`)
+    .join(' ');
+  console.log(`[elo] fin de partida code=${room.code} winner=team${winner} seats=[${seatsInfo}]`);
 
-  type HumanRating = { playerId: string; rating: number; games: number };
+  type HumanRating = { playerId: string; rating: number; games: number; wins: number; losses: number };
   const humans: Record<0 | 1, HumanRating[]> = { 0: [], 1: [] };
 
   for (const slot of room.players) {
-    if (slot.token === null || !slot.playerId) continue; // bot o sin identidad
+    if (slot.token === null) continue; // bot
+    if (!slot.playerId) {
+      console.log(`[elo] seat ${slot.seat} es humano pero no tiene playerId (¿sin cookie guinote_pid?)`);
+      continue;
+    }
     // Seats 0,2 → equipo 0; seats 1,3 → equipo 1
     const team: 0 | 1 = (slot.seat % 2 === 0 ? 0 : 1) as 0 | 1;
     try {
       const { resource } = await cosmos.players.item(slot.playerId, slot.playerId).read();
-      if (!resource) continue;
-      const r = resource as { rating?: number; games?: number };
+      if (!resource) {
+        console.log(`[elo] player ${slot.playerId} no existe en Cosmos`);
+        continue;
+      }
+      const r = resource as { rating?: number; games?: number; wins?: number; losses?: number };
       humans[team].push({
         playerId: slot.playerId,
         rating: r.rating ?? 1000,
         games: r.games ?? 0,
+        wins: r.wins ?? 0,
+        losses: r.losses ?? 0,
       });
-    } catch {
-      // 404 o similar — saltamos este humano
+    } catch (err) {
+      console.log(`[elo] error leyendo player ${slot.playerId}: ${(err as Error).message}`);
     }
   }
 
   // Si algún equipo no tiene humanos, no se juega ELO (partida con bots).
-  if (humans[0].length === 0 || humans[1].length === 0) return;
+  if (humans[0].length === 0 || humans[1].length === 0) {
+    console.log(`[elo] skip code=${room.code}: hace falta al menos un humano con playerId en CADA equipo (team0=${humans[0].length}, team1=${humans[1].length})`);
+    return;
+  }
 
   const meanRating = (xs: HumanRating[]) => xs.reduce((a, b) => a + b.rating, 0) / xs.length;
   const meanGames = (xs: HumanRating[]) => Math.round(xs.reduce((a, b) => a + b.games, 0) / xs.length);
@@ -908,11 +1096,14 @@ async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
         await updatePlayerRating(cosmos, h.playerId, {
           rating: h.rating + delta,
           games: h.games + 1,
-          wins: won ? 1 : 0,
-          losses: won ? 0 : 1,
+          // Acumulamos (antes se sobrescribía con 1/0).
+          wins: h.wins + (won ? 1 : 0),
+          losses: h.losses + (won ? 0 : 1),
         });
-      } catch {
+        console.log(`[elo] ${h.playerId.slice(0, 8)} ${h.rating} → ${h.rating + delta} (${won ? 'gana' : 'pierde'})`);
+      } catch (err) {
         // Si falla un player, seguimos con los demás (no rompemos la partida).
+        console.log(`[elo] error actualizando ${h.playerId}: ${(err as Error).message}`);
       }
     }
   };

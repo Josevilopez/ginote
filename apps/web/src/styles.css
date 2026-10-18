@@ -1764,6 +1764,59 @@ body {
   text-align: center;
   line-height: 1.4;
 }
+/* ───── Revancha (S2-13): votación de 20 s y cierre del match ───── */
+.rematch-panel,
+.rematch-closed {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.rematch-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--accent);
+}
+.rematch-secs {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-mute);
+  font-weight: 600;
+  margin-left: 4px;
+}
+.rematch-bar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.rematch-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s linear;
+}
+.rematch-votes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+.rematch-votes .is-me { font-weight: 700; }
+.rematch-buttons {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.rematch-buttons .btn {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 14px;
+}
 /* En móvil: el panel ocupa casi toda la pantalla para que las dos cajas
    + tabla del desglose quepan sin scroll horizontal. Reducimos padding
    lateral y fuente del título. */

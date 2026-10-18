@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { applyActionWithResolveEvent, broadcastLobbyStatus, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, stepBots, triggerNextHand } from './room.js';
+import { abandonDuringPostgame, applyActionWithResolveEvent, broadcastLobbyStatus, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { CosmosRoomStore } from './persistence/cosmos.js';
 import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
@@ -248,6 +248,14 @@ app.register(async (instance) => {
       const idx = room.players.findIndex((p) => p.token === token);
       if (idx >= 0) {
         seat = idx;
+        // Mismo token desde otra pestaña / reconexión con la vieja aún
+        // abierta: la conexión nueva se queda el seat y la vieja se cierra
+        // con aviso, en vez de quedarse congelada sin recibir nada.
+        const prev = room.players[seat]!.ws as unknown as WsSocket | null;
+        if (prev && prev !== socket && prev.readyState === 1) {
+          send(prev, { type: 'ERROR', code: 'INTERNAL', message: 'Has abierto esta partida en otra pestaña o ventana' });
+          try { prev.close(); } catch { /* ignore */ }
+        }
         room.players[seat]!.ws = socket as never;
         if (playerId) room.players[seat]!.playerId = playerId;
       }
@@ -294,6 +302,9 @@ app.register(async (instance) => {
       // arrancar el ciclo de bots. Sin esto la partida se queda colgada
       // silenciosamente hasta que un humano intente tirar carta.
       void stepBots(room).catch(() => undefined);
+      // S2-13: si la mesa está votando revancha (o el match ya se cerró),
+      // el cliente que (re)conecta necesita ese estado para pintar el panel.
+      sendPostgameStateTo(room, socket);
     }
 
     socket.on('message', async (raw: unknown) => {
@@ -321,6 +332,15 @@ app.register(async (instance) => {
         send(socket, { type: 'PONG' });
         return;
       }
+      // Voto de revancha (S2-13): si estamos en postgame, registramos
+      // el voto del seat actual y, si todos los humanos ya son yes,
+      // resolvemos inmediatamente.
+      if (msg.type === 'REMATCH_VOTE') {
+        if (!castRematchVote(room, seat as Seat, msg.accept)) {
+          send(socket, { type: 'ERROR', code: 'BAD_MESSAGE', message: 'No hay votación de revancha abierta' });
+        }
+        return;
+      }
       if (msg.type === 'LEAVE') {
         // Abandono VOLUNTARIO. Liberamos el slot INMEDIATAMENTE (sin
         // backoff) y marcamos `leaving=true` para que el `socket.on('close')`
@@ -334,6 +354,9 @@ app.register(async (instance) => {
         const p = room.players[seat];
         if (p) {
           p.leaving = true;
+          // S2-13: abandonar durante la votación de revancha = voto `no`
+          // → la mesa se cierra para todos.
+          abandonDuringPostgame(room, seat as Seat);
           if (room.state === null) {
             // Sala en lobby: liberar el slot YA. Si la partida ya
             // empezó, no liberamos el seat (el humano que se va deja un
@@ -441,6 +464,11 @@ app.register(async (instance) => {
     socket.on('close', () => {
       const p = room.players[seat];
       if (!p) return;
+      // Si el seat ya lo tiene otra conexión (misma sesión en otra
+      // pestaña, o reconexión), el cierre de ESTE socket viejo no debe
+      // tocar nada: antes ponía `ws = null` y a los 90 s liberaba el seat
+      // del jugador que sí seguía conectado.
+      if ((p.ws as unknown) !== socket) return;
       // LEAVE previo (Sprint 2.12): el cliente abandonó voluntariamente.
       // El handler de LEAVE ya liberó el slot (o lo hará cuando
       // scheduleLobbyCheck corra). No aplicamos backoff — solo

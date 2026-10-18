@@ -82,14 +82,13 @@ export function Game() {
   }, [swapAnnouncement?.uid]);
   const sendAction = useGame((s) => s.sendAction);
   const leave = useGame((s) => s.leave);
-  // Progresión partida → coto → match (servidor). Necesitamos varios
-  // en el render del marcador y de los paneles de fin de mano.
-  const partidas = useGame((s) => s.partidas);
-  const cotos = useGame((s) => s.cotos);
-  const partidaEnCoto = useGame((s) => s.partidaEnCoto);
-  const cotoEnMatch = useGame((s) => s.cotoEnMatch);
+  // Progresión del match (S2-13): primero a 3 partidas gana. Lo usa el
+  // marcador y los paneles de fin de partida / revancha.
+  const matchWins = useGame((s) => s.matchWins);
   const matchFinished = useGame((s) => s.matchFinished);
-  const matchChampion = useGame((s) => s.matchChampion);
+  const rematch = useGame((s) => s.rematch);
+  const matchEnded = useGame((s) => s.matchEnded);
+  const voteRematch = useGame((s) => s.voteRematch);
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
   // IDs en el orden actual; `null` = orden por defecto (palo + fuerza).
@@ -992,32 +991,17 @@ export function Game() {
           const otherTeam = (1 - (you % 2)) as 0 | 1;
           return (
             <div className="match-tennis">
-              {/* Caja "Partidas" (idas/vueltas individuales ganadas). En el
-                  DOM va PRIMERO para que con el `order` del CSS la saquemos
-                  a la izquierda. */}
+              {/* Caja "Partidas": partidas ganadas en el match (S2-13,
+                  gana el primero que llegue a 3). Ya no hay cotos. */}
               <div className="match-tennis-board">
-                <div className="match-tennis-label">Partidas</div>
+                <div className="match-tennis-label">Partidas · a 3</div>
                 <div className="match-tennis-row is-mine">
-                  <span className="match-tennis-count">{partidas[myTeam]}</span>
+                  <span className="match-tennis-count">{matchWins[myTeam]}</span>
                 </div>
-                {/* El guion solo se ve en móvil (display: none por defecto).
-                    Lo añadimos al DOM para no duplicar el render según el
-                    viewport. */}
+                {/* El guion solo se ve en móvil (display: none por defecto). */}
                 <span className="match-tennis-dash" aria-hidden="true">-</span>
                 <div className="match-tennis-row is-theirs">
-                  <span className="match-tennis-count">{partidas[otherTeam]}</span>
-                </div>
-              </div>
-              {/* Caja "Cotos" (sets de 3 partidas ganados). Va segunda en
-                  el DOM y el CSS la coloca a la derecha. */}
-              <div className="match-tennis-board">
-                <div className="match-tennis-label">Cotos</div>
-                <div className="match-tennis-row is-mine">
-                  <span className="match-tennis-count">{cotos[myTeam]}</span>
-                </div>
-                <span className="match-tennis-dash" aria-hidden="true">-</span>
-                <div className="match-tennis-row is-theirs">
-                  <span className="match-tennis-count">{cotos[otherTeam]}</span>
+                  <span className="match-tennis-count">{matchWins[otherTeam]}</span>
                 </div>
               </div>
             </div>
@@ -1304,16 +1288,22 @@ export function Game() {
                 <h3 className="summary-result-title">
                   {s.matchWinner === s.myTeam ? '🎉 Hemos ganado' : 'Ganan ellos'}
                 </h3>
-                {/* Subtítulo que indica el nivel en el que estamos:
-                    - matchFinished: el match entero ha terminado.
-                    - partidas[winner] == 4 && !matchFinished: coto ganado.
-                    - en otro caso: solo partida ganada (panel normal). */}
+                {/* Subtítulo: marcador de partidas del match (primero a 3).
+                    `matchWins` llega con la partida ya contada en el
+                    REMATCH_STATUS / MATCH_ENDED; antes de eso (los ~4,5 s
+                    de auto-cadencia) solo decimos quién ganó la partida. */}
                 {matchFinished ? (
-                  <p className="summary-result-subtitle">🏆 Match terminado</p>
-                ) : s.matchWinner !== null && partidas[s.matchWinner] >= 3 ? (
-                  <p className="summary-result-subtitle">Coto ganado — empezamos el siguiente</p>
+                  <p className="summary-result-subtitle">
+                    🏆 Match terminado · {matchWins[s.myTeam]} - {matchWins[s.otherTeam]}
+                  </p>
+                ) : rematch ? (
+                  <p className="summary-result-subtitle">
+                    Partidas: <b>{matchWins[s.myTeam]} - {matchWins[s.otherTeam]}</b> · gana el primero a 3
+                  </p>
                 ) : (
-                  <p className="summary-result-subtitle">Has ganado la partida {partidaEnCoto} de 3</p>
+                  <p className="summary-result-subtitle">
+                    {s.matchWinner === s.myTeam ? 'Partida para nosotros' : 'Partida para ellos'}
+                  </p>
                 )}
 
                 {/* Cajas grandes con el marcador final de la partida.
@@ -1414,22 +1404,13 @@ export function Game() {
             {!matchOver && s.matchWinner === null && (
               <section className="summary-matchover">
                 <h3 className="summary-result-title">🏁 Vamos de vueltas</h3>
-                {/* Subtítulo con el progreso de partidas en el coto actual:
-                    "Llevas X de 3 partidas, faltan N" o "¡Has ganado
-                    el coto!" si partidas[myTeam] == 3. */}
+                {/* Subtítulo con el marcador de partidas del match (S2-13). */}
                 {(() => {
-                  const myPartidas = partidas[s.myTeam];
-                  const faltan = 3 - myPartidas;
-                  if (myPartidas >= 3) {
-                    return (
-                      <p className="summary-result-subtitle">
-                        ¡Has ganado el coto!
-                      </p>
-                    );
-                  }
+                  const mine = matchWins[s.myTeam];
+                  const faltan = 3 - mine;
                   return (
                     <p className="summary-result-subtitle">
-                      Llevas <b>{myPartidas}</b> de 3, te
+                      Partidas <b>{mine} - {matchWins[s.otherTeam]}</b> · te
                       {faltan === 1 ? ' falta 1' : ` faltan ${faltan}`}
                     </p>
                   );
@@ -1530,17 +1511,32 @@ export function Game() {
               </section>
             )}
 
-            {/* Pie del panel de resumen. Con la auto-cadencia del servidor,
-                ya no hay botón "Continuar": 3 partidas forman un coto, 2
-                cotos forman un match, y el siguiente juego se reparte solo
-                ~3 s después de este panel. Cuando el match entero ha
-                terminado, lo decimos en texto para que el usuario sepa que
-                tiene que crear una sala nueva. */}
+            {/* Pie del panel (S2-13):
+                - postgame abierto → votación de revancha (20 s).
+                - match cerrado → motivo + volver al inicio.
+                - partida recién acabada, aún sin REMATCH_STATUS → espera.
+                - mano normal → el server reparte solo (auto-cadencia). */}
             <div className="summary-actions">
-              {matchFinished ? (
-                <span className="summary-actions-hint">
-                  🏆 Match terminado — crea una sala nueva para jugar otra.
-                </span>
+              {rematch ? (
+                <RematchPanel
+                  deadline={rematch.deadline}
+                  votes={rematch.votes}
+                  you={you}
+                  seatLabel={(seat) => seatLabel(seat as Seat)}
+                  isBot={isBot}
+                  onVote={voteRematch}
+                />
+              ) : matchFinished ? (
+                <div className="rematch-closed">
+                  <span className="summary-actions-hint">
+                    {matchEndedText(matchEnded, s.myTeam)}
+                  </span>
+                  <button className="btn primary summary-continue" type="button" onClick={leave}>
+                    Volver al inicio
+                  </button>
+                </div>
+              ) : matchOver ? (
+                <span className="summary-actions-hint">Contando la partida…</span>
               ) : (
                 <span className="summary-actions-hint">
                   Repartiendo siguiente mano…
@@ -1981,6 +1977,73 @@ function LobbyScreen(): JSX.Element {
  * `state.error` pero no se pintaban en la UI durante una partida, así
  * que el usuario no sabía qué había pasado.
  */
+/** Texto del cierre del match según `MATCH_ENDED` (S2-13). */
+function matchEndedText(
+  ended: { winner: 0 | 1 | null; reason: 'won' | 'declined' | 'timeout' | 'abandoned' } | null,
+  myTeam: 0 | 1,
+): string {
+  if (!ended) return '🏆 Match terminado';
+  const result =
+    ended.winner === null ? 'Empate' : ended.winner === myTeam ? '🏆 ¡Match para nosotros!' : 'Match para ellos';
+  switch (ended.reason) {
+    case 'won':
+      return `${result} — primeros en llegar a 3 partidas.`;
+    case 'declined':
+      return `${result} — alguien no quiso la revancha.`;
+    case 'timeout':
+      return `${result} — se acabó el tiempo para votar la revancha.`;
+    case 'abandoned':
+      return `${result} — un jugador abandonó la mesa.`;
+  }
+}
+
+/**
+ * Votación de revancha (S2-13). Cuenta atrás hasta `deadline` (hora del
+ * server; asumimos relojes razonablemente sincronizados), estado de cada
+ * asiento y botones Sí / No. Una vez votado, los botones se ocultan.
+ */
+function RematchPanel(props: {
+  deadline: number;
+  votes: Record<string, 'pending' | 'yes' | 'no'>;
+  you: number;
+  seatLabel: (seat: number) => string;
+  isBot: boolean[];
+  onVote: (accept: boolean) => void;
+}): JSX.Element {
+  const { deadline, votes, you, seatLabel, isBot, onVote } = props;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, []);
+  const total = 20_000;
+  const leftMs = Math.max(0, deadline - now);
+  const pct = Math.min(100, (leftMs / total) * 100);
+  const myVote = votes[String(you)] ?? 'pending';
+  const icon = (v: 'pending' | 'yes' | 'no') => (v === 'yes' ? '✅' : v === 'no' ? '❌' : '⏳');
+  return (
+    <div className="rematch-panel">
+      <div className="rematch-title">¿Otra partida? <span className="rematch-secs">{Math.ceil(leftMs / 1000)} s</span></div>
+      <div className="rematch-bar"><div className="rematch-bar-fill" style={{ width: `${pct}%` }} /></div>
+      <ul className="rematch-votes">
+        {[0, 1, 2, 3].filter((seat) => !isBot[seat]).map((seat) => (
+          <li key={seat} className={seat === you ? 'is-me' : undefined}>
+            {icon(votes[String(seat)] ?? 'pending')} {seat === you ? 'Tú' : seatLabel(seat)}
+          </li>
+        ))}
+      </ul>
+      {myVote === 'pending' ? (
+        <div className="rematch-buttons">
+          <button className="btn primary" type="button" onClick={() => onVote(true)}>Sí, otra</button>
+          <button className="btn" type="button" onClick={() => onVote(false)}>No, terminar</button>
+        </div>
+      ) : (
+        <span className="summary-actions-hint">Esperando al resto de jugadores…</span>
+      )}
+    </div>
+  );
+}
+
 function ErrorBanner(): JSX.Element | null {
   const lastError = useGame((s) => s.lastError);
   // Re-render cada 100 ms mientras hay error reciente, para que el
