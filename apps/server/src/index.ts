@@ -116,18 +116,6 @@ app.get<{ Params: { code: string }; Querystring: { token?: string } }>('/api/roo
 // sepa si el server está vivo. NO toca la base de datos ni nada caro.
 app.get('/healthz', async () => ({ ok: true, version: Date.now() }));
 
-/**
- * Shutdown graceful vía HTTP. Útil en Windows (donde `taskkill` sin
- * `/F` no llega a procesos Node sin ventana) y en CI/CD que no puede
- * enviar SIGINT directamente. Hace lo mismo que el handler de SIGTERM:
- * snapshot de todas las salas + `process.exit(0)`.
- */
-app.post('/admin/shutdown', async (_req, reply) => {
-  reply.send({ ok: true, msg: 'snapshotting and shutting down' });
-  await snapshotOnSigterm();
-  process.exit(0);
-});
-
 // ───────────── Static serving del bundle web ─────────────
 // En dev seguimos sirviendo el web con `vite` (puerto 5173) y el
 // server queda en :3001, conectado por CORS. En prod (y con túnel)

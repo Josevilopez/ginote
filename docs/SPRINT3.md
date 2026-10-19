@@ -32,7 +32,7 @@
 
 ## Tareas, en orden
 
-### S3-00 — Despliegue en Azure (S2-16) — 🧑‍💻 usuario
+### S3-00 — Despliegue en Azure (S2-16) — ✅ cerrado (2026-10-19, usuario)
 - Requisito del resto. Notas en `SPRINT2.md` S2-16.
 - Recomendado añadir **Application Insights** al desplegar (errores y desconexiones reales de móviles).
 

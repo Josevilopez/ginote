@@ -39,3 +39,11 @@ docs
 scripts
 *.md
 !apps/server/README.md
+
+# Secretos y logs locales
+**/.env
+**/.env.*
+!**/.env.example
+**/*.log
+apps/server/smoke.mjs
+deploy.md

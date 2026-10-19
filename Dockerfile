@@ -32,7 +32,11 @@ COPY packages      ./packages
 # `npm run build --workspaces --if-present` respeta el orden definido
 # en las `dependencies` de cada package.json, así que el motor compila
 # antes que el server.
-RUN npm run build --workspaces --if-present
+RUN npm run build --workspace=@guinote/engine && \
+    npm run build --workspace=@guinote/bots && \
+    npm run build --workspace=@guinote/protocol && \
+    npm run build --workspace=@guinote/server && \
+    npm run build --workspace=@guinote/web
 
 # Limpiamos devDependencies en la imagen final para reducir tamaño.
 # `npm prune --omit=dev` recorta node_modules a lo necesario en runtime.
@@ -49,6 +53,8 @@ WORKDIR /repo
 COPY --from=builder /repo/package.json         /repo/
 COPY --from=builder /repo/package-lock.json    /repo/
 COPY --from=builder /repo/apps/server          /repo/apps/server
+# Bundle de la PWA: el server lo sirve desde apps/web/dist (mismo origen).
+COPY --from=builder /repo/apps/web/dist        /repo/apps/web/dist
 COPY --from=builder /repo/packages             /repo/packages
 COPY --from=builder /repo/node_modules         /repo/node_modules
 
