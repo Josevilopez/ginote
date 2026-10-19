@@ -54,6 +54,10 @@ interface State {
     seatsTotal: number;
     endsAt: number | null;
     windowMs: number;
+    /** S3-03: mesa privada (sin cuenta atrás; empieza el anfitrión). */
+    isPrivate: boolean;
+    /** S3-03: asiento del anfitrión. */
+    hostSeat: number | null;
   } | null;
   /**
    * Hay una acción del usuario en vuelo: ya se envió al server pero aún
@@ -83,8 +87,12 @@ interface State {
   // Progresión del match (S2-13, gestionada por el servidor): gana el
   // primer equipo que llegue a 3 partidas. Ya no hay "cotos".
   // Usamos Record<0 | 1, number> para poder indexar con `team` sin casts.
-  /** Partidas ganadas en el match, por equipo. */
+  /** Partidas ganadas en el coto en curso, por equipo. */
   matchWins: Record<0 | 1, number>;
+  /** S3-07: cotos ganados (solo cuenta si `format.cotosParaGanar` > 1). */
+  cotoWins: Record<0 | 1, number>;
+  /** S3-07: formato de la mesa. Partida rápida: 1 coto a 3 partidas. */
+  format: { partidasPorCoto: number; cotosParaGanar: number };
   /** El match entero ha terminado (mesa cerrada). */
   matchFinished: boolean;
   /** Ganador del match (0 o 1), o null si sigue abierto o acabó en empate. */
@@ -124,7 +132,11 @@ interface State {
    *    a la sala con más humanos, o crea una nueva en lobby. Espera 30 s
    *    a que entre un amigo antes de repartir.
    */
-  createRoom: (mode: 'bots' | 'lobby') => Promise<void>;
+  createRoom: (mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) => Promise<void>;
+  /** S3-03 (anfitrión): intercambia dos asientos de la mesa privada. */
+  swapSeats: (a: number, b: number) => void;
+  /** S3-03 (anfitrión): empieza la mesa privada; los huecos, bots del nivel dado. */
+  startPrivate: (botLevel: 1 | 2, format?: { partidasPorCoto: number; cotosParaGanar: number }) => void;
   /** Une al cliente a una sala existente por código. NO crea la sala. */
   joinRoom: (code: string) => void;
   sendAction: (action: Action) => void;
@@ -141,6 +153,8 @@ let wsRef: WebSocket | null = null;
 /** Estado de match limpio para una sala nueva (create / join / leave). */
 const MATCH_RESET = {
   matchWins: { 0: 0, 1: 0 } as Record<0 | 1, number>,
+  cotoWins: { 0: 0, 1: 0 } as Record<0 | 1, number>,
+  format: { partidasPorCoto: 3, cotosParaGanar: 1 },
   matchFinished: false,
   matchChampion: null,
   rematch: null,
@@ -326,6 +340,8 @@ export const useGame = create<State>((set, get) => ({
   // Estado de progresión partida → coto → match (lo envía el servidor
   // en cada VIEW). Inicializado a "1ª partida del 1er coto, todo a 0".
   matchWins: { 0: 0, 1: 0 },
+  cotoWins: { 0: 0, 1: 0 },
+  format: { partidasPorCoto: 3, cotosParaGanar: 1 },
   matchFinished: false,
   matchChampion: null,
   rematch: null,
@@ -335,7 +351,7 @@ export const useGame = create<State>((set, get) => ({
   connection: 'connected',
   connectionMessage: null,
 
-async createRoom(mode: 'bots' | 'lobby') {
+async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
     stopReconnect();
     set({ error: null, gameOver: null, matchOver: null, view: null, you: null, roomCode: null, justResolved: null, swapAnnouncement: null, lobby: null, pendingActionCardId: null, lastError: null, ...MATCH_RESET });
     try {
@@ -384,10 +400,12 @@ async createRoom(mode: 'bots' | 'lobby') {
         connect(code, set, get);
       } else {
         // 'bots': mesa con bots, empieza al instante.
+        // 'private' (S3-03): mesa privada; espera a que el anfitrión empiece.
         const resp = await fetch('/api/rooms', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ mode: 'bots', name }),
+          // S3-08: nivel de los bots al practicar (el server lo acepta desde S2-10).
+          body: JSON.stringify({ mode, name, ...(botLevel ? { botLevel } : {}) }),
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const { code } = (await resp.json()) as { code: string };
@@ -477,6 +495,18 @@ async createRoom(mode: 'bots' | 'lobby') {
     const { ws } = get();
     if (!ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({ type: 'NEXT_HAND' } satisfies ClientMessage));
+  },
+
+  swapSeats(a: number, b: number) {
+    const { ws } = get();
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'PRIVATE_SWAP_SEATS', a, b } satisfies ClientMessage));
+  },
+
+  startPrivate(botLevel: 1 | 2, format?: { partidasPorCoto: number; cotosParaGanar: number }) {
+    const { ws } = get();
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({ type: 'PRIVATE_START', botLevel, ...(format ?? {}) } satisfies ClientMessage));
   },
 
   voteRematch(accept: boolean) {
@@ -587,6 +617,8 @@ function connect(
           seatsTotal: msg.seatsTotal,
           endsAt: msg.endsAt,
           windowMs: msg.windowMs,
+          isPrivate: msg.isPrivate ?? false,
+          hostSeat: msg.hostSeat ?? null,
         },
         // Quién está sentado ya (la pantalla de espera pinta la mesa).
         seatNames: msg.seatNames,
@@ -623,6 +655,8 @@ function connect(
         // Progresión del match (S2-13). Si el servidor no lo manda,
         // conservamos el estado anterior.
         matchWins: msg.matchWins ?? get().matchWins,
+        cotoWins: msg.cotoWins ?? get().cotoWins,
+        format: msg.format ?? get().format,
         matchFinished: msg.matchFinished ?? get().matchFinished,
         matchChampion: msg.matchChampion !== undefined ? msg.matchChampion : get().matchChampion,
         // Empieza una mano nueva (p. ej. revancha aceptada) → se acabó la votación.
@@ -679,6 +713,7 @@ function connect(
       set({
         rematch: { deadline: msg.deadline, votes: msg.votes },
         matchWins: msg.matchWins,
+        cotoWins: msg.cotoWins ?? get().cotoWins,
         pendingActionCardId: null,
       });
     } else if (msg.type === 'MATCH_ENDED') {
@@ -687,6 +722,7 @@ function connect(
         rematch: null,
         matchEnded: { winner: msg.winner, reason: msg.reason },
         matchWins: msg.matchWins,
+        cotoWins: msg.cotoWins ?? get().cotoWins,
         matchFinished: true,
         matchChampion: msg.winner,
         pendingActionCardId: null,

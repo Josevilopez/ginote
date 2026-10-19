@@ -87,6 +87,14 @@ html .game * {
   font-variant-numeric: tabular-nums;
 }
 .match-wins b { font-size: 15px; font-weight: 800; }
+.match-wins .mw-group { display: inline-flex; align-items: baseline; gap: 3px; white-space: nowrap; }
+.match-wins .mw-sep { margin: 0 2px; }
+/* S3-07: en móvil, con match a cotos, "Partidas" y "Cotos" en dos líneas
+   para que la cabecera no se salga de la pantalla. */
+@media (max-width: 600px) {
+  .match-wins { flex-wrap: wrap; justify-content: center; row-gap: 0; max-width: 118px; line-height: 1.15; }
+  .match-wins .mw-sep { display: none; }
+}
 .match-wins b.is-mine { color: var(--team-mine); }
 .match-wins b.is-theirs { color: var(--accent); }
 
@@ -98,6 +106,29 @@ html .game * {
   font-weight: 700;
   background: rgba(0, 0, 0, 0.2);
   border: 1px solid rgba(245, 240, 225, 0.22);
+}
+/* S3-08: botón de silencio, solo icono. */
+.game .topbar .btn.small.mute-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 38px;
+  height: 38px;
+  margin-left: 4px;
+  flex: none;
+}
+.game .topbar .btn.small.mute-btn.is-muted { opacity: 0.6; }
+@media (max-width: 600px) {
+  /* Con el botón de silencio no cabía en 390 px: menos hueco entre piezas. */
+  .game .topbar { gap: 6px; padding: 6px 10px; }
+  .game .topbar .btn.small.mute-btn { width: 34px; height: 34px; margin-left: 0; }
+  .game .topbar .btn.small:last-of-type { padding: 8px 11px; }
+}
+@media (max-width: 380px) {
+  .game .topbar { gap: 4px; padding: 6px 8px; }
+  .game .score-center { min-width: 84px; }
+  .game .score-team { min-width: 50px; }
 }
 @media (min-width: 600px) {
   .game .invite {
@@ -164,6 +195,26 @@ html .game * {
 }
 .game .seat.substitute .seat-avatar { border: none; filter: saturate(0.4); }
 .game .seat-status { font-size: 13px; }
+/* Insignia de bot: robot en la esquina inferior derecha del avatar.
+   Se ve igual en mi equipo (azul) y en el rival (oro). */
+.game .seat-bot-badge {
+  --bot-badge-bg: #0b3b2d;
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--bot-badge-bg);
+  color: var(--fg);
+  border: 1.5px solid rgba(245, 240, 225, 0.75);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  line-height: 0;
+  z-index: 2;
+}
+.game .seat-bot-badge svg { display: block; }
 
 /* ── Botones de acción (cantar, cambiar el 7, pasar) ── */
 .game .action-buttons .btn {
@@ -264,6 +315,7 @@ html .game * {
     margin: 12px auto;
   }
   .game .seat-avatar { width: 52px; height: 52px; font-size: 25px; }
+  .game .seat-bot-badge { width: 24px; height: 24px; }
   .game .score-num { font-size: 36px; }
   .game .score-label { font-size: 14px; }
   .phase-name { font-size: 26px; }
@@ -310,12 +362,14 @@ html .game * {
   .match-wins { font-size: 12px; }
   .match-wins b { font-size: 14px; }
   .game .topbar .btn.small { padding: 5px 12px; font-size: 14px; }
+  .game .topbar .btn.small.mute-btn { padding: 0; width: 32px; height: 32px; }
   .game .seat { padding: 2px; gap: 2px; }
   /* En vertical (móvil) los rivales laterales se suben 120 px para no
      alinearse con la baza; en horizontal eso los saca de la mesa. */
   .game .seat.pos-1,
   .game .seat.pos-3 { transform: none; }
   .game .seat-avatar { width: 34px; height: 34px; font-size: 17px; }
+  .game .seat-bot-badge { width: 17px; height: 17px; padding: 2px; right: -4px; bottom: -3px; }
   .game .seat-name { font-size: 14px; }
   .game .hand { padding-top: 4px; }
   /* Botones de acción a la derecha de la mano (como en escritorio) en vez

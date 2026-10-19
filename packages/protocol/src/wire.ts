@@ -58,6 +58,20 @@ export const ClientMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('REMATCH_VOTE'),
     accept: z.boolean(),
   }),
+  /** S3-03 (solo anfitrión, mesa privada sin empezar): intercambia dos asientos. */
+  z.object({
+    type: z.literal('PRIVATE_SWAP_SEATS'),
+    a: z.number().int().min(0).max(3),
+    b: z.number().int().min(0).max(3),
+  }),
+  /** S3-03 (solo anfitrión): completa los huecos con bots del nivel dado y reparte. */
+  z.object({
+    type: z.literal('PRIVATE_START'),
+    botLevel: z.union([z.literal(1), z.literal(2)]),
+    /** S3-07: formato de la mesa. Por defecto 1 coto a 3 partidas. */
+    partidasPorCoto: z.number().int().min(1).max(5).optional(),
+    cotosParaGanar: z.number().int().min(1).max(3).optional(),
+  }),
 ]);
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
@@ -96,8 +110,12 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     cotoEnMatch: z.number().int().optional(),
     matchFinished: z.boolean().optional(),
     matchChampion: z.union([z.literal(0), z.literal(1)]).nullable().optional(),
-    /** S2-13: partidas ganadas por equipo en el match (primero a 3). */
+    /** S2-13: partidas ganadas por equipo en el coto en curso. */
     matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }).optional(),
+    /** S3-07: cotos ganados por equipo (solo cuenta si `format.cotosParaGanar` > 1). */
+    cotoWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }).optional(),
+    /** S3-07: formato de la mesa (partidas por coto, cotos para ganar). */
+    format: z.object({ partidasPorCoto: z.number().int(), cotosParaGanar: z.number().int() }).optional(),
   }),
   z.object({
     type: z.literal('ERROR'),
@@ -163,6 +181,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     deadline: z.number().int().min(0), // epoch ms del server
     votes: z.record(z.enum(['pending', 'yes', 'no'])),
     matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }),
+    cotoWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }).optional(),
   }),
   z.object({
     type: z.literal('MATCH_ENDED'),
@@ -171,6 +190,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     /** Motivo del cierre: alguien llegó a 3, rechazo/timeout de revancha, o abandono. */
     reason: z.enum(['won', 'declined', 'timeout', 'abandoned']),
     matchWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }),
+    cotoWins: z.object({ '0': z.number().int().min(0), '1': z.number().int().min(0) }).optional(),
   }),
   /** S2-12/S2-15: estado de cada asiento. Se emite al cambiar (desconexión,
    *  reconexión, sustitución por bot). `substitute` = bot que ha tomado
@@ -209,6 +229,10 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     windowMs: z.number().int(),
     seatNames: z.array(z.string()),
     isBot: z.array(z.boolean()),
+    /** S3-03: mesa privada (sin cuenta atrás; empieza el anfitrión). */
+    isPrivate: z.boolean().optional(),
+    /** S3-03: asiento del anfitrión de la mesa privada. */
+    hostSeat: z.number().int().min(0).max(3).nullable().optional(),
   }),
 ]);
 

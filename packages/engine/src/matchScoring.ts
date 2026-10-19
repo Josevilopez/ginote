@@ -84,3 +84,74 @@ export function nextHandSetup(prev: GameState): {
     },
   };
 }
+
+// ─────────────── S3-07: formato coto / match ───────────────
+
+/**
+ * Formato de una mesa (confirmado 2026-10-19):
+ *  - **Coto**: lo gana quien gana `partidasPorCoto` partidas (3).
+ *  - **Match**: lo gana quien gana `cotosParaGanar` cotos (2 = al mejor de 3).
+ * La partida rápida es 1 coto (`QUICK_FORMAT`). En mesas privadas el
+ * anfitrión elige, porque las reglas cambian según el pueblo.
+ */
+export interface MatchFormat {
+  readonly partidasPorCoto: number;
+  readonly cotosParaGanar: number;
+}
+
+export const QUICK_FORMAT: MatchFormat = { partidasPorCoto: 3, cotosParaGanar: 1 };
+export const COTO_MATCH_FORMAT: MatchFormat = { partidasPorCoto: 3, cotosParaGanar: 2 };
+
+/** Límites razonables para lo que puede elegir el anfitrión. */
+export const FORMAT_LIMITS = { partidasPorCoto: [1, 5], cotosParaGanar: [1, 3] } as const;
+
+export function isValidFormat(f: MatchFormat): boolean {
+  const [pMin, pMax] = FORMAT_LIMITS.partidasPorCoto;
+  const [cMin, cMax] = FORMAT_LIMITS.cotosParaGanar;
+  return (
+    Number.isInteger(f.partidasPorCoto) && f.partidasPorCoto >= pMin && f.partidasPorCoto <= pMax &&
+    Number.isInteger(f.cotosParaGanar) && f.cotosParaGanar >= cMin && f.cotosParaGanar <= cMax
+  );
+}
+
+/** Marcador de una mesa: partidas del coto en curso y cotos ganados. */
+export interface MatchProgress {
+  readonly partidas: Record<Team, number>;
+  readonly cotos: Record<Team, number>;
+}
+
+export function startProgress(): MatchProgress {
+  return { partidas: { 0: 0, 1: 0 }, cotos: { 0: 0, 1: 0 } };
+}
+
+/**
+ * Suma una partida ganada por `winner`.
+ *  - Si con ella gana el coto: `cotoWinner = winner` y suma un coto.
+ *  - Si además gana el match: `matchWinner = winner`; el marcador de
+ *    partidas se queda como acabó (para enseñarlo, p. ej. 3-1).
+ *  - Si gana el coto pero no el match: las partidas vuelven a 0-0
+ *    (empieza el coto siguiente).
+ * Puro: devuelve un marcador nuevo.
+ */
+export function recordPartidaResult(
+  p: MatchProgress,
+  winner: Team,
+  f: MatchFormat,
+): { progress: MatchProgress; cotoWinner: Team | null; matchWinner: Team | null } {
+  const partidas = { ...p.partidas, [winner]: p.partidas[winner] + 1 } as Record<Team, number>;
+  if (partidas[winner] < f.partidasPorCoto) {
+    return { progress: { partidas, cotos: { ...p.cotos } }, cotoWinner: null, matchWinner: null };
+  }
+  const cotos = { ...p.cotos, [winner]: p.cotos[winner] + 1 } as Record<Team, number>;
+  if (cotos[winner] >= f.cotosParaGanar) {
+    return { progress: { partidas, cotos }, cotoWinner: winner, matchWinner: winner };
+  }
+  return { progress: { partidas: { 0: 0, 1: 0 }, cotos }, cotoWinner: winner, matchWinner: null };
+}
+
+/** Quién va por delante (cotos y, a igualdad, partidas). `null` = empate. */
+export function progressLeader(p: MatchProgress): Team | null {
+  if (p.cotos[0] !== p.cotos[1]) return p.cotos[0] > p.cotos[1] ? 0 : 1;
+  if (p.partidas[0] !== p.partidas[1]) return p.partidas[0] > p.partidas[1] ? 0 : 1;
+  return null;
+}

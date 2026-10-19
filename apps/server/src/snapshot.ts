@@ -31,6 +31,12 @@ export interface RoomSnapshot {
   lobbyWindowMs: number;
   /** S2-10 (opcional: snapshots anteriores no lo traen → nivel por defecto). */
   botLevel?: 1 | 2;
+  /** S3-03 (opcionales: snapshots anteriores → mesa pública). */
+  isPrivate?: boolean;
+  hostSeat?: Seat | null;
+  /** S3-07 (opcionales: snapshots anteriores → 1 coto a 3, sin cotos). */
+  format?: { partidasPorCoto: number; cotosParaGanar: number };
+  cotoWins?: { 0: number; 1: number };
 }
 
 /** null si la sala no merece snapshot (lobby sin repartir). */
@@ -55,6 +61,10 @@ export function serializeRoom(room: Room): RoomSnapshot | null {
     abandonedPlayerIds: [...room.abandonedPlayerIds],
     lobbyWindowMs: room.lobbyWindowMs,
     botLevel: room.botLevel,
+    isPrivate: room.isPrivate,
+    hostSeat: room.hostSeat,
+    format: { ...room.format },
+    cotoWins: { ...room.cotoWins },
   };
 }
 
@@ -107,5 +117,9 @@ export function roomFromSnapshot(snap: RoomSnapshot): Room {
     matchEndReason: snap.matchEndReason,
     abandonedPlayerIds: new Set(snap.abandonedPlayerIds),
     botLevel: snap.botLevel ?? 2,
+    isPrivate: snap.isPrivate ?? false,
+    hostSeat: snap.hostSeat ?? null,
+    format: snap.format ?? { partidasPorCoto: 3, cotosParaGanar: 1 },
+    cotoWins: snap.cotoWins ? { ...snap.cotoWins } : { 0: 0, 1: 0 },
   };
 }

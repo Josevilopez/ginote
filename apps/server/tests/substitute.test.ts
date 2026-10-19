@@ -101,10 +101,13 @@ describe('S2-12 sustitución por bot', () => {
   it('entre partidas (postgame) el sustituto vota "yes" y no hay penalización', async () => {
     player('pA'); player('pB');
     const { room } = mkRoom({ 0: 'pA', 1: 'pB' });
-    const st = room.state!;
-    st.phase = 'finished'; st.matchEnded = true; st.matchWinner = 0; st.turn = null;
     vi.useFakeTimers();
-    triggerNextHand(room);
+    // S3-06: la votación solo se abre al acabar el coto (3 partidas).
+    for (let i = 0; i < 3; i++) {
+      const st = room.state!;
+      st.phase = 'finished'; st.matchEnded = true; st.matchWinner = 0; st.turn = null;
+      triggerNextHand(room);
+    }
     expect(room.postgame).not.toBeNull();
     expect(isMidPartida(room)).toBe(false);
     castRematchVote(room, 0, true);

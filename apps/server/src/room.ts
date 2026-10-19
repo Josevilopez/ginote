@@ -13,6 +13,11 @@ import {
   FIRST_TO_3,
   nextHandSetup,
   type MatchScoring,
+  QUICK_FORMAT,
+  isValidFormat,
+  progressLeader,
+  recordPartidaResult,
+  type MatchFormat,
 } from '@guinote/engine';
 import { botAction as decideBotAction, botThinkDelayMs, DEFAULT_BOT_LEVEL, heuristicBotAction, type BotLevel } from '@guinote/bots';
 import { applyElo, applyEloTeam } from './elo.js';
@@ -167,6 +172,20 @@ export interface Room {
   abandonedPlayerIds: Set<string>;
   /** S2-10: nivel de los bots de esta mesa (1 = fácil/aleatorio, 2 = heurístico). */
   botLevel: BotLevel;
+  /**
+   * S3-03: mesa privada. Sin cuenta atrás en el lobby (empieza el
+   * anfitrión), fuera del matchmaking y sin ELO (partidas entre amigos).
+   */
+  isPrivate: boolean;
+  /** S3-03: asiento del anfitrión (primer humano; si se va antes de empezar, el siguiente). */
+  hostSeat: Seat | null;
+  /**
+   * S3-07: formato de la mesa. Partida rápida: 1 coto a 3 partidas.
+   * Mesas privadas: lo elige el anfitrión (p. ej. match a 2 cotos).
+   * `matchWins` = partidas del coto en curso; `cotoWins` = cotos ganados.
+   */
+  format: MatchFormat;
+  cotoWins: { 0: number; 1: number };
 }
 
 export type MatchEndReason = 'won' | 'declined' | 'timeout' | 'abandoned';
@@ -252,6 +271,10 @@ export function createRoom(opts: {
     matchEndReason: null,
     abandonedPlayerIds: new Set(),
     botLevel: opts.botLevel ?? DEFAULT_BOT_LEVEL,
+    isPrivate: false,
+    hostSeat: null,
+    format: QUICK_FORMAT,
+    cotoWins: { 0: 0, 1: 0 },
   };
 }
 
@@ -287,6 +310,8 @@ function broadcastView(room: Room): void {
         // por el servidor. El cliente lo lee para mostrar el marcador
         // y decidir qué panel de fin de mano enseñar.
         matchWins: room.matchWins,
+        cotoWins: room.cotoWins,
+        format: room.format,
         matchFinished: room.matchFinished,
         matchChampion: room.matchChampion,
       } satisfies ServerMessage));
@@ -309,6 +334,8 @@ export function broadcastLobbyStatus(room: Room): void {
     windowMs: room.lobbyWindowMs,
     seatNames: room.players.map((p) => p.name),
     isBot: room.players.map((p) => p.token === null),
+    isPrivate: room.isPrivate,
+    hostSeat: room.hostSeat,
   } as ServerMessage;
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg));
@@ -329,6 +356,14 @@ export function broadcastLobbyStatus(room: Room): void {
  */
 export function scheduleLobbyCheck(room: Room): void {
   if (room.state !== null) return;
+  if (room.isPrivate) {
+    // S3-03: en la mesa privada no hay cuenta atrás ni arranque
+    // automático; solo se asegura que haya anfitrión y se avisa a todos.
+    clearLobbyTimer(room);
+    ensureHost(room);
+    broadcastLobbyStatus(room);
+    return;
+  }
   const humans = room.players.filter((p) => p.token !== null).length;
   const total = 4;
   clearLobbyTimer(room);
@@ -785,15 +820,27 @@ export function triggerNextHand(room: Room): void {
   // 1. Procesar la mano recién terminada, si la hay.
   if (room.state.matchEnded && room.state.matchWinner !== null) {
     const winner = room.state.matchWinner;
-    room.matchWins = MATCH_SCORING.recordPartida(room.matchWins, winner);
-    const champion = MATCH_SCORING.champion(room.matchWins);
-    if (champion !== null) {
-      // Match terminado: alguien llegó a las partidas necesarias (3).
-      closeMatch(room, champion, 'won');
+    // S3-07: partidas del coto + cotos del match según el formato de la mesa.
+    const r = recordPartidaResult({ partidas: room.matchWins, cotos: room.cotoWins }, winner, room.format);
+    room.matchWins = r.progress.partidas;
+    room.cotoWins = r.progress.cotos;
+    if (r.matchWinner !== null) {
+      // S3-06: se acabó la mesa (el coto en partida rápida, o el match a N
+      // cotos en privada) → AHORA se pregunta la revancha.
+      openPostgame(room);
       return;
     }
-    // No llega a 3: abrir postgame de revancha.
-    openPostgame(room);
+    if (r.cotoWinner !== null) {
+      // S3-07: coto ganado sin acabar el match → siguiente coto desde 0-0,
+      // sin votación.
+      console.log(`[coto] coto para team ${r.cotoWinner} code=${room.code} cotos=${JSON.stringify(room.cotoWins)} → siguiente coto`);
+      dealAndResume(room);
+      return;
+    }
+    // S3-06: coto en curso → siguiente partida directamente, sin votación
+    // (antes se votaba revancha tras cada partida).
+    console.log(`[coto] partida para team ${winner} code=${room.code} matchWins=${JSON.stringify(room.matchWins)} → siguiente partida`);
+    dealAndResume(room);
     return;
   }
 
@@ -888,9 +935,10 @@ function checkMatchOver(room: Room): void {
 }
 
 /**
- * Abre la ventana de postgame: votación de revancha de 20s. Si todos
- * los humanos votan `yes` antes del deadline, se inicia nueva partida.
- * Si expira o alguien vota `no`, se cierra el match.
+ * Abre la ventana de postgame: votación de revancha de 20s AL ACABAR EL
+ * COTO (S3-06; antes se abría tras cada partida). Si todos los humanos
+ * votan `yes` antes del deadline, empieza un coto nuevo desde 0-0. Si
+ * expira o alguien vota `no`, se cierra la mesa.
  *
  * Los bots votan `yes` automáticamente (no bloquean la revancha). Si no
  * queda ningún humano en la mesa, la revancha no tiene sentido y se
@@ -924,6 +972,7 @@ function rematchStatusMessage(room: Room): ServerMessage | null {
     deadline: room.postgame.deadline,
     votes: serializeVotes(room.postgame.votes),
     matchWins: room.matchWins,
+    cotoWins: room.cotoWins,
   };
 }
 
@@ -949,6 +998,7 @@ export function sendPostgameStateTo(room: Room, ws: { send: (data: string) => vo
       winner: room.matchChampion,
       reason: room.matchEndReason,
       matchWins: room.matchWins,
+      cotoWins: room.cotoWins,
     } satisfies ServerMessage));
   }
 }
@@ -962,7 +1012,7 @@ function serializeVotes(votes: Record<number, 'pending' | 'yes' | 'no'>): Record
 
 /** Equipo con más `matchWins`, o `null` si van empatados. */
 function leaderByMatchWins(room: Room): 0 | 1 | null {
-  return MATCH_SCORING.leader(room.matchWins);
+  return progressLeader({ partidas: room.matchWins, cotos: room.cotoWins });
 }
 
 /**
@@ -982,6 +1032,7 @@ function closeMatch(room: Room, winner: 0 | 1 | null, reason: MatchEndReason): v
     winner,
     reason,
     matchWins: room.matchWins,
+    cotoWins: room.cotoWins,
   });
   console.log(`[match] ended code=${room.code} reason=${reason} champion=${winner ?? 'empate'} matchWins=${JSON.stringify(room.matchWins)}`);
   forgetRoom(room.code); // S2-14: match cerrado → nada que rehidratar
@@ -1005,7 +1056,10 @@ function resolvePostgame(room: Room, reasonIfClosed: MatchEndReason): void {
   if (allHumansYes(room)) {
     if (pg.timer) clearTimeout(pg.timer);
     room.postgame = null;
-    console.log(`[postgame] rematch accepted code=${room.code}`);
+    // S3-06/S3-07: revancha = coto (o match) nuevo desde 0-0 en la misma mesa.
+    room.matchWins = { 0: 0, 1: 0 };
+    room.cotoWins = { 0: 0, 1: 0 };
+    console.log(`[postgame] revancha aceptada code=${room.code} → coto nuevo`);
     dealAndResume(room);
     return;
   }
@@ -1040,6 +1094,78 @@ export function abandonDuringPostgame(room: Room, seat: Seat): void {
   room.postgame.votes[seat] = 'no';
   broadcastRematchStatus(room);
   resolvePostgame(room, 'abandoned');
+}
+
+// ─────────────── S3-03: mesas privadas ───────────────
+
+/** El anfitrión es el primer humano sentado; si se va antes de empezar, pasa al siguiente. */
+export function ensureHost(room: Room): void {
+  const current = room.hostSeat !== null ? room.players[room.hostSeat] : undefined;
+  if (current && current.token !== null) return;
+  const next = room.players.find((p) => p.token !== null);
+  room.hostSeat = next ? next.seat : null;
+}
+
+/** Reenvía WELCOME a cada humano (su asiento puede haber cambiado) + LOBBY_STATUS. */
+function broadcastSeatsChanged(room: Room): void {
+  for (const p of room.players) {
+    if (p.ws && p.ws.readyState === 1 && p.token !== null) {
+      p.ws.send(JSON.stringify({
+        type: 'WELCOME',
+        you: p.seat,
+        roomCode: room.code,
+        seatNames: room.players.map((pl) => pl.name),
+        isBot: room.players.map((pl) => pl.token === null),
+        token: p.token,
+      } satisfies ServerMessage));
+    }
+  }
+  broadcastLobbyStatus(room);
+}
+
+/**
+ * S3-03: el anfitrión intercambia dos asientos (así elige las parejas:
+ * 0-2 contra 1-3). Solo en mesa privada sin empezar. Se mueve al jugador
+ * entero (nombre, token, conexión, identidad); el número de asiento es
+ * el de la silla. Devuelve un mensaje de error o `null` si fue bien.
+ */
+export function swapPrivateSeats(room: Room, bySeat: Seat, a: Seat, b: Seat): string | null {
+  if (!room.isPrivate) return 'Solo en mesas privadas';
+  if (room.state !== null) return 'La partida ya ha empezado';
+  if (room.hostSeat !== bySeat) return 'Solo el anfitrión puede mover a los jugadores';
+  if (a === b) return null;
+  const pa = room.players[a]!;
+  const pb = room.players[b]!;
+  const fields = ['name', 'token', 'ws', 'leaving', 'playerId', 'reconnectDeadline'] as const;
+  for (const f of fields) {
+    const tmp = (pa as unknown as Record<string, unknown>)[f];
+    const other = (pb as unknown as Record<string, unknown>)[f];
+    if (other === undefined) delete (pa as unknown as Record<string, unknown>)[f];
+    else (pa as unknown as Record<string, unknown>)[f] = other;
+    if (tmp === undefined) delete (pb as unknown as Record<string, unknown>)[f];
+    else (pb as unknown as Record<string, unknown>)[f] = tmp;
+  }
+  if (room.hostSeat === a) room.hostSeat = b;
+  else if (room.hostSeat === b) room.hostSeat = a;
+  console.log(`[private] code=${room.code} asientos ${a}↔${b} (anfitrión=${room.hostSeat})`);
+  broadcastSeatsChanged(room);
+  return null;
+}
+
+/**
+ * S3-03: el anfitrión empieza la partida. Los huecos se completan con
+ * bots del nivel elegido (1 fácil, 2 normal).
+ */
+export function startPrivate(room: Room, bySeat: Seat, botLevel: BotLevel, format: MatchFormat = QUICK_FORMAT): string | null {
+  if (!room.isPrivate) return 'Solo en mesas privadas';
+  if (room.state !== null) return 'La partida ya ha empezado';
+  if (room.hostSeat !== bySeat) return 'Solo el anfitrión puede empezar';
+  if (!isValidFormat(format)) return 'Formato de partida no válido';
+  room.botLevel = botLevel;
+  room.format = format; // S3-07
+  console.log(`[private] code=${room.code} empieza (bots nivel ${botLevel})`);
+  startMatchAndDeal(room);
+  return null;
 }
 
 // ─────────────── S2-12: desconexión y sustitución por bot ───────────────
@@ -1093,7 +1219,8 @@ const teamOfSeat = (seat: number): 0 | 1 => (seat % 2 === 0 ? 0 : 1);
 export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'timeout'): void {
   const p = room.players[seat];
   if (!p || p.token === null) return;
-  const penalize = isMidPartida(room) && p.playerId !== undefined;
+  // S3-03: en mesas privadas no hay ELO, tampoco derrota por abandono.
+  const penalize = isMidPartida(room) && p.playerId !== undefined && !room.isPrivate;
   const abandoner = penalize ? { playerId: p.playerId!, team: teamOfSeat(seat) } : null;
   // Rivales humanos en este momento (para el ELO del abandono).
   const opponents = room.players
@@ -1254,6 +1381,10 @@ async function penalizeAbandon(room: Room, playerId: string, opponentIds: string
  *    ratings de los 4 humanos.
  */
 async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
+  if (room.isPrivate) {
+    console.log(`[elo] skip code=${room.code}: mesa privada (no cuenta para ELO)`);
+    return;
+  }
   const cosmos = getCosmosHandles();
   if (!cosmos) {
     console.log(`[elo] skip code=${room.code}: sin Cosmos (PERSISTENCE_BACKEND=memory)`);

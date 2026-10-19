@@ -42,6 +42,16 @@ function playHandToEnd(room: Room): void {
   expect(room.state!.phase).toBe('finished');
 }
 
+/** Fuerza el fin de una partida. */
+function endPartida(room: Room, winner: 0 | 1): void {
+  const st = room.state!;
+  st.phase = 'finished'; st.matchEnded = true; st.matchWinner = winner; st.turn = null;
+}
+/** S3-06: gana un coto entero (3 partidas) → abre la votación. */
+function winCoto(room: Room, winner: 0 | 1): void {
+  for (let i = 0; i < 3; i++) { endPartida(room, winner); triggerNextHand(room); }
+}
+
 /** Vuelta por JSON, como en Cosmos. */
 const roundTrip = (room: Room) => roomFromSnapshot(JSON.parse(JSON.stringify(serializeRoom(room))) as RoomSnapshot);
 
@@ -109,20 +119,22 @@ describe('S2-14 snapshots', () => {
     expect(saved[0]!.snap.state.phase).toBe('finished');
   });
 
-  it('guarda al abrir la votación y al repartir la revancha; borra al cerrar el match', () => {
+  it('guarda al repartir cada partida y al abrir la votación; borra al cerrar la mesa', () => {
     const room = mkRoom();
-    const st = room.state!;
-    st.phase = 'finished'; st.matchEnded = true; st.matchWinner = 0; st.turn = null;
-    triggerNextHand(room);
-    expect(saved.at(-1)!.snap.postgameOpen).toBe(true);
+    endPartida(room, 0);
+    triggerNextHand(room); // S3-06: siguiente partida sin votación
+    expect(saved.at(-1)!.snap.postgameOpen).toBe(false);
     expect(saved.at(-1)!.snap.matchWins).toEqual({ 0: 1, 1: 0 });
+    expect(saved.at(-1)!.snap.state.phase).not.toBe('finished'); // reparto de la partida nueva
+    endPartida(room, 0); triggerNextHand(room);
+    endPartida(room, 0); triggerNextHand(room); // 3-0: fin del coto
+    expect(saved.at(-1)!.snap.postgameOpen).toBe(true);
+    expect(saved.at(-1)!.snap.matchWins).toEqual({ 0: 3, 1: 0 });
     castRematchVote(room, 0, true);
     castRematchVote(room, 1, true);
     expect(saved.at(-1)!.snap.postgameOpen).toBe(false);
-    expect(saved.at(-1)!.snap.state.phase).not.toBe('finished'); // reparto de la nueva partida
-    const s2 = room.state!;
-    s2.phase = 'finished'; s2.matchEnded = true; s2.matchWinner = 1; s2.turn = null;
-    triggerNextHand(room);
+    expect(saved.at(-1)!.snap.matchWins).toEqual({ 0: 0, 1: 0 }); // coto nuevo
+    winCoto(room, 1);
     castRematchVote(room, 0, false);
     expect(room.matchFinished).toBe(true);
     expect(removed).toEqual(['SNAP']);
@@ -138,29 +150,38 @@ describe('S2-14 snapshots', () => {
       expect(room.players[1]!.substitute).toBe(true);
     });
 
-    it('mano terminada con fin de partida → tras el margen, cuenta la partida y abre la votación', () => {
+    it('partida terminada (coto en curso) → tras el margen, la cuenta y reparte la siguiente', () => {
       const orig = mkRoom();
-      const st = orig.state!;
-      st.phase = 'finished'; st.matchEnded = true; st.matchWinner = 1; st.turn = null;
+      endPartida(orig, 1);
       const room = roundTrip(orig);
       resumeRestoredRoom(room, { postgameOpen: false });
-      expect(room.postgame).toBeNull();
       vi.advanceTimersByTime(RESUME_GRACE_MS);
       expect(room.matchWins).toEqual({ 0: 0, 1: 1 });
+      expect(room.postgame).toBeNull();
+      expect(room.state!.phase).not.toBe('finished');
+    });
+
+    it('última partida del coto terminada → tras el margen, la cuenta y abre la votación', () => {
+      const orig = mkRoom();
+      orig.matchWins = { 0: 1, 1: 2 };
+      endPartida(orig, 1);
+      const room = roundTrip(orig);
+      resumeRestoredRoom(room, { postgameOpen: false });
+      vi.advanceTimersByTime(RESUME_GRACE_MS);
+      expect(room.matchWins).toEqual({ 0: 1, 1: 3 });
       expect(room.postgame).not.toBeNull();
     });
 
     it('con votación abierta → la reabre SIN volver a contar la partida', () => {
       const orig = mkRoom();
-      const st = orig.state!;
-      st.phase = 'finished'; st.matchEnded = true; st.matchWinner = 0; st.turn = null;
-      triggerNextHand(orig); // matchWins 1-0, postgame abierto
+      winCoto(orig, 0); // 3-0, votación abierta
       const snap = saved.at(-1)!.snap;
+      expect(snap.postgameOpen).toBe(true);
       const room = roomFromSnapshot(snap);
       resumeRestoredRoom(room, { postgameOpen: snap.postgameOpen });
       vi.advanceTimersByTime(RESUME_GRACE_MS);
       expect(room.postgame).not.toBeNull();
-      expect(room.matchWins).toEqual({ 0: 1, 1: 0 });
+      expect(room.matchWins).toEqual({ 0: 3, 1: 0 });
     });
   });
 });

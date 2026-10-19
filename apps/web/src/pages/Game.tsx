@@ -5,6 +5,7 @@ import { CardView } from '../components/CardView.js';
 import { SuitGlyph } from '../components/SuitGlyph.js';
 import { LobbyScreen } from '../components/LobbyScreen.js';
 import './Game.css';
+import { playSound, useMuted } from '../sounds.js';
 import {
   card,
   teamOf,
@@ -56,6 +57,7 @@ function fmtRange(value: number): string {
 export function Game() {
   const view = useGame((s) => s.view);
   const you = useGame((s) => s.you);
+  useTableSounds(view, you);
   const seatNames = useGame((s) => s.seatNames);
   const isBot = useGame((s) => s.isBot);
   const roomCode = useGame((s) => s.roomCode);
@@ -87,6 +89,10 @@ export function Game() {
   // Progresión del match (S2-13): primero a 3 partidas gana. Lo usa el
   // marcador y los paneles de fin de partida / revancha.
   const matchWins = useGame((s) => s.matchWins);
+  // S3-07: cotos ganados y formato de la mesa (match a N cotos en privadas).
+  const cotoWinsSrv = useGame((s) => s.cotoWins);
+  const format = useGame((s) => s.format);
+  const isMatchFormat = format.cotosParaGanar > 1;
   const matchFinished = useGame((s) => s.matchFinished);
   const rematch = useGame((s) => s.rematch);
   const matchEnded = useGame((s) => s.matchEnded);
@@ -807,12 +813,24 @@ export function Game() {
             </span>
             <span
               className="match-wins"
-              title="Partidas ganadas. Gana la pareja que llegue a 3."
-              aria-label={`Partidas: nosotros ${matchWins[(you % 2) as 0 | 1]}, ellos ${matchWins[(1 - (you % 2)) as 0 | 1]}. Gana quien llegue a 3.`}
+              title={`Partidas del coto: gana el coto quien llegue a ${format.partidasPorCoto}.${isMatchFormat ? ` Gana el match quien gane ${format.cotosParaGanar} cotos.` : ''}`}
+              aria-label={`Partidas: nosotros ${matchWins[(you % 2) as 0 | 1]}, ellos ${matchWins[(1 - (you % 2)) as 0 | 1]}.${isMatchFormat ? ` Cotos: nosotros ${cotoWinsSrv[(you % 2) as 0 | 1]}, ellos ${cotoWinsSrv[(1 - (you % 2)) as 0 | 1]}.` : ''}`}
             >
-              Partidas <b className="is-mine">{matchWins[(you % 2) as 0 | 1]}</b>
-              <span aria-hidden="true">–</span>
-              <b className="is-theirs">{matchWins[(1 - (you % 2)) as 0 | 1]}</b>
+              <span className="mw-group">
+                Partidas <b className="is-mine">{matchWins[(you % 2) as 0 | 1]}</b>
+                <span aria-hidden="true">–</span>
+                <b className="is-theirs">{matchWins[(1 - (you % 2)) as 0 | 1]}</b>
+              </span>
+              {isMatchFormat && (
+                <>
+                  <span className="mw-sep" aria-hidden="true">·</span>
+                  <span className="mw-group">
+                    Cotos <b className="is-mine">{cotoWinsSrv[(you % 2) as 0 | 1]}</b>
+                    <span aria-hidden="true">–</span>
+                    <b className="is-theirs">{cotoWinsSrv[(1 - (you % 2)) as 0 | 1]}</b>
+                  </span>
+                </>
+              )}
             </span>
           </div>
           <div className="score-team is-theirs">
@@ -833,6 +851,7 @@ export function Game() {
             pegue en su móvil. Aparece solo en pantallas con sitio
             (móvil = código solo). */}
         <InviteButton code={roomCode} />
+        <MuteButton />
         <button className="btn small" onClick={leave}>Salir</button>
       </header>
 
@@ -870,6 +889,10 @@ export function Game() {
           const first = (parts[0] ?? '').charAt(0);
           const second = parts.length >= 2 ? (parts[1] ?? '').charAt(0) : '';
           const initials = (first + second).toUpperCase() || '?';
+          // Bot desde el principio o bot que sustituye a un humano. SEATS
+          // manda `seatKinds`; antes de que llegue usamos `isBot` de WELCOME.
+          const kind = seatKinds[seat] ?? (isBot[seat] ? 'bot' : 'human');
+          const botSeat = kind === 'bot' || kind === 'substitute';
           return (
             <div
               ref={(el) => {
@@ -879,10 +902,22 @@ export function Game() {
                 seatElsRef.current[seat] = el;
               }}
               key={seat}
-              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''} ${!isYou && seatKinds[seat] === 'disconnected' ? 'disconnected' : ''} ${seatKinds[seat] === 'substitute' ? 'substitute' : ''}`}
+              className={`seat pos-${pos} ${isActive ? 'active' : ''} ${isPartner(seat) ? 'partner' : ''} ${isYou ? 'you' : ''} ${view.lastWinner === seat ? 'winner' : ''} ${view.phase === 'winnerWindow' ? 'winner-window' : ''} ${!isYou && seatKinds[seat] === 'disconnected' ? 'disconnected' : ''} ${seatKinds[seat] === 'substitute' ? 'substitute' : ''} ${botSeat ? 'is-bot' : ''}`}
             >
               <div className="seat-avatar">
                 {initials}
+                {/* Insignia de bot: robot pequeño en la esquina del avatar.
+                    Los humanos no llevan nada. */}
+                {botSeat && (
+                  <span
+                    className="seat-bot-badge"
+                    role="img"
+                    aria-label="Bot"
+                    title={kind === 'substitute' ? 'Un bot juega en lugar de este jugador' : 'Bot'}
+                  >
+                    <BotIcon />
+                  </span>
+                )}
                 {/* Reloj circular de cuenta atrás del turno. Solo se pinta
                     cuando el TURNO ACTIVO es ESTE seat Y es humano. El
                     server tiene una red de seguridad de 10s
@@ -944,7 +979,7 @@ export function Game() {
                 <SeatReconnecting deadline={seatDeadlines[seat] ?? null} />
               )}
               {seatKinds[seat] === 'substitute' && (
-                <div className="seat-status is-bot" title="Un bot juega en lugar de este jugador">🤖 bot</div>
+                <div className="seat-status is-bot" title="Un bot juega en lugar de este jugador">sustituto</div>
               )}
               {/* Cantes fijos de este jugador durante la mano actual: chips
                   pequeños con el valor y el palo, coloreados por suit. Yacen al
@@ -1273,11 +1308,29 @@ export function Game() {
       {(gameOver || matchOver) && view && (() => {
         const s = buildSummary(view, you);
         const seatLabel = (seat: Seat) => seatNames[seat] || SEAT_LABELS[seat];
+        // S3-06/S3-07: marcador CONTANDO la partida recién terminada. El
+        // server lo actualiza al pasar a la siguiente partida (o al abrir la
+        // votación), así que durante la pausa la sumamos nosotros.
+        const n = format.partidasPorCoto;
+        const m = format.cotosParaGanar;
+        const pending = matchOver && s.matchWinner !== null && !rematch && !matchFinished;
+        const w = s.matchWinner;
+        const cotoWins: Record<0 | 1, number> =
+          pending && w !== null ? { ...matchWins, [w]: matchWins[w] + 1 } : matchWins;
+        const cotoOver = cotoWins[0] >= n || cotoWins[1] >= n;
+        const cotosNow: Record<0 | 1, number> =
+          pending && w !== null && cotoOver ? { ...cotoWinsSrv, [w]: cotoWinsSrv[w] + 1 } : cotoWinsSrv;
+        // ¿Se acaba la mesa? (1 coto: al acabar el coto; match: al llegar a m cotos)
+        const tableOver = cotoOver && (m === 1 || cotosNow[0] >= m || cotosNow[1] >= m || !pending);
+        const cotoWinnerTeam: 0 | 1 = cotoWins[s.myTeam] >= n ? s.myTeam : s.otherTeam;
+        const matchWinnerTeam: 0 | 1 = cotosNow[s.myTeam] >= cotosNow[s.otherTeam] ? s.myTeam : s.otherTeam;
         return (
           <div className="game-over-summary">
             <h2>
               {matchOver
-                ? 'Partida terminada'
+                ? tableOver && m > 1
+                  ? 'Match terminado'
+                  : cotoOver ? 'Coto terminado' : 'Partida terminada'
                 : `Resumen${s.vuelta > 1 ? ` · vuelta ${s.vuelta}` : ''}`}
             </h2>
 
@@ -1285,25 +1338,23 @@ export function Game() {
             {matchOver && (
               <section className="summary-matchover">
                 <h3 className="summary-result-title">
-                  {s.matchWinner === s.myTeam ? '🎉 Hemos ganado' : 'Ganan ellos'}
+                  {tableOver && m > 1
+                    ? matchWinnerTeam === s.myTeam ? '🏆 ¡Match para nosotros!' : 'Match para ellos'
+                    : cotoOver
+                      ? cotoWinnerTeam === s.myTeam ? '🏆 ¡Coto para nosotros!' : 'Coto para ellos'
+                      : s.matchWinner === s.myTeam ? '🎉 Partida para nosotros' : 'Partida para ellos'}
                 </h3>
-                {/* Subtítulo: marcador de partidas del match (primero a 3).
-                    `matchWins` llega con la partida ya contada en el
-                    REMATCH_STATUS / MATCH_ENDED; antes de eso (los ~4,5 s
-                    de auto-cadencia) solo decimos quién ganó la partida. */}
-                {matchFinished ? (
-                  <p className="summary-result-subtitle">
-                    🏆 Match terminado · {matchWins[s.myTeam]} - {matchWins[s.otherTeam]}
-                  </p>
-                ) : rematch ? (
-                  <p className="summary-result-subtitle">
-                    Partidas: <b>{matchWins[s.myTeam]} - {matchWins[s.otherTeam]}</b> · gana el primero a 3
-                  </p>
-                ) : (
-                  <p className="summary-result-subtitle">
-                    {s.matchWinner === s.myTeam ? 'Partida para nosotros' : 'Partida para ellos'}
-                  </p>
-                )}
+                {/* Marcador (S3-06/S3-07): partidas del coto y, en match, cotos. */}
+                <p className="summary-result-subtitle">
+                  Partidas <b>{cotoWins[s.myTeam]} – {cotoWins[s.otherTeam]}</b>
+                  {!cotoOver && ` · el coto es a ${n}`}
+                  {m > 1 && (
+                    <>
+                      {' · '}Cotos <b>{cotosNow[s.myTeam]} – {cotosNow[s.otherTeam]}</b>
+                      {!tableOver && ` · el match es a ${m}`}
+                    </>
+                  )}
+                </p>
 
                 {/* Cajas grandes con el marcador final de la partida.
                     Presentación pura: a partir del `cumulative` raw del
@@ -1524,18 +1575,23 @@ export function Game() {
                   seatLabel={(seat) => seatLabel(seat as Seat)}
                   isBot={isBot}
                   onVote={voteRematch}
+                  what={m > 1 ? 'match' : 'coto'}
                 />
               ) : matchFinished ? (
                 <div className="rematch-closed">
                   <span className="summary-actions-hint">
-                    {matchEndedText(matchEnded, s.myTeam)}
+                    {matchEndedText(matchEnded, s.myTeam, format)}
                   </span>
                   <button className="btn primary summary-continue" type="button" onClick={leave}>
                     Volver al inicio
                   </button>
                 </div>
               ) : matchOver ? (
-                <span className="summary-actions-hint">Contando la partida…</span>
+                <span className="summary-actions-hint">
+                  {tableOver
+                    ? m > 1 ? 'Contando el match…' : 'Contando el coto…'
+                    : cotoOver ? 'Siguiente coto en unos segundos…' : 'Siguiente partida en unos segundos…'}
+                </span>
               ) : (
                 <span className="summary-actions-hint">
                   Repartiendo siguiente mano…
@@ -1918,23 +1974,25 @@ function SeatReconnecting(props: { deadline: number | null }): JSX.Element {
   );
 }
 
-/** Texto del cierre del match según `MATCH_ENDED` (S2-13). */
+/** Texto del cierre de la mesa según `MATCH_ENDED` (S2-13 / S3-06 / S3-07). */
 function matchEndedText(
   ended: { winner: 0 | 1 | null; reason: 'won' | 'declined' | 'timeout' | 'abandoned' } | null,
   myTeam: 0 | 1,
+  format: { partidasPorCoto: number; cotosParaGanar: number },
 ): string {
-  if (!ended) return '🏆 Match terminado';
+  if (!ended) return 'Mesa cerrada.';
+  const what = format.cotosParaGanar > 1 ? 'Match' : 'Coto';
   const result =
-    ended.winner === null ? 'Empate' : ended.winner === myTeam ? '🏆 ¡Match para nosotros!' : 'Match para ellos';
+    ended.winner === null ? 'Empate.' : ended.winner === myTeam ? `🏆 ¡${what} para nosotros!` : `${what} para ellos.`;
   switch (ended.reason) {
     case 'won':
-      return `${result} — primeros en llegar a 3 partidas.`;
+      return `${result} Primeros en llegar a ${format.partidasPorCoto} partidas.`;
     case 'declined':
-      return `${result} — alguien no quiso la revancha.`;
+      return `${result} No hay revancha: alguien no quiso seguir.`;
     case 'timeout':
-      return `${result} — se acabó el tiempo para votar la revancha.`;
+      return `${result} No hay revancha: se acabó el tiempo para votar.`;
     case 'abandoned':
-      return `${result} — un jugador abandonó la mesa.`;
+      return `${result} Un jugador abandonó la mesa.`;
   }
 }
 
@@ -1950,8 +2008,10 @@ function RematchPanel(props: {
   seatLabel: (seat: number) => string;
   isBot: boolean[];
   onVote: (accept: boolean) => void;
+  /** S3-07: qué se juega en la revancha. */
+  what: 'coto' | 'match';
 }): JSX.Element {
-  const { deadline, votes, you, seatLabel, isBot, onVote } = props;
+  const { deadline, votes, you, seatLabel, isBot, onVote, what } = props;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 250);
@@ -1964,7 +2024,7 @@ function RematchPanel(props: {
   const icon = (v: 'pending' | 'yes' | 'no') => (v === 'yes' ? '✅' : v === 'no' ? '❌' : '⏳');
   return (
     <div className="rematch-panel">
-      <div className="rematch-title">¿Otra partida? <span className="rematch-secs">{Math.ceil(leftMs / 1000)} s</span></div>
+      <div className="rematch-title">{what === 'match' ? '¿Otro match?' : '¿Otro coto?'} <span className="rematch-secs">{Math.ceil(leftMs / 1000)} s</span></div>
       <div className="rematch-bar"><div className="rematch-bar-fill" style={{ width: `${pct}%` }} /></div>
       <ul className="rematch-votes">
         {[0, 1, 2, 3].filter((seat) => !isBot[seat]).map((seat) => (
@@ -1975,7 +2035,7 @@ function RematchPanel(props: {
       </ul>
       {myVote === 'pending' ? (
         <div className="rematch-buttons">
-          <button className="btn primary" type="button" onClick={() => onVote(true)}>Sí, otra</button>
+          <button className="btn primary" type="button" onClick={() => onVote(true)}>Sí, otro</button>
           <button className="btn" type="button" onClick={() => onVote(false)}>No, terminar</button>
         </div>
       ) : (
@@ -2028,5 +2088,73 @@ function MazoArea({ trumpCard }: { trumpCard: Card }) {
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
       </div>
     </div>
+  );
+}
+
+/**
+ * S3-08: sonidos de la mesa. Compara cada VIEW con la anterior:
+ *  - más cartas jugadas en la mano (bazas cerradas × 4 + baza en curso) → `card`;
+ *  - más cantes → `cante`;
+ *  - el turno pasa a ser tuyo en una fase de jugar carta → `turn`.
+ * La primera VIEW (entrar o reconectar) solo se apunta, no suena.
+ */
+function useTableSounds(view: PlayerView | null, you: number | null): void {
+  const prev = useRef<{ played: number; cantes: number; myTurn: boolean; vuelta: number } | null>(null);
+  useEffect(() => {
+    if (!view || you === null) {
+      prev.current = null;
+      return;
+    }
+    const played = view.finishedTricks.length * 4 + view.trick.length;
+    const cantes = view.cantes.length;
+    const myTurn =
+      view.turn === you &&
+      (view.phase === 'lead' || view.phase === 'follow' || view.phase === 'arrastre');
+    const before = prev.current;
+    prev.current = { played, cantes, myTurn, vuelta: view.vuelta };
+    if (!before) return;
+    if (cantes > before.cantes) playSound('cante');
+    else if (played > before.played) playSound('card');
+    if (myTurn && !before.myTurn) {
+      // Deja un respiro tras el golpe de la carta del rival.
+      window.setTimeout(() => playSound('turn'), played > before.played ? 220 : 0);
+    }
+  }, [view, you]);
+}
+
+function MuteButton() {
+  const [muted, setMuted] = useMuted();
+  return (
+    <button
+      type="button"
+      className={`btn small mute-btn ${muted ? 'is-muted' : ''}`}
+      onClick={() => setMuted(!muted)}
+      aria-pressed={muted}
+      aria-label={muted ? 'Activar sonido' : 'Silenciar'}
+      title={muted ? 'Activar sonido' : 'Silenciar'}
+    >
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+        <path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor" />
+        {muted ? (
+          <path d="M16 9l5 6M21 9l-5 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+        ) : (
+          <path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+        )}
+      </svg>
+    </button>
+  );
+}
+
+/** Cabeza de robot (antena, ojos y boca), para la insignia de bot. */
+function BotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true">
+      <line x1="12" y1="2.5" x2="12" y2="6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="12" cy="2.5" r="1.6" fill="currentColor" />
+      <rect x="4" y="6" width="16" height="13" rx="4" fill="currentColor" />
+      <circle cx="9" cy="12" r="1.9" fill="var(--bot-badge-bg, #0b3b2d)" />
+      <circle cx="15" cy="12" r="1.9" fill="var(--bot-badge-bg, #0b3b2d)" />
+      <rect x="9" y="15.3" width="6" height="1.6" rx="0.8" fill="var(--bot-badge-bg, #0b3b2d)" />
+    </svg>
   );
 }

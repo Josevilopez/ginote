@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { FIRST_TO_3, firstToN, GUINOTE_ARAGONES, newHand, nextDealer, nextHandSetup } from '../src/index.js';
+import {
+  COTO_MATCH_FORMAT,
+  FIRST_TO_3,
+  firstToN,
+  GUINOTE_ARAGONES,
+  isValidFormat,
+  newHand,
+  nextDealer,
+  nextHandSetup,
+  progressLeader,
+  QUICK_FORMAT,
+  recordPartidaResult,
+  startProgress,
+} from '../src/index.js';
 
 describe('S2-06 MatchScoring — primero a N partidas', () => {
   it('empieza 0-0 y suma partidas sin mutar el marcador anterior', () => {
@@ -65,5 +78,50 @@ describe('S2-06 nextHandSetup', () => {
 
   it('dealer: "el que corta, reparte" (misma regla que nextDealer del motor)', () => {
     expect(nextHandSetup(base()).dealer).toBe(nextDealer(null, 2));
+  });
+});
+
+
+describe('S3-07 formato coto / match', () => {
+  it('partida rápida (1 coto a 3): el coto decide la mesa', () => {
+    let p = startProgress();
+    for (const w of [0, 1, 0] as const) {
+      const r = recordPartidaResult(p, w, QUICK_FORMAT);
+      expect(r.cotoWinner).toBeNull();
+      p = r.progress;
+    }
+    const r = recordPartidaResult(p, 0, QUICK_FORMAT);
+    expect(r).toMatchObject({ cotoWinner: 0, matchWinner: 0 });
+    expect(r.progress.partidas).toEqual({ 0: 3, 1: 1 });
+    expect(r.progress.cotos).toEqual({ 0: 1, 1: 0 });
+  });
+
+  it('match a 2 cotos: ganar un coto reinicia las partidas y no acaba la mesa', () => {
+    let p = startProgress();
+    for (let i = 0; i < 2; i++) p = recordPartidaResult(p, 1, COTO_MATCH_FORMAT).progress;
+    const r = recordPartidaResult(p, 1, COTO_MATCH_FORMAT);
+    expect(r).toMatchObject({ cotoWinner: 1, matchWinner: null });
+    expect(r.progress).toEqual({ partidas: { 0: 0, 1: 0 }, cotos: { 0: 0, 1: 1 } });
+  });
+
+  it('match a 2 cotos: el segundo coto gana el match (1-1 en cotos y desempate)', () => {
+    let p = { partidas: { 0: 2, 1: 2 }, cotos: { 0: 1, 1: 1 } };
+    const r = recordPartidaResult(p, 0, COTO_MATCH_FORMAT);
+    expect(r).toMatchObject({ cotoWinner: 0, matchWinner: 0 });
+    expect(r.progress).toEqual({ partidas: { 0: 3, 1: 2 }, cotos: { 0: 2, 1: 1 } });
+    p = r.progress;
+  });
+
+  it('líder: cotos primero, partidas para desempatar', () => {
+    expect(progressLeader({ partidas: { 0: 0, 1: 2 }, cotos: { 0: 1, 1: 0 } })).toBe(0);
+    expect(progressLeader({ partidas: { 0: 0, 1: 2 }, cotos: { 0: 1, 1: 1 } })).toBe(1);
+    expect(progressLeader(startProgress())).toBeNull();
+  });
+
+  it('validación de formatos', () => {
+    expect(isValidFormat({ partidasPorCoto: 3, cotosParaGanar: 2 })).toBe(true);
+    expect(isValidFormat({ partidasPorCoto: 0, cotosParaGanar: 2 })).toBe(false);
+    expect(isValidFormat({ partidasPorCoto: 3, cotosParaGanar: 9 })).toBe(false);
+    expect(isValidFormat({ partidasPorCoto: 2.5, cotosParaGanar: 1 })).toBe(false);
   });
 });

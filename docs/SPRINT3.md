@@ -48,10 +48,11 @@
 - Pantalla "Mi perfil" con el estilo de la portada: nombre, partidas jugadas y ganadas.
 - **Sin ELO visible todavía** (llega en S4 con el ranking).
 
-### S3-03 — Mesas privadas — ~1,5 d
+### S3-03 — Mesas privadas — ✅ cerrado (2026-10-19)
 - "Crear mesa privada": código + enlace para compartir (como el lobby actual, pero **sin** cuenta atrás ni bots automáticos).
 - El anfitrión ve la mesa (como la pantalla de espera nueva), puede **mover jugadores de asiento** (elegir parejas), **completar con bots** (con nivel) y **empezar** cuando quiera.
 - No entran en el matchmaking ni cuentan para ELO (partidas entre amigos).
+- Hecho: `POST /api/rooms` con `mode: 'private'` (`room.isPrivate`, `room.hostSeat`). Sin cuenta atrás ni relleno automático; mensajes `PRIVATE_SWAP_SEATS` y `PRIVATE_START { botLevel }` solo para el anfitrión. Si el anfitrión se va, pasa al siguiente humano. Abandonar no penaliza ELO. Portada: sección "Con amigos" (crear mesa / entrar con código). Sala de espera: tocar dos asientos para cambiarlos, nivel de bots y "Empezar partida". Tests en `private.test.ts`.
 
 ### S3-04 — Pareja fija — ~1,5 d
 - Invitar a un amigo a ser tu pareja ("grupo de 2") y pulsar "Jugar online" juntos: el emparejamiento os sienta enfrente (compañeros) contra otra pareja o contra 2 sueltos.
@@ -70,19 +71,22 @@
 - Varía según el lugar → los números son **configurables** en las mesas privadas (partidas por coto, cotos por match).
 - Entre partidas (y entre cotos de un match) se sigue **directamente, sin votación**. La **revancha se pregunta al final**: al acabar el coto (partida rápida o privada de 1 coto) o al acabar el match.
 
-### S3-06 — Partida rápida = 1 coto, revancha al final — ~0,5 d
+### S3-06 — Partida rápida = 1 coto, revancha al final — ✅ cerrado (2026-10-19)
 - **Cambia el comportamiento de S2-13**: hoy se vota revancha tras CADA partida y el coto se corta si alguien dice que no. Con la regla confirmada, las partidas del coto se encadenan solas (como las manos de una partida) y la votación aparece **solo al acabar el coto**. Si todos aceptan, empieza un coto nuevo desde 0–0 en la misma mesa; si no, la mesa se cierra.
 - Abandonar a mitad de coto sigue siendo derrota de ELO (S2-12); el ELO se sigue calculando por partida.
 - Ajustar los textos: "Coto ganado / perdido 3 – 1" en el panel final.
+- Hecho: `triggerNextHand` (`room.ts`) encadena las partidas y solo abre la votación al llegar a 3; revancha aceptada → `matchWins` a 0-0 y coto nuevo. Panel: "Partida para nosotros · Partidas 2 – 1 · el coto es a 3" + "Siguiente partida en unos segundos…" entre partidas; "Coto terminado · ¿Otro coto?" al final. Tests de `rematch`, `substitute` y `snapshot` adaptados (125 en verde en todo el monorepo).
 
-### S3-07 — Coto y match en mesas privadas — ~1 d
+### S3-07 — Coto y match en mesas privadas — ✅ cerrado (2026-10-19)
 - Otra implementación de `MatchScoring` (S2-06), p. ej. `cotos({ partidasPorCoto: 3, cotosParaGanar: 2 })`, con marcador de partidas del coto en curso y de cotos ganados.
 - Al crear la mesa privada, el anfitrión elige: **1 coto** (por defecto) o **match a 2 cotos**, y puede cambiar partidas por coto / cotos por match.
 - Cabecera de la mesa con match: "Partidas 2 – 1 · Cotos 1 – 0".
+- Hecho: `MatchFormat { partidasPorCoto, cotosParaGanar }` en el motor (`QUICK_FORMAT` 3/1, `COTO_MATCH_FORMAT` 3/2, límites 1–5 y 1–3) con `recordPartidaResult` y `progressLeader`. El server lleva `room.format` y `room.cotoWins`; entre cotos se sigue sin votar y la revancha solo al acabar el match. `PRIVATE_START` acepta `partidasPorCoto` y `cotosParaGanar`; el snapshot guarda formato y cotos. Sala de espera con dos selectores (+/–). Cabecera en dos líneas en móvil. 141 tests en verde.
 
-### S3-08 — Pulido de producto — ~0,5 d
+### S3-08 — Pulido de producto — ✅ cerrado (2026-10-19)
 - Sonidos opcionales (carta jugada, cante, tu turno) con botón de silencio.
 - Selector de nivel de bots en "Practicar contra bots" (ya soportado por el server, falta la UI).
+- Hecho: `apps/web/src/sounds.ts` sintetiza los sonidos con Web Audio (sin ficheros): carta jugada, cante y tu turno. Botón de silencio (icono de altavoz) en la cabecera de la mesa, guardado en `localStorage` (`guinote:muted`). La primera VIEW al entrar o reconectar no suena. Portada: "Practicar contra bots" con dos botones, Fácil (nivel 1) y Normal (nivel 2); cada uno empieza la partida. La cabecera se ajusta para no desbordar en 360 px.
 
 **Total estimado: ~8,5 días** (sin contar el despliegue).
 

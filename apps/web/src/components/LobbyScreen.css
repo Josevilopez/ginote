@@ -196,3 +196,133 @@
   .lobby-table { height: 200px; }
   .lobby-inner { gap: 12px; }
 }
+
+/* ───── S3-03: mesa privada (controles del anfitrión) ───── */
+button.lobby-seat {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button.lobby-seat:focus-visible { outline: 3px solid #fff; outline-offset: 4px; border-radius: 12px; }
+.lobby-seat.is-movable .lobby-avatar { transition: transform 0.12s, box-shadow 0.12s; }
+.lobby-seat.is-movable:hover .lobby-avatar { transform: translateY(-2px); }
+.lobby-seat.is-picked .lobby-avatar {
+  box-shadow: 0 0 0 3px #fff, 0 0 0 6px var(--gold), 0 6px 12px rgba(0, 0, 0, 0.35);
+}
+.lobby-seat.is-picked.is-free .lobby-avatar { border-color: #fff; }
+
+.lobby-host {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lobby-level {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 16px;
+  color: var(--fg-mute);
+}
+.lobby-level-options {
+  display: flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(245, 240, 225, 0.18);
+}
+.lobby-level-options button {
+  padding: 7px 14px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-mute);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.lobby-level-options button.is-on {
+  background: rgba(232, 196, 107, 0.2);
+  color: var(--gold);
+}
+.lobby-level-options button:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.lobby-start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 16px 20px;
+  border: none;
+  border-radius: 14px;
+  text-align: left;
+  font-family: inherit;
+  color: var(--ink);
+  background: linear-gradient(180deg, #f2d48a 0%, var(--gold) 55%, var(--gold-deep) 100%);
+  box-shadow: 0 4px 0 #7d5e17, 0 10px 18px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+.lobby-start b { font-size: 21px; font-weight: 800; }
+.lobby-start span { font-size: 15px; color: #4a3708; }
+.lobby-start:active { transform: translateY(2px); box-shadow: 0 2px 0 #7d5e17, 0 6px 12px rgba(0, 0, 0, 0.35); }
+.lobby-start:focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+/* Con "Empezar" en dorado, "Invitar" pasa a botón secundario. */
+.lobby-invite.is-secondary {
+  color: var(--fg);
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(245, 240, 225, 0.22);
+  box-shadow: none;
+}
+.lobby-invite.is-secondary span { color: var(--fg-mute); }
+
+/* ───── S3-07: formato de la mesa privada ───── */
+.lobby-format {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lobby-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 16px;
+  color: var(--fg-mute);
+}
+.lobby-stepper-label small {
+  display: block;
+  font-size: 13px;
+  color: rgba(185, 197, 184, 0.75);
+}
+.lobby-stepper-ctrl {
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(245, 240, 225, 0.18);
+}
+.lobby-stepper-ctrl button {
+  width: 40px;
+  height: 38px;
+  border: none;
+  background: none;
+  color: var(--gold);
+  font: inherit;
+  font-size: 22px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.lobby-stepper-ctrl button:disabled { color: rgba(245, 240, 225, 0.2); cursor: default; }
+.lobby-stepper-ctrl button:focus-visible { outline: 2px solid #fff; outline-offset: -2px; border-radius: 8px; }
+.lobby-stepper-ctrl output {
+  min-width: 28px;
+  text-align: center;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--fg);
+  font-variant-numeric: lining-nums tabular-nums;
+}

@@ -57,10 +57,19 @@ export function Home() {
             <b>Jugar online</b>
             <span>Te sentamos con otros jugadores. Si faltan, completan la mesa bots.</span>
           </button>
-          <button type="button" className="home-choice is-alt" onClick={() => void createRoom('bots')}>
-            <b>Practicar contra bots</b>
-            <span>Empiezas al momento.</span>
-          </button>
+          {/* S3-08: un toque elige nivel y empieza. */}
+          <div className="home-choice is-alt home-practice" role="group" aria-labelledby="home-practice-title">
+            <b id="home-practice-title">Practicar contra bots</b>
+            <span>Empiezas al momento. Elige el nivel:</span>
+            <div className="home-levels">
+              <button type="button" className="home-level" onClick={() => void createRoom('bots', 1)}>
+                Fácil
+              </button>
+              <button type="button" className="home-level is-default" onClick={() => void createRoom('bots', 2)}>
+                Normal
+              </button>
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -69,6 +78,14 @@ export function Home() {
           </p>
         )}
 
+        <div className="home-friends">
+          <h2 className="home-section">Con amigos</h2>
+          <button type="button" className="home-choice is-alt" onClick={() => void createRoom('private')}>
+            <b>Crear mesa privada</b>
+            <span>Invita con un enlace, elige las parejas y empezad cuando queráis.</span>
+          </button>
+        </div>
+
         <form
           className="home-join"
           onSubmit={(e) => {
@@ -76,7 +93,7 @@ export function Home() {
             if (codeReady) joinRoom(joinInput);
           }}
         >
-          <label htmlFor="home-join-code">¿Te han pasado un código de sala?</label>
+          <label htmlFor="home-join-code">¿Te han pasado un código?</label>
           <input
             id="home-join-code"
             type="text"

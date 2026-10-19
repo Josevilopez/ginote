@@ -171,6 +171,35 @@
   outline-offset: 3px;
 }
 
+/* S3-08: "Practicar contra bots" con nivel. La tarjeta no es un botón;
+   los botones son Fácil / Normal y cada uno empieza la partida. */
+.home-choice.home-practice { cursor: default; }
+.home-choice.home-practice:active { transform: none; }
+.home-choice.home-practice:hover { background: rgba(0, 0, 0, 0.18); }
+.home-levels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+}
+.home-level {
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--fg);
+  background: rgba(245, 240, 225, 0.08);
+  border: 1px solid rgba(245, 240, 225, 0.28);
+  cursor: pointer;
+  transition: transform 0.08s, background 0.15s;
+}
+.home-level:hover { background: rgba(245, 240, 225, 0.14); }
+.home-level:active { transform: scale(0.97); }
+.home-level.is-default { border-color: var(--gold); color: var(--gold); }
+.home-level:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+
 .home-error {
   margin: 0;
   padding: 10px 14px;
@@ -182,14 +211,27 @@
   line-height: 1.35;
 }
 
-/* Unirse con código: secundario, separado por una línea del bloque principal */
+/* Con amigos (S3-03): mesa privada + entrar con código, separado por
+   una línea del bloque principal. */
+.home-friends {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(245, 240, 225, 0.14);
+}
+.home-section {
+  margin: 0;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--gold);
+}
 .home-join {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 10px;
-  padding-top: 16px;
-  border-top: 1px solid rgba(245, 240, 225, 0.14);
 }
 .home-join label {
   flex: 1 1 100%;

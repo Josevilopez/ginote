@@ -9,7 +9,7 @@ import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { HEARTBEAT_MS, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { persistRoom, setSnapshotSink } from './persistHooks.js';
 import { isRoomSnapshot, roomFromSnapshot, serializeRoom } from './snapshot.js';
@@ -44,13 +44,15 @@ function isHttps(req: import('fastify').FastifyRequest): boolean {
 }
 
 app.post('/api/rooms', async (req, reply) => {
-  const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' };
+  const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' | 'private' };
   const name = (body.name ?? 'Jugador').slice(0, 20);
   // `mode: 'bots'`  → mesa con bots ya listos, reparte al instante.
   // `mode: 'lobby'` (defecto) → sala en lobby: el humano espera 30 s a
   // que se le una un amigo antes de repartir (si nadie entra, los huecos
   // se rellenan con bots al expirar la ventana).
-  const mode: 'lobby' | 'bots' = body.mode === 'bots' ? 'bots' : 'lobby';
+  // `mode: 'private'` (S3-03) → mesa privada: lobby sin cuenta atrás, empieza el anfitrión.
+  const mode: 'lobby' | 'bots' | 'private' =
+    body.mode === 'bots' ? 'bots' : body.mode === 'private' ? 'private' : 'lobby';
 
   // Identidad anónima: si Cosmos está activo, leemos/creamos player.
   // Si no, devolvemos un playerId en memoria (sin cookie ni persistencia).
@@ -66,7 +68,8 @@ app.post('/api/rooms', async (req, reply) => {
   }
 
   const room = createRoomWithBots({ fillWithBots: mode === 'bots' });
-  // S2-10: nivel de los bots (opcional; por defecto 2). Aún sin selector en la UI.
+  if (mode === 'private') room.isPrivate = true;
+  // S2-10: nivel de los bots (opcional; por defecto 2). S3-08: lo elige la portada al practicar.
   const bodyLevel = (req.body as { botLevel?: unknown } | undefined)?.botLevel;
   if (bodyLevel === 1 || bodyLevel === 2) room.botLevel = bodyLevel;
   return { code: room.code, mode, name, playerId };
@@ -369,8 +372,16 @@ app.register(async (instance) => {
     }, HEARTBEAT_MS);
     socket.on('close', () => clearInterval(heartbeat));
 
+    // S3-03: el anfitrión puede mover a los jugadores de asiento en la mesa
+    // privada; el asiento de esta conexión se recalcula en cada evento.
+    const refreshSeat = () => {
+      const i = room.players.findIndex((p) => (p.ws as unknown) === socket);
+      if (i >= 0) seat = i;
+    };
+
     socket.on('message', async (raw: unknown) => {
       alive = true;
+      refreshSeat();
       const text = raw instanceof Buffer ? raw.toString() : String(raw);
       // Log de cada mensaje entrante para diagnóstico. Si una partida
       // se queda colgada, este log muestra qué envió el cliente por
@@ -402,6 +413,17 @@ app.register(async (instance) => {
         if (!castRematchVote(room, seat as Seat, msg.accept)) {
           send(socket, { type: 'ERROR', code: 'BAD_MESSAGE', message: 'No hay votación de revancha abierta' });
         }
+        return;
+      }
+      if (msg.type === 'PRIVATE_SWAP_SEATS' || msg.type === 'PRIVATE_START') {
+        const err =
+          msg.type === 'PRIVATE_SWAP_SEATS'
+            ? swapPrivateSeats(room, seat as Seat, msg.a as Seat, msg.b as Seat)
+            : startPrivate(room, seat as Seat, msg.botLevel, {
+                partidasPorCoto: msg.partidasPorCoto ?? 3,
+                cotosParaGanar: msg.cotosParaGanar ?? 1,
+              });
+        if (err) send(socket, { type: 'ERROR', code: 'BAD_MESSAGE', message: err });
         return;
       }
       if (msg.type === 'LEAVE') {
@@ -529,6 +551,7 @@ app.register(async (instance) => {
     });
 
     socket.on('close', () => {
+      refreshSeat();
       const p = room.players[seat];
       if (!p) return;
       // Si el seat ya lo tiene otra conexión (misma sesión en otra
