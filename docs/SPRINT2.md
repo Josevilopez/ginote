@@ -2,7 +2,7 @@
 
 **Goal**: de la home a una mesa en ≤ 2 toques, con rivales de nivel parecido, bots para completar, reconexión y revancha en 1 toque. Persistencia real en Cosmos, deploy permanente en Azure Container Apps, ELO anónimo ya activo para preparar matchmaking de Sprint 3.
 
-**Estado a fecha 2026-10-17**: sprint arrancado, listo para empezar a implementar. Estimación recalibrada a ~8.25 días (frente a los ~23 d del plan original) porque el motor y el servidor base ya están cerrados desde Sprint 0/1.
+**Estado a fecha 2026-10-18**: ✅ **sprint cerrado** salvo el despliegue (S2-16), que hace el usuario a mano. S2-11 (matchmaking con rating) pasa a Sprint 3 como S3-05. Siguiente: [`SPRINT3.md`](SPRINT3.md).
 
 ---
 
@@ -56,10 +56,9 @@
 - Resultado con 10 000 partidas por modo (30 000 en ~10 s): 0 acciones ilegales, 0 cuelgues, invariantes OK. L2 gana a L1 el 84 % de las partidas.
 - Pendiente (S3): elegir el nivel del bot de relleno según el rating medio de la mesa (parte de S2-11).
 
-### S2-11 — Matchmaking con rating — 🟡 parcial
-- Hoy: `apps/server/src/rooms.ts:36-66` (`findOrCreateMatchmakeRoom`) prioriza "más humanos primero" con ventana de lobby de 30 s. **No hay rating**.
-- Falta: introducir rating (depende de S2-17), cola con tickets `{playerId, mode, fill, rating, enqueuedAt}`, ventana ±100/+50 cada 5 s con tope ±400, formación de equipos `(a, d) vs (b, c)` (compañeros enfrentados), relleno con bots de nivel acorde al rating medio.
-- ~0.7 d.
+### S2-11 — Matchmaking con rating — ➡️ movido a Sprint 3 (S3-05)
+- Hecho en el server: cola con tickets por rating, ventana creciente y equipos con compañeros enfrentados (`apps/server/src/matchmaking.ts`, `/ws/matchmake`, tick cada 1 s).
+- Pendiente (S3-05): conectar "Jugar online" de la web a esa cola (hoy usa el lobby antiguo `POST /api/rooms/matchmake`) y elegir el nivel del bot de relleno por el rating medio. Se junta con la "pareja fija" (S3-04), que también necesita la cola.
 
 ### S2-12 — Desconexión, sustitución por bot — ✅ cerrado (2026-10-18)
 - Decisiones (2026-10-18): **sin reclamar** el asiento tras los 45 s; **abandonar a mitad de partida = derrota de ELO**.
@@ -106,14 +105,11 @@
 ### S2-16 — Despliegue: Azure Container Apps — 🧑‍💻 manual (usuario)
 - Lo hace el usuario a mano (decisión 2026-10-18). Notas útiles: `PERSISTENCE_BACKEND=cosmos` + `COSMOS_ENDPOINT` / `COSMOS_DATABASE`; `minReplicas = maxReplicas = 1` (las salas viven en memoria); ingress con WebSocket; dar margen al SIGTERM (`terminationGracePeriodSeconds` ≥ 30) para que se guarden los snapshots; `/healthz` para el health probe.
 
-### S2-17 — ELO anónimo con cookie — ⏳ no empezado
-- Plan:
-  - Cookie httpOnly + sameSite=lax con `playerId` UUID (generado en primer login si no existe).
-  - Al terminar partida: K alto provisional (K = 40) para nuevos, K = 20 para establecidos. Rating inicial 1000.
-  - Partidas con ≥ 2 humanos sí actualizan ELO; partidas con solo bots no actualizan (decisión a confirmar al implementar).
-  - Persistir `ratingHistory` en el documento `match` de Cosmos.
-  - **No mostrar ELO en UI todavía** — queda como dato en background para el matchmaking de Sprint 3 (S3-??).
-- ~0.5 d.
+### S2-17 — ELO anónimo con cookie — ✅ cerrado (2026-10-18)
+- Cookie httpOnly `guinote_pid` (90 días) + documento en `players` (Cosmos) con `rating`, `games`, `wins`, `losses`. K = 40 las 10 primeras partidas, luego 20. Rating inicial 1000.
+- Solo cuenta con al menos un humano en cada equipo. Abandonar a mitad de partida = derrota (S2-12).
+- Probado de punta a punta el 2026-10-18 (portátil + móvil).
+- Pendiente (Sprint 4): `ratingHistory` por match, para historial y rachas. Mostrar ELO en la UI: Sprint 4, ya con cuentas.
 
 ---
 
@@ -195,11 +191,6 @@ Paralelizable (mientras otra persona trabaja en otra tarea):
 
 ---
 
-## Decisiones a tomar para Sprint 3
+## Decisiones para Sprint 3
 
-1. Matchmaking puro con rating (cola, ventana, equipos) ya en S3, o lo dejamos como MVP de S2.
-2. Cuentas reales (OAuth o Entra External ID) — Sprint 3 o Sprint 4.
-3. **Partidas privadas con "coto"** (varias partidas con score acumulado tipo malas/buenas) — ¿Sprint 3 o Sprint 4? Reservado tras la decisión del 2026-10-17 de sacarlo del flujo de revancha.
-4. App nativa (React Native o Capacitor) — ¿vale la pena?
-5. i18n es/en — ¿Sprint 3?
-6. Ranking público y ELO visible en UI — ¿Sprint 3?
+Resueltas el 2026-10-18 en [`SPRINT3.md`](SPRINT3.md) (auth, mesas privadas, pareja fija, matchmaking, coto, i18n, app nativa, ranking).
