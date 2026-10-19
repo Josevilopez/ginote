@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useGame, getPlayerName, setPlayerName } from '../store.js';
+import { AccountBar } from '../components/AccountBar.js';
 import './Home.css';
 
 /**
@@ -51,6 +52,14 @@ export function Home() {
             onChange={(e) => setNameLocal(e.target.value.slice(0, 20))}
           />
         </label>
+
+        {/* S3-01: cuenta opcional. Al entrar, si aún te llamas "Jugador",
+            cogemos tu nombre de pila de Google. */}
+        <AccountBar
+          onGivenName={(given) => {
+            if (name.trim() === '' || name === 'Jugador') setNameLocal(given.slice(0, 20));
+          }}
+        />
 
         <div className="home-play">
           <button type="button" className="home-choice is-main" onClick={() => void createRoom('lobby')}>

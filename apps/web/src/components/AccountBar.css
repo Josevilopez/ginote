@@ -1,0 +1,129 @@
+/* S3-01: bloque de cuenta en la portada. Va debajo del nombre. */
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.account-guest {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(232, 196, 107, 0.35);
+  background: rgba(0, 0, 0, 0.12);
+}
+.account-why {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+  color: var(--fg-mute);
+}
+.account-why b { color: var(--fg); }
+.account-gsi {
+  min-height: 44px;
+  display: flex;
+  justify-content: center;
+  color-scheme: normal;
+}
+.account-error {
+  margin: 0;
+  font-size: 14px;
+  color: #ffd6cf;
+}
+
+.account-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(232, 196, 107, 0.28);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.account-summary:hover { background: rgba(0, 0, 0, 0.26); }
+.account-summary:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.account-avatar {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 19px;
+  font-weight: 800;
+  color: #0b2440;
+  background: linear-gradient(180deg, #a8cdfb, var(--team-mine, #5aa0f0));
+}
+.account-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+.account-who b {
+  font-size: 17px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-who small {
+  font-size: 13px;
+  color: var(--fg-mute);
+  font-variant-numeric: lining-nums;
+}
+.account-caret { color: var(--fg-mute); }
+
+.account-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(245, 240, 225, 0.14);
+}
+.account-email {
+  margin: 4px 10px 6px;
+  font-size: 13px;
+  color: var(--fg-mute);
+  overflow-wrap: anywhere;
+}
+.account-menu > button,
+.account-menu > a,
+.account-confirm button {
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+.account-menu > button:hover,
+.account-menu > a:hover,
+.account-confirm button:hover { background: rgba(245, 240, 225, 0.08); }
+.account-menu .is-danger { color: #ff9c8c; }
+.account-confirm {
+  margin: 4px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(226, 109, 92, 0.55);
+  background: rgba(226, 109, 92, 0.12);
+}
+.account-confirm p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #ffd6cf;
+}
+.account-confirm div { display: flex; justify-content: flex-end; gap: 6px; }
+.account-confirm .is-danger { background: rgba(226, 109, 92, 0.25); color: #fff; }

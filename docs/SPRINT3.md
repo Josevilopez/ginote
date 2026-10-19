@@ -36,13 +36,22 @@
 - Requisito del resto. Notas en `SPRINT2.md` S2-16.
 - Recomendado añadir **Application Insights** al desplegar (errores y desconexiones reales de móviles).
 
-### S3-01 — Cuentas: login opcional con Google — ~2 d
+### S3-01 — Cuentas: login opcional con Google — ✅ cerrado (2026-10-19, probado en Azure)
 - Botón "Entrar / Guardar mi progreso" en la portada; quien no entra sigue jugando como invitado.
 - Contenedor `users` en Cosmos (`/userId`): nombre, proveedor, `linkedPlayerIds`, fecha de alta.
 - Vincular el `playerId` anónimo (cookie `guinote_pid`) a la cuenta y fusionar rating/partidas.
 - Sesión: cookie firmada; el WS identifica al usuario en el handshake (hoy usa `?pid` / cookie anónima).
 - Cerrar sesión y borrar cuenta (RGPD: el usuario puede pedir sus datos y borrarlos).
 - Tests: vincular invitado, fusión de rating, sesión caducada, WS con y sin cuenta.
+- Hecho:
+  - **Google Identity Services** (botón de Google en la portada, popup). El servidor verifica el ID token con las claves públicas de Google (`auth/google.ts`, sin dependencias nuevas). No se usa client secret.
+  - **Sesión**: cookie `guinote_sid` httpOnly firmada con HMAC (`SESSION_SECRET`), 180 días; lleva `userId` y `playerId`, así el WS no lee Cosmos. Con sesión, el player de la cuenta manda sobre `?pid` y la cookie anónima.
+  - **Vínculo** (`auth/accounts.ts`): primer login → el player del dispositivo pasa a ser el de la cuenta. Desde otro dispositivo → sus partidas se suman al principal y se queda el rating del que más partidas tenga. Un player de otra cuenta (dispositivo compartido) no se toca.
+  - **Endpoints**: `GET /api/config`, `GET /api/me`, `POST /api/auth/google`, `POST /api/auth/logout`, `GET /api/me/data` (descarga JSON), `DELETE /api/me` (borra cuenta y players).
+  - **Portada**: bloque "Guarda tu progreso" con el botón de Google; con sesión, nombre + partidas guardadas y menú (cerrar sesión, descargar mis datos, borrar cuenta con confirmación). El nombre "Jugador" se cambia por tu nombre de pila.
+  - **Config**: `GOOGLE_CLIENT_ID`, `SESSION_SECRET` (en producción, sin él el login se desactiva en vez de tumbar el server) y contenedor Cosmos `users` (PK `/userId`).
+  - 17 tests en `auth.test.ts` (158 en total).
+  - **Despliegue (lecciones)**: el Container App necesita identidad administrada del sistema **y** el rol de datos de Cosmos (`az cosmosdb sql role assignment create … 00000000-0000-0000-0000-000000000002`; no se da desde el IAM del portal), reiniciar la réplica tras activarla y modo de **una sola revisión**. Variables: `PERSISTENCE_BACKEND=cosmos`, `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `GOOGLE_CLIENT_ID`, `SESSION_SECRET=secretref:session-secret`.
 
 ### S3-02 — Perfil mínimo — ~0,5 d
 - Pantalla "Mi perfil" con el estilo de la portada: nombre, partidas jugadas y ganadas.

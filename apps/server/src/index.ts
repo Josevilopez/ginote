@@ -18,9 +18,10 @@ import { initCosmos, readCosmosConfig } from './persistence/cosmosClient.js';
 import { getCosmosHandles, setCosmosHandles } from './globalHandles.js';
 import {
   ensurePlayer,
-  readPlayerIdFromCookie,
   setPlayerCookie,
 } from './players.js';
+import { registerAuthRoutes, resolvePlayerId } from './auth/routes.js';
+import { initSessionSecret } from './auth/session.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -33,6 +34,10 @@ const app = Fastify({ logger: true });
 
 await app.register(cors, { origin: true });
 await app.register(websocket);
+// S3-01: cuentas con Google (opcional). Sin GOOGLE_CLIENT_ID el login
+// queda desactivado y todo sigue funcionando como invitado.
+const sessionsOk = initSessionSecret(process.env, (m) => app.log.warn(m));
+await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 
 /**
  * Detecta si el request viene por HTTPS. Tiene en cuenta el header
@@ -59,7 +64,7 @@ app.post('/api/rooms', async (req, reply) => {
   let playerId: string;
   const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
   if (cosmos) {
-    const existing = readPlayerIdFromCookie(req);
+    const existing = resolvePlayerId(req); // S3-01: con sesión, el player de la cuenta
     const { playerId: id } = await ensurePlayer(cosmos, existing);
     playerId = id;
     if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
@@ -86,7 +91,7 @@ app.post('/api/rooms/matchmake', async (req, reply) => {
   let playerId: string;
   const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
   if (cosmos) {
-    const existing = readPlayerIdFromCookie(req);
+    const existing = resolvePlayerId(req); // S3-01: con sesión, el player de la cuenta
     const { playerId: id } = await ensurePlayer(cosmos, existing);
     playerId = id;
     if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
@@ -188,9 +193,8 @@ app.register(async (instance) => {
   // su token para jugar.
   instance.get('/ws/matchmake', { websocket: true }, async (socket: WsSocket, req) => {
     const url = new URL(req.url, 'http://x');
-    const pidFromQuery = url.searchParams.get('pid');
-    const pidFromCookie = pidFromQuery ? null : readPlayerIdFromCookie(req as unknown as import('fastify').FastifyRequest);
-    const playerId = pidFromQuery ?? pidFromCookie;
+    // S3-01: con sesión manda la cuenta; si no, `?pid=` o la cookie anónima.
+    const playerId = resolvePlayerId(req, url.searchParams.get('pid'));
     const modeRaw = url.searchParams.get('mode');
     const fillRaw = url.searchParams.get('fill');
     const mode: 2 | 4 = modeRaw === '2' ? 2 : 4;
@@ -249,9 +253,8 @@ app.register(async (instance) => {
     // que recibió en POST /api/rooms). Si no, cae a la cookie leída
     // del upgrade request. Si tampoco hay cookie (modo memory), es
     // null y el seat queda sin playerId (no se actualiza ELO).
-    const pidFromQuery = url.searchParams.get('pid');
-    const pidFromCookie = pidFromQuery ? null : readPlayerIdFromCookie(req as unknown as import('fastify').FastifyRequest);
-    const playerId = pidFromQuery ?? pidFromCookie ?? null;
+    // S3-01: con sesión manda la cuenta; si no, `?pid=` o la cookie anónima.
+    const playerId = resolvePlayerId(req, url.searchParams.get('pid'));
 
     if (token) {
       const idx = room.players.findIndex((p) => p.token === token);

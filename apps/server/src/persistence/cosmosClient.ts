@@ -34,6 +34,8 @@ export interface CosmosHandles {
   players: Container;
   matches: Container;
   snapshots: Container;
+  /** S3-01: cuentas (PK `/userId`). Hay que crearlo en el portal. */
+  users: Container;
 }
 
 export interface CosmosConfig {
@@ -77,8 +79,9 @@ export async function initCosmos(config: CosmosConfig): Promise<CosmosHandles> {
   const players = client.database(config.database).container('players');
   const matches = client.database(config.database).container('matches');
   const snapshots = client.database(config.database).container('snapshots');
+  const users = client.database(config.database).container('users');
   // Si quisieras crear la BD por código, sería aquí con
   //   await client.databases.createIfNotExists({ id: config.database })
   // pero eso requiere control plane RBAC, no data plane.
-  return { client, database: client.database(config.database), players, matches, snapshots };
+  return { client, database: client.database(config.database), players, matches, snapshots, users };
 }
