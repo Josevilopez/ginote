@@ -5,14 +5,11 @@ import './AccountBar.css';
 /**
  * S3-01: bloque de cuenta en la portada.
  *  - Invitado: botón de Google y una línea de por qué entrar.
- *  - Con cuenta: nombre, partidas guardadas y menú (salir, mis datos,
- *    borrar cuenta).
+ *  - Con cuenta: nombre y partidas guardadas; enlaza a "Mi perfil".
  * Si el servidor no tiene GOOGLE_CLIENT_ID, no se pinta nada.
  */
 export function AccountBar({ onGivenName }: { onGivenName: (name: string) => void }) {
-  const { status, googleClientId, me, stats, error, init, login, logout, deleteAccount } = useAccount();
-  const [open, setOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const { status, googleClientId, me, stats, error, init, login } = useAccount();
   const [gsiFailed, setGsiFailed] = useState(false);
   const btnRef = useRef<HTMLDivElement>(null);
   // El callback de Google se registra una vez; leemos la última versión.
@@ -84,15 +81,9 @@ export function AccountBar({ onGivenName }: { onGivenName: (name: string) => voi
   const initial = (label.match(/\p{L}/u)?.[0] ?? '?').toUpperCase();
   return (
     <div className="account account-in">
-      <button
-        type="button"
-        className="account-summary"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen(!open);
-          setConfirmDelete(false);
-        }}
-      >
+      {/* S3-02: la tarjeta lleva a "Mi perfil" (allí están salir, mis
+          datos y borrar cuenta). */}
+      <a className="account-summary" href="#perfil">
         <span className="account-avatar" aria-hidden="true">{initial}</span>
         <span className="account-who">
           <b>{label}</b>
@@ -102,37 +93,8 @@ export function AccountBar({ onGivenName }: { onGivenName: (name: string) => voi
               : 'Tus partidas se guardan en tu cuenta'}
           </small>
         </span>
-        <span className="account-caret" aria-hidden="true">{open ? '▴' : '▾'}</span>
-      </button>
-      {open && (
-        <div className="account-menu">
-          {me.email && <p className="account-email">{me.email}</p>}
-          <button type="button" onClick={() => void logout()}>Cerrar sesión</button>
-          <a href="/api/me/data" download="guinote-mis-datos.json">Descargar mis datos</a>
-          {!confirmDelete ? (
-            <button type="button" className="is-danger" onClick={() => setConfirmDelete(true)}>
-              Borrar mi cuenta
-            </button>
-          ) : (
-            <div className="account-confirm" role="alert">
-              <p>Se borran tu cuenta, tus partidas y tu nivel. No se puede deshacer.</p>
-              <div>
-                <button type="button" onClick={() => setConfirmDelete(false)}>Cancelar</button>
-                <button
-                  type="button"
-                  className="is-danger"
-                  onClick={() => {
-                    void deleteAccount().then((ok) => ok && setOpen(false));
-                  }}
-                >
-                  Sí, borrar
-                </button>
-              </div>
-            </div>
-          )}
-          {error && <p className="account-error" role="alert">{error}</p>}
-        </div>
-      )}
+        <span className="account-caret">Mi perfil ›</span>
+      </a>
     </div>
   );
 }

@@ -41,6 +41,7 @@
   color: var(--fg);
   font-family: inherit;
   text-align: left;
+  text-decoration: none;
   cursor: pointer;
 }
 .account-summary:hover { background: rgba(0, 0, 0, 0.26); }
@@ -76,54 +77,5 @@
   color: var(--fg-mute);
   font-variant-numeric: lining-nums;
 }
-.account-caret { color: var(--fg-mute); }
+.account-caret { flex: none; font-size: 14px; font-weight: 700; color: var(--gold); }
 
-.account-menu {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.28);
-  border: 1px solid rgba(245, 240, 225, 0.14);
-}
-.account-email {
-  margin: 4px 10px 6px;
-  font-size: 13px;
-  color: var(--fg-mute);
-  overflow-wrap: anywhere;
-}
-.account-menu > button,
-.account-menu > a,
-.account-confirm button {
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 15px;
-  font-weight: 700;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-}
-.account-menu > button:hover,
-.account-menu > a:hover,
-.account-confirm button:hover { background: rgba(245, 240, 225, 0.08); }
-.account-menu .is-danger { color: #ff9c8c; }
-.account-confirm {
-  margin: 4px;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(226, 109, 92, 0.55);
-  background: rgba(226, 109, 92, 0.12);
-}
-.account-confirm p {
-  margin: 0 0 8px;
-  font-size: 14px;
-  line-height: 1.35;
-  color: #ffd6cf;
-}
-.account-confirm div { display: flex; justify-content: flex-end; gap: 6px; }
-.account-confirm .is-danger { background: rgba(226, 109, 92, 0.25); color: #fff; }

@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useGame } from './store.js';
 import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
+import { Profile } from './pages/Profile.js';
 import { ConnectionBanner } from './components/ConnectionBanner.js';
 
 export function App() {
@@ -28,9 +29,23 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // S3-02: "Mi perfil" vive en `#perfil` (el botón Atrás del navegador
+  // vuelve a la portada). Los códigos de sala son de 4 caracteres, así
+  // que no chocan.
+  const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
+  useEffect(() => {
+    const onHash = () => setOnProfile(window.location.hash === '#perfil');
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  const closeProfile = useCallback(() => {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    setOnProfile(false);
+  }, []);
+
   return (
     <main className="app">
-      {you === null ? <Home /> : <Game />}
+      {you === null ? onProfile ? <Profile onBack={closeProfile} /> : <Home /> : <Game />}
       {you !== null && <ConnectionBanner />}
     </main>
   );

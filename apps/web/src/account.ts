@@ -10,6 +10,8 @@ import { create } from 'zustand';
 export interface Me {
   name: string | null;
   email: string | null;
+  /** Fecha de alta (ISO). Solo viene de `/api/me`. */
+  since?: string;
 }
 
 interface AccountState {
@@ -20,6 +22,8 @@ interface AccountState {
   stats: { games: number; wins: number; losses: number } | null;
   error: string | null;
   init: () => Promise<void>;
+  /** Vuelve a pedir `/api/me` (p. ej. al abrir el perfil tras jugar). */
+  refresh: () => Promise<void>;
   /** Recibe el ID token de Google. Devuelve el nombre de pila, si viene. */
   login: (credential: string) => Promise<string | null>;
   logout: () => Promise<void>;
@@ -53,6 +57,17 @@ export const useAccount = create<AccountState>((set) => ({
     }
   },
 
+  async refresh() {
+    try {
+      const r = await fetch('/api/me', { credentials: 'same-origin' });
+      if (!r.ok) return;
+      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats'] };
+      set({ me: m.user, stats: m.player ?? null });
+    } catch {
+      // Sin red: nos quedamos con lo que había.
+    }
+  },
+
   async login(credential) {
     set({ error: null });
     try {
@@ -65,11 +80,9 @@ export const useAccount = create<AccountState>((set) => ({
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as { user: Me; givenName: string | null };
       set({ me: body.user });
-      // Partidas del player de la cuenta (puede venir de otro dispositivo).
-      void fetch('/api/me', { credentials: 'same-origin' })
-        .then((res) => res.json() as Promise<{ player?: AccountState['stats'] }>)
-        .then((m) => set({ stats: m.player ?? null }))
-        .catch(() => undefined);
+      // Fecha de alta y partidas del player de la cuenta (puede venir de
+      // otro dispositivo).
+      void useAccount.getState().refresh();
       return body.givenName;
     } catch {
       set({ error: 'No se pudo entrar con Google. Inténtalo otra vez.' });

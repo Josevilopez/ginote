@@ -197,7 +197,8 @@ describe('endpoints', () => {
     const cookie = `${SESSION_COOKIE}=${c[SESSION_COOKIE]}; guinote_pid=anon`;
 
     const me = await app.inject({ url: '/api/me', headers: { cookie } });
-    expect(me.json()).toEqual({ user: { name: 'Jose', email: 'j@x.es' }, player: { games: 2, wins: 1, losses: 1 } });
+    expect(me.json()).toMatchObject({ user: { name: 'Jose', email: 'j@x.es' }, player: { games: 2, wins: 1, losses: 1 } });
+    expect(Date.parse(me.json().user.since)).not.toBeNaN();
 
     // WS / POST rooms: la sesión manda aunque el ?pid o la cookie digan otra cosa.
     expect(resolvePlayerId({ headers: { cookie: `${SESSION_COOKIE}=${c[SESSION_COOKIE]}; guinote_pid=otro` } }, 'falso')).toBe('anon');

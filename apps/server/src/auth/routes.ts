@@ -115,7 +115,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     }
     const p = await players.get(user.primaryPlayerId).catch(() => null);
     return {
-      user: { name: user.name ?? null, email: user.email ?? null },
+      user: { name: user.name ?? null, email: user.email ?? null, since: user.createdAt },
       player: p ? { games: p.games, wins: p.wins, losses: p.losses } : null,
     };
   });

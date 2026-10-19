@@ -53,9 +53,10 @@
   - 17 tests en `auth.test.ts` (158 en total).
   - **Despliegue (lecciones)**: el Container App necesita identidad administrada del sistema **y** el rol de datos de Cosmos (`az cosmosdb sql role assignment create … 00000000-0000-0000-0000-000000000002`; no se da desde el IAM del portal), reiniciar la réplica tras activarla y modo de **una sola revisión**. Variables: `PERSISTENCE_BACKEND=cosmos`, `COSMOS_ENDPOINT`, `COSMOS_DATABASE`, `GOOGLE_CLIENT_ID`, `SESSION_SECRET=secretref:session-secret`.
 
-### S3-02 — Perfil mínimo — ~0,5 d
+### S3-02 — Perfil mínimo — ✅ cerrado (2026-10-19)
 - Pantalla "Mi perfil" con el estilo de la portada: nombre, partidas jugadas y ganadas.
 - **Sin ELO visible todavía** (llega en S4 con el ranking).
+- Hecho: `pages/Profile.tsx` en `#perfil` (el botón Atrás vuelve a la portada). Avatar, nombre, email, "Jugando desde octubre de 2026" y partidas jugadas / ganadas / perdidas / % de victorias, con aviso de que solo cuentan las online con otros jugadores. Las acciones de cuenta (cerrar sesión, descargar datos, borrar) se mueven aquí; en la portada la tarjeta de cuenta lleva a "Mi perfil". `/api/me` devuelve la fecha de alta (`since`).
 
 ### S3-03 — Mesas privadas — ✅ cerrado (2026-10-19)
 - "Crear mesa privada": código + enlace para compartir (como el lobby actual, pero **sin** cuenta atrás ni bots automáticos).
