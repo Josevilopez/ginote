@@ -9,7 +9,7 @@
  *   sentado en una mesa (se mira en las salas vivas).
  * - Invitaciones en memoria; caducan a los 2 minutos.
  *
- *  GET    /api/friends                      → { me, friends, incoming, outgoing, invites }
+ *  GET    /api/friends                      → { me, friends, mates, incoming, outgoing, invites }
  *  POST   /api/friends/request  {code}      → envía solicitud (o acepta si ya te la habían enviado)
  *  POST   /api/friends/:id/accept           → acepta
  *  POST   /api/friends/:id/reject           → rechaza (o cancela la tuya)
@@ -236,6 +236,8 @@ export interface ViewDeps {
   invites: InviteBox;
   /** playerIds sentados ahora mismo en alguna mesa. */
   playingPlayerIds: () => Set<string>;
+  /** S5-03: compañeros de peña (userIds, sin ti). */
+  penaMates?: (meId: string) => Promise<string[]>;
 }
 
 async function personView(deps: ViewDeps, userId: string, playing: Set<string>, now: number): Promise<FriendView | null> {
@@ -260,11 +262,16 @@ export async function friendsView(deps: ViewDeps, meId: string, now: number = Da
   const incoming = await load(me.friendsIn);
   const outgoing = await load(me.friendsOut);
   const mine = displayName(await deps.players.get(me.primaryPlayerId).catch(() => null));
+  // S5-03: los de tu peña que no son ya amigos (para invitarles a jugar).
+  const mateIds: string[] = deps.penaMates ? await deps.penaMates(meId).catch(() => []) : [];
+  const mates = (await load(mateIds.filter((id) => !me.friends?.includes(id)))).sort(
+    (a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name, 'es'),
+  );
   const invites: InviteView[] = deps.invites
     .forUser(meId, now)
-    .filter((i) => me.friends?.includes(i.fromId))
+    .filter((i) => me.friends?.includes(i.fromId) || mateIds.includes(i.fromId))
     .map((i) => ({ id: i.id, fromId: i.fromId, fromName: i.fromName, kind: i.kind, code: i.code, expiresInMs: i.expiresAt - now }));
-  return { me: mine, friends, incoming, outgoing, invites };
+  return { me: mine, friends, mates, incoming, outgoing, invites };
 }
 
 // ───────────── Rutas ─────────────
@@ -277,6 +284,8 @@ export interface FriendRouteOptions {
   playingPlayerIds: () => Set<string>;
   /** ¿Se puede invitar a esta pareja / mesa? (existe y tiene hueco) */
   canInvite: (kind: InviteKind, code: string, fromPlayerId: string) => boolean;
+  /** S5-03: compañeros de peña (se les puede invitar a jugar aunque no sean amigos). */
+  penaMates?: (meId: string) => Promise<string[]>;
   /** S5-02: aviso push (best-effort, no se espera). */
   notify?: (toUserId: string, kind: PushKind, msg: PushMessage) => void;
 }
@@ -297,7 +306,9 @@ export function registerFriendRoutes(app: FastifyInstance, opts: FriendRouteOpti
 
   const deps = (): ViewDeps => {
     const { users, players } = opts.repos();
-    return { users, players, presence: pres, invites: box, playingPlayerIds: opts.playingPlayerIds };
+    const d: ViewDeps = { users, players, presence: pres, invites: box, playingPlayerIds: opts.playingPlayerIds };
+    if (opts.penaMates) d.penaMates = opts.penaMates;
+    return d;
   };
 
   app.get('/api/friends', async (req, reply) => {
@@ -355,7 +366,9 @@ export function registerFriendRoutes(app: FastifyInstance, opts: FriendRouteOpti
     if (!kind || !/^[A-Z0-9]{3,8}$/.test(code)) return reply.code(400).send({ error: 'Invitación no válida' });
     const { users, players } = opts.repos();
     const me = (await users.get(s.uid)) as FUser | null;
-    if (!me?.friends?.includes(req.params.id)) return reply.code(404).send({ error: 'No sois amigos' });
+    if (!me) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+    const mates: string[] = opts.penaMates ? await opts.penaMates(s.uid).catch(() => []) : [];
+    if (!me.friends?.includes(req.params.id) && !mates.includes(req.params.id)) return reply.code(404).send({ error: 'No sois amigos' });
     if (!opts.canInvite(kind, code, s.pid)) {
       return reply.code(409).send({ error: kind === 'pareja' ? 'Tu pareja ya está completa o ya no existe' : 'La mesa ya no tiene sitio' });
     }

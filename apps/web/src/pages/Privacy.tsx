@@ -46,6 +46,7 @@ export function Privacy({ onBack }: { onBack: () => void }) {
             <li>La fecha en que creaste la cuenta y la del último acceso.</li>
             <li>Tus partidas (con quién y contra quién jugaste, si ganaste y los puntos de nivel) y tus rachas.</li>
             <li>Tu lista de amigos y las solicitudes de amistad. Tus amigos ven si estás conectado o jugando (no dónde ni con quién).</li>
+            <li>Tu peña, si estás en una. Los demás miembros ven tu nombre, tu nivel, tus puntos de la semana y si estás conectado.</li>
             <li>
               Si activas los avisos: la dirección que da tu navegador para enviártelos (de Google, Apple o Mozilla, según el
               navegador). Se borra al desactivarlos, al cerrar sesión o al borrar la cuenta.

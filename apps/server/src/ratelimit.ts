@@ -27,6 +27,7 @@ export const RULES: Rule[] = [
   { group: 'create', match: (m, p) => m === 'POST' && (p.startsWith('/api/rooms') || p === '/api/parties'), limit: 30, windowMs: MIN, key: 'ip' },
   { group: 'friends', match: (m, p) => m !== 'GET' && (p.startsWith('/api/friends') || p.startsWith('/api/invites')), limit: 30, windowMs: MIN, key: 'uid' },
   { group: 'push', match: (m, p) => m !== 'GET' && p.startsWith('/api/push'), limit: 20, windowMs: MIN, key: 'uid' },
+  { group: 'penas', match: (m, p) => m !== 'GET' && p.startsWith('/api/penas'), limit: 20, windowMs: MIN, key: 'uid' },
   { group: 'ranking', match: (m, p) => p.startsWith('/api/ranking'), limit: 60, windowMs: MIN, key: 'ip' },
   { group: 'ws', match: (_m, p) => p.startsWith('/ws/'), limit: 60, windowMs: MIN, key: 'ip' },
 ];

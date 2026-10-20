@@ -23,6 +23,8 @@ import {
 import { authRepos, registerAuthRoutes, resolvePlayerId, sessionOf } from './auth/routes.js';
 import { registerFriendRoutes } from './friends.js';
 import { Pusher, initPushSender, pushRepo, registerPushRoutes } from './push.js';
+import { penaMatesOf, penaRepo, registerPenaRoutes } from './penas.js';
+import { presence } from './friends.js';
 import { listRooms } from './rooms.js';
 import { initSessionSecret } from './auth/session.js';
 import { registerRateLimit } from './ratelimit.js';
@@ -58,20 +60,26 @@ if (!pushSetup) app.log.warn('[push] sin VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY: a
 const pushSubs = () => pushRepo(() => getCosmosHandles()?.pushSubs ?? null);
 const pusher = new Pusher(pushSubs, () => authRepos().users, pushSetup?.sender ?? null, (m, err) => app.log.error({ err }, m));
 registerPushRoutes(app, { sessionOf, users: () => authRepos().users, repo: pushSubs, publicKey: pushSetup?.publicKey ?? null });
+const notifyPush = (to: string, kind: 'invite' | 'request', msg: import('./push.js').PushMessage) => {
+  pusher.notify(to, kind, msg).catch((err) => app.log.error({ err }, '[push] fallo'));
+};
+const playingPlayerIds = () => {
+  const ids = new Set<string>();
+  for (const room of listRooms()) {
+    if (room.matchFinished) continue;
+    for (const p of room.players) if (p.playerId && p.token !== null && !p.substitute) ids.add(p.playerId);
+  }
+  return ids;
+};
+// S5-03: peñas.
+const penas = () => penaRepo(() => getCosmosHandles()?.penas ?? null);
+const penaDeps = () => ({ ...authRepos(), penas: penas() });
 registerFriendRoutes(app, {
   repos: authRepos,
-  notify: (to, kind, msg) => {
-    pusher.notify(to, kind, msg).catch((err) => app.log.error({ err }, '[push] fallo'));
-  },
+  notify: notifyPush,
+  penaMates: (meId) => penaMatesOf(penaDeps(), meId),
   sessionOf,
-  playingPlayerIds: () => {
-    const ids = new Set<string>();
-    for (const room of listRooms()) {
-      if (room.matchFinished) continue;
-      for (const p of room.players) if (p.playerId && p.token !== null && !p.substitute) ids.add(p.playerId);
-    }
-    return ids;
-  },
+  playingPlayerIds,
   canInvite: (kind, code, fromPid) => {
     if (kind === 'pareja') {
       const party = getParty(code);
@@ -88,6 +96,7 @@ registerFriendRoutes(app, {
     );
   },
 });
+registerPenaRoutes(app, { sessionOf, deps: penaDeps, presence, playingPlayerIds, notify: notifyPush });
 await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 
 /**

@@ -21,9 +21,11 @@ export function InviteFriends({ kind, code }: { kind: 'pareja' | 'mesa'; code: s
   }, [me, refresh]);
 
   if (!me || !data) return null;
-  const online = data.friends.filter((f) => f.status === 'online');
+  // S5-03: amigos y gente de tu peña.
+  const everyone = [...data.friends, ...(data.mates ?? [])];
+  const online = everyone.filter((f) => f.status === 'online');
   if (online.length === 0) {
-    return data.friends.length > 0 ? <p className="invite-friends-none">Ningún amigo conectado ahora mismo.</p> : null;
+    return everyone.length > 0 ? <p className="invite-friends-none">Ningún amigo conectado ahora mismo.</p> : null;
   }
 
   const send = async (id: string) => {

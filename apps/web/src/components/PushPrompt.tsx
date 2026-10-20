@@ -143,7 +143,7 @@ export function PushSettings() {
           </label>
           <label>
             <input type="checkbox" checked={prefs.request} onChange={(e) => void savePrefs({ request: e.target.checked })} />
-            Solicitudes de amistad
+            Solicitudes de amistad y de peña
           </label>
         </fieldset>
       )}

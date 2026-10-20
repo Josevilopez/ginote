@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useAccount } from '../account.js';
 import { FRIENDS_POLL_MS, useFriends } from '../friends.js';
 import { useGame } from '../store.js';
+import { usePena } from '../penas.js';
 import '../pages/Friends.css';
 
 /**
@@ -24,6 +25,7 @@ export function InviteToast() {
   useEffect(() => {
     if (!me) {
       clear();
+      usePena.setState({ data: undefined }); // S5-03: al cerrar sesión
       return;
     }
     void refresh();

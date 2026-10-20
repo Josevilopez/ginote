@@ -234,7 +234,7 @@ export function Who({ f, showStatus = false }: { f: Friend; showStatus?: boolean
   );
 }
 
-function GoogleButton({ clientId }: { clientId: string }) {
+export function GoogleButton({ clientId }: { clientId: string }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current) return;

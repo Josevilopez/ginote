@@ -28,6 +28,8 @@ export interface Invite {
 export interface FriendsData {
   me: { name: string; tag: string | null };
   friends: Friend[];
+  /** S5-03: los de tu peña que no son amigos (también se les puede invitar a jugar). */
+  mates?: Friend[];
   incoming: Friend[];
   outgoing: Friend[];
   invites: Invite[];

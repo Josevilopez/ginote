@@ -6,6 +6,7 @@ import { useAccount } from '../account.js';
 import { isOffensiveName } from '@guinote/protocol';
 import { useParty } from '../party.js';
 import { useFriends } from '../friends.js';
+import { usePena } from '../penas.js';
 import './Home.css';
 
 /**
@@ -36,6 +37,13 @@ export function Home() {
   const codeReady = joinInput.trim().length === 4;
   // S5-01: solicitudes de amistad sin responder.
   const pendingFriends = useFriends((s) => s.data?.incoming.length ?? 0);
+  // S5-03: invitaciones a peñas (solo si aún no estás en ninguna).
+  const loggedIn = useAccount((s) => s.me !== null);
+  const refreshPena = usePena((s) => s.refresh);
+  const penaInvites = usePena((s) => (s.data && !s.data.pena ? s.data.invites.length : 0));
+  useEffect(() => {
+    if (loggedIn) void refreshPena();
+  }, [loggedIn, refreshPena]);
 
   return (
     <div className="home">
@@ -106,6 +114,15 @@ export function Home() {
             {pendingFriends > 0 && (
               <span className="home-badge" aria-label={`${pendingFriends} solicitudes`}>
                 {pendingFriends}
+              </span>
+            )}
+          </a>
+          {/* S5-03 */}
+          <a className="home-ranking" href="#pena">
+            🍻 Peña
+            {penaInvites > 0 && (
+              <span className="home-badge" aria-label={`${penaInvites} invitaciones`}>
+                {penaInvites}
               </span>
             )}
           </a>

@@ -1,0 +1,51 @@
+/* S5-03: peñas. Hereda .home, .ranking y .friends. */
+.pena-kicker { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); }
+.pena-intro { margin-top: -6px; }
+.pena-head { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.pena-head .ranking-title { line-height: 1.1; overflow-wrap: anywhere; }
+.pena-head p { margin: 0; color: var(--fg-mute); font-size: 15px; }
+.pena-online { color: var(--ok); }
+.pena-head .friends-share { margin-top: 4px; }
+
+.pena-join {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(232, 196, 107, 0.55);
+  background: rgba(0, 0, 0, 0.22);
+  text-align: center;
+}
+.pena-join h1 { margin: 0; font-family: 'Alegreya', Georgia, serif; font-size: 30px; font-weight: 800; color: var(--gold); overflow-wrap: anywhere; }
+.pena-join p { margin: 0; color: var(--fg-mute); }
+.pena-join .home-choice { margin-top: 6px; text-align: center; }
+
+.pena .pena-invite { grid-template-columns: 1fr auto; }
+.pena .pena-row { grid-template-columns: 22px 10px 22px 1fr auto 36px; gap: 7px; }
+.pena .pena-row .ranking-pos { font-size: 15px; }
+.pena-row .ranking-name { white-space: normal; }
+.pena-row .ranking-name small { white-space: nowrap; }
+.pena-row .friends-status { font-size: 12px; }
+.pena .pena-kick-confirm { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 6px; }
+.ranking-points.is-neg { color: #ffb3a7; }
+.pena-tabs { grid-template-columns: repeat(2, 1fr); }
+
+.invite-friends .pena-toggle {
+  align-self: stretch;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(232, 196, 107, 0.5);
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.invite-friends .pena-toggle:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.pena-invite-friends button:not(.pena-toggle) { min-width: 84px; }
+.pena-leave { display: flex; justify-content: center; margin-top: 6px; }
+.pena-leave .profile-confirm { width: 100%; }
+.pena-join .home-choice b { display: block; text-align: center; }

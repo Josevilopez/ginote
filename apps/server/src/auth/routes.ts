@@ -41,6 +41,7 @@ import {
 } from './accounts.js';
 import { forgetUser } from '../friends.js';
 import { pushRepo } from '../push.js';
+import { leavePena, penaRepo } from '../penas.js';
 import { GoogleTokenError, verifyGoogleIdToken, type KeySource, googleKeys } from './google.js';
 import {
   SESSION_COOKIE,
@@ -423,6 +424,9 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     await pushRepo(() => getCosmosHandles()?.pushSubs ?? null)
       .removeAll(s.uid)
       .catch((err) => req.log.error({ err }, '[push] no se pudo borrar'));
+    await leavePena({ users, players, penas: penaRepo(() => getCosmosHandles()?.penas ?? null) }, s.uid).catch((err) =>
+      req.log.error({ err }, '[peñas] no se pudo salir'),
+    );
     await forgetUser(users, s.uid).catch((err) => req.log.error({ err }, '[amigos] no se pudo limpiar'));
     await deleteAccount(users, players, s.uid);
     clearCookies(req, reply);

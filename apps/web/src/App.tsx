@@ -8,6 +8,8 @@ import { Ranking } from './pages/Ranking.js';
 import { Party } from './pages/Party.js';
 import { Searching } from './pages/Searching.js';
 import { Friends } from './pages/Friends.js';
+import { Pena } from './pages/Pena.js';
+import { penaRoute } from './penas.js';
 import { InviteToast } from './components/InviteToast.js';
 import { friendsRoute } from './friends.js';
 import { listenForPushClicks } from './push.js';
@@ -52,6 +54,8 @@ export function App() {
   const [onRanking, setOnRanking] = useState(() => window.location.hash === '#ranking');
   // S5-01: amigos en `#amigos` (o `#amigos/Nombre%231234` para añadir).
   const [friends, setFriends] = useState(() => friendsRoute());
+  // S5-03: peña en `#pena` (o `#pena-CODIGO` para entrar en una).
+  const [pena, setPena] = useState(() => penaRoute());
   // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
   const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
   const inParty = useParty((s) => s.saved !== null);
@@ -62,6 +66,7 @@ export function App() {
       setOnPrivacy(window.location.hash === '#privacidad');
       setOnRanking(window.location.hash === '#ranking');
       setFriends(friendsRoute());
+      setPena(penaRoute());
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
@@ -93,6 +98,13 @@ export function App() {
       setFriends(null);
     }
   }, []);
+  const closePena = useCallback(() => {
+    if (history.length > 1 && window.location.hash === '#pena') history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setPena(null);
+    }
+  }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
     setInviteCode(null);
@@ -110,6 +122,8 @@ export function App() {
         <Game />
       ) : onRanking ? (
         <Ranking onBack={closeRanking} />
+      ) : pena ? (
+        <Pena onBack={closePena} joinCode={pena.code} />
       ) : friends ? (
         <Friends onBack={closeFriends} prefill={friends.code} />
       ) : onPrivacy ? (

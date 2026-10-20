@@ -2,7 +2,7 @@
 
 **Goal**: jugar con *tu gente* sin pasar enlaces: amigos que ves conectados y a los que invitas con un toque, avisos aunque no tengan la web abierta, peñas con su ranking, retos entre peñas y torneos.
 
-**Estado a fecha 2026-10-20**: S5-01 y S5-02 hechos (pendientes de probar en Azure). Siguiente: S5-03.
+**Estado a fecha 2026-10-20**: S5-01, S5-02 y S5-03 hechos (pendientes de probar en Azure). Siguiente: S5-04.
 
 ---
 
@@ -49,10 +49,18 @@
 - Privacidad: añadidos amigos y avisos.
 - Tests: `tests/push.test.ts` (6). Service worker probado en Chromium (aviso con icono y destino correcto).
 
-### S5-03 — Peñas — ~1,5 d
+### S5-03 — Peñas — ~1,5 d ✅
 - Crear una peña (nombre, pueblo) e invitar a amigos; unirse con enlace. Un creador que puede expulsar.
 - Página de la peña: miembros, su ranking interno (temporada y semana) y "quién está conectado" para montar partida.
-- Insignia de la peña junto a tu nombre (opcional).
+- Insignia de la peña junto a tu nombre (opcional). → Pospuesto: de momento la peña se ve en su página.
+
+**Hecho (2026-10-20)**
+- Decisión: **una peña por persona** (más claro para los retos de S5-04), máx. 50 miembros, nombre de 3 a 30 letras con filtro de palabras.
+- Server: `src/penas.ts`. Contenedor nuevo `penas` (PK `/id`); en el doc del usuario `penaId` y `penaInvites`. Se entra con el enlace (`#pena-CODIGO`, 6 caracteres) o con la invitación de un amigo que ya está dentro (le llega aviso push). El creador puede expulsar; si se va, la peña pasa al miembro más antiguo; si no queda nadie, se borra. Al borrar la cuenta, se sale de la peña.
+- Rutas: `GET /api/penas/mine`, `POST /api/penas`, `GET|POST /api/penas/join/:code`, `POST /api/penas/invites/:id/accept|decline`, `POST /api/penas/mine/invite|kick/:userId`, `POST /api/penas/mine/leave`. Límite: 20 escrituras/min por cuenta.
+- Los de tu peña se pueden invitar a jugar (pareja / mesa privada) aunque no seáis amigos: salen en "Invita a un amigo conectado".
+- Web: pantalla `#pena` (crear, invitaciones recibidas, tu peña con ranking de temporada y de la semana, quién está conectado o jugando, invitar amigos, expulsar, salir) y vista previa del enlace. Botón "🍻 Peña" en la portada con el número de invitaciones.
+- Tests: `tests/penas.test.ts` (7).
 
 ### S5-04 — Retos entre peñas — ~1,5 d
 - Una peña reta a otra: N partidas (p. ej. 10) durante una semana; cuentan las partidas online entre miembros de las dos peñas.
