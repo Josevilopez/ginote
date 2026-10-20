@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, rolloverSeason, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
-import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
+import { createRoomWithBots, getRoom, setRoomStore } from './rooms.js';
 import { loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { persistRoom, setSnapshotSink } from './persistHooks.js';
@@ -159,29 +159,6 @@ app.post('/api/rooms', async (req, reply) => {
   const bodyLevel = (req.body as { botLevel?: unknown } | undefined)?.botLevel;
   if (bodyLevel === 1 || bodyLevel === 2) room.botLevel = bodyLevel;
   return { code: room.code, mode, name, playerId };
-});
-
-// "Jugar con jugadores": asignación a la mejor sala abierta a matchmaking
-// (la que tenga más humanos sin llegar a 4 y aún en lobby). Si no hay
-// ninguna, crea una nueva en modo lobby. La sala creada no se rellena
-// con bots al instante — el lobbyTimer del server se ocupa al expirar.
-app.post('/api/rooms/matchmake', async (req, reply) => {
-  const body = (req.body ?? {}) as { name?: string };
-  const name = safeName(body.name);
-
-  let playerId: string;
-  const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
-  if (cosmos) {
-    const existing = resolvePlayerId(req); // S3-01: con sesión, el player de la cuenta
-    const { playerId: id } = await ensurePlayer(cosmos, existing);
-    playerId = id;
-    if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
-  } else {
-    playerId = globalThis.crypto.randomUUID();
-  }
-
-  const { room, created } = findOrCreateMatchmakeRoom();
-  return { code: room.code, name, created, playerId };
 });
 
 app.get('/api/health', async () => ({ ok: true }));

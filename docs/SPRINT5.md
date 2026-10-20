@@ -71,7 +71,7 @@
 - Empezar con torneos creados por el administrador; después, que una peña pueda montar el suyo.
 
 ### Pendientes pequeños
-- Quitar `POST /api/rooms/matchmake` (salas de espera antiguas).
+- ✅ Quitar `POST /api/rooms/matchmake` (salas de espera antiguas). Hecho 2026-10-20: borrados el endpoint y `findOrCreateMatchmakeRoom`; "Jugar online" usa solo la cola `/ws/matchmake`.
 - Application Insights en Azure (errores reales de móviles).
 - Página "Cómo se juega" con las reglas del guiñote aragonés.
 

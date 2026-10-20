@@ -81,7 +81,7 @@ export function Home() {
         <div className="home-play">
           <button type="button" className="home-choice is-main" onClick={() => void createRoom('lobby')}>
             <b>Jugar online</b>
-            <span>Te buscamos rivales de tu nivel. Si no hay, completan la mesa bots.</span>
+            <span>Rivales de tu nivel. Si faltan, bots.</span>
           </button>
           {/* S3-04: grupo de 2 → os sentamos enfrente. */}
           <button type="button" className="home-choice is-alt" onClick={() => void createParty()}>
@@ -156,9 +156,10 @@ export function Home() {
           </button>
         </form>
 
-        {/* S3-08: practicar, discreto y abajo (un toque elige nivel y empieza). */}
-        <div className="home-practice" role="group" aria-labelledby="home-practice-title">
-          <span id="home-practice-title">Practicar contra bots</span>
+        {/* S3-08: practicar contra bots, al final y con el mismo formato que "Con amigos". */}
+        <div className="home-friends home-bots" role="group" aria-labelledby="home-bots-title">
+          <h2 id="home-bots-title" className="home-section">Contra bots</h2>
+          <p className="home-bots-lead">Para practicar. Empiezas al momento.</p>
           <div className="home-levels">
             <button type="button" className="home-level" onClick={() => void createRoom('bots', 1)}>
               Fácil

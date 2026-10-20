@@ -135,9 +135,9 @@ interface State {
    * usa:
    *  - `'bots'`: `POST /api/rooms {mode:'bots'}` → sala con bots ya
    *    listos, empieza al instante.
-   *  - `'lobby'`: `POST /api/rooms/matchmake {…}` → matchmaking: asigna
-   *    a la sala con más humanos, o crea una nueva en lobby. Espera 30 s
-   *    a que entre un amigo antes de repartir.
+   *  - `'lobby'`: "Jugar online" → cola de `/ws/matchmake` (S3-05):
+   *    rivales de tu nivel; si faltan, bots.
+   *  - `'private'`: `POST /api/rooms {mode:'private'}` → mesa privada.
    */
   createRoom: (mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) => Promise<void>;
   /**

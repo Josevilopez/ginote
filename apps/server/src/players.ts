@@ -13,8 +13,7 @@
  *  - **Rating inicial 1000**. Se actualiza vía `applyElo` al final de
  *    cada partida (en S2-17 pieza 3, ver SPRINT2.md).
  *
- * La cookie la emite el server en el primer POST `/api/rooms` (o
- * `/api/rooms/matchmake`) si no existe. La respuesta del POST incluye
+ * La cookie la emite el server en el primer POST `/api/rooms` si no existe. La respuesta del POST incluye
  * el `playerId` para que el cliente lo guarde también (y lo mande en
  * el WS handshake junto al `token`).
  */
@@ -103,7 +102,7 @@ export interface PlayerLookup {
  * cookie), genera uno nuevo. En cualquier caso, lee el documento de
  * Cosmos o lo crea con rating inicial.
  *
- * Pensado para llamarse en POST /api/rooms y /api/rooms/matchmake
+ * Pensado para llamarse en POST /api/rooms
  * ANTES de meter al jugador en una sala.
  */
 export async function ensurePlayer(

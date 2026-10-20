@@ -235,33 +235,23 @@
   outline-offset: 3px;
 }
 
-/* S3-08: "Practicar contra bots", ahora discreto al final: una línea
-   con el texto y dos botones pequeños (cada uno empieza la partida). */
-.home-practice {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px dashed rgba(245, 240, 225, 0.2);
-}
-.home-practice > span { font-size: 15px; color: var(--fg-mute); }
-.home-levels { display: flex; gap: 8px; }
+/* S3-08: "Contra bots" al final, con el formato de "Con amigos":
+   título, una línea y los dos niveles (cada uno empieza la partida). */
+.home-bots-lead { margin: -4px 0 0; font-size: 15px; color: var(--fg-mute); }
+.home-levels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .home-level {
-  padding: 7px 14px;
-  border-radius: 999px;
+  padding: 13px 12px;
+  border-radius: 14px;
   font-family: inherit;
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 800;
   color: var(--fg);
-  background: transparent;
-  border: 1px solid rgba(245, 240, 225, 0.3);
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(245, 240, 225, 0.22);
   cursor: pointer;
   transition: transform 0.08s, background 0.15s;
 }
-.home-level:hover { background: rgba(245, 240, 225, 0.1); }
+.home-level:hover { background: rgba(0, 0, 0, 0.26); }
 .home-level:active { transform: scale(0.97); }
 .home-level:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
