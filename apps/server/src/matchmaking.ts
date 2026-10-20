@@ -1,205 +1,219 @@
 /**
- * Matchmaking con rating. Cola en memoria + tick que forma mesas
- * (S2-11). Decisiones tomadas el 2026-10-17:
+ * S3-05: cola de "Jugar online" por nivel (rating ELO).
  *
- *  - **Cola con tickets `{ playerId, mode, fill, rating, enqueuedAt, ws }`**.
- *    `ws` se guarda para poder notificar al cliente cuando se le
- *    asigna una mesa (mensaje `QUEUE_MATCHED` con el código).
- *  - **Ventana de rating**: base ±100, +50 cada 5 s en cola, tope ±400.
- *  - **Formación**: ordenar por rating (a ≥ b ≥ c ≥ d), equipos
- *    `(a, d)` vs `(b, c)` — compañeros sentados enfrentados.
- *  - **Relleno con bots**: a los 10 s en cola con `fill: 'bots'`, el
- *    ticket se considera "abierto a bots": cualquier rating vale
- *    (los bots tienen rating fijo 1000). Con `humansOnly`, espera
- *    sin límite (decisión del usuario: "10 s esperando > 5 min solo").
- *  - **Bots nivel 1, rating 1000 fijo**. No afecta ELO de humanos.
- *  - **Tick cada 1 s**. Ligero: O(n²) sobre la cola (típicamente <100
- *    tickets en MVP). Si crece, índice por buckets de rating.
+ * En la cola hay **entradas**: un jugador suelto o una pareja (S3-04).
+ * Cada segundo el servidor intenta formar mesas de 4:
+ *
+ *  - **Ventana de nivel**: ±100 puntos al entrar, +50 cada 5 s, tope ±400.
+ *    Dos entradas encajan si su diferencia cabe en la ventana del que
+ *    más lleva esperando.
+ *  - **Mesa completa de humanos** si hay entradas compatibles que sumen 4
+ *    (2+2, 2+1+1, 1+1+1+1). Empieza por el que más lleva esperando.
+ *  - **Bots de relleno**: si el más antiguo lleva `BOT_FILL_AFTER_MS` sin
+ *    mesa completa, se forma con los humanos que haya buscando **sea cual
+ *    sea su nivel** (mejor un rival más fuerte que un bot; el nivel solo
+ *    decide entre humanos cuando hay donde elegir) y el resto bots, con
+ *    nivel según el rating medio de la mesa.
+ *  - **Asientos**: una pareja ocupa un equipo entero (0-2 o 1-3). Los
+ *    sueltos se reparten para equilibrar: con 4, el mejor con el peor.
+ *
+ * Funciones puras sobre la cola; el tick y la creación de la sala viven
+ * en `index.ts`.
  */
-import type { WebSocket } from 'ws';
+import type { Seat } from '@guinote/engine';
+import type { BotLevel } from '@guinote/bots';
 
-/** Modos de juego: 4 (clásico) o 2 (cara a cara). */
-export type MatchMode = 2 | 4;
-
-/** `bots` = rellenar con bots a los 10s. `humansOnly` = solo humanos. */
-export type FillPolicy = 'bots' | 'humansOnly';
-
-export interface Ticket {
-  playerId: string;
-  mode: MatchMode;
-  fill: FillPolicy;
-  rating: number;
-  enqueuedAt: number;
-  /** WS del cliente. Lo guardamos para notificar cuando hay match. */
-  ws: WebSocket | null;
-  /** Nombre para mostrar en la UI mientras busca. */
+export interface QueueMember {
+  playerId: string | null;
   name: string;
+  rating: number;
 }
 
-/** Rating fijo de los bots (no se mueve con ELO). */
-export const BOT_RATING = 1000;
+export interface QueueEntry {
+  id: string;
+  members: QueueMember[];
+  enqueuedAt: number;
+  /** S3-04: código de la pareja, si la entrada es una pareja. */
+  partyCode?: string;
+  /** Avisar a la entrada de su mesa: un token de asiento por miembro (mismo orden). */
+  notify: (match: { roomCode: string; seats: Seat[]; tokens: string[] }) => void;
+}
 
-/** Ventana inicial ±100, +50 cada 5s, tope ±400. */
+/** Ventana inicial ±100, +50 cada 5 s, tope ±400. */
 export const WINDOW_BASE = 100;
 export const WINDOW_STEP_MS = 5_000;
 export const WINDOW_STEP = 50;
 export const WINDOW_MAX = 400;
+/** Sin mesa completa en este tiempo → se completa con bots. */
+export const BOT_FILL_AFTER_MS = 20_000;
+/** Por debajo de este rating medio, bots fáciles; si no, normales. */
+export const EASY_BOTS_BELOW = 950;
 
-/** Si un ticket lleva >=10s con fill='bots', se rellena con bots. */
-export const BOT_FILL_AFTER_MS = 10_000;
+const queue: QueueEntry[] = [];
 
-/** Calcula la ventana de rating para un ticket (en puntos). */
-export function ratingWindow(t: Ticket): number {
-  const elapsed = Date.now() - t.enqueuedAt;
-  const steps = Math.floor(elapsed / WINDOW_STEP_MS);
+export function entryRating(e: QueueEntry): number {
+  return e.members.reduce((a, m) => a + m.rating, 0) / e.members.length;
+}
+
+export function ratingWindow(e: QueueEntry, now: number = Date.now()): number {
+  const steps = Math.floor(Math.max(0, now - e.enqueuedAt) / WINDOW_STEP_MS);
   return Math.min(WINDOW_BASE + steps * WINDOW_STEP, WINDOW_MAX);
 }
 
-/** Cola en memoria. Singleton del módulo. */
-const queue: Ticket[] = [];
-
-/** Resultado de `tryFormMatch`: cuántas mesas se formaron. */
-export interface FormedMatch {
-  /** Tickets completos (no solo IDs) para que el caller pueda
-   *  notificar al WS y leer el nombre del jugador. */
-  tickets: Ticket[];
+export function compatible(a: QueueEntry, b: QueueEntry, now: number = Date.now()): boolean {
+  return Math.abs(entryRating(a) - entryRating(b)) <= Math.max(ratingWindow(a, now), ratingWindow(b, now));
 }
 
-/**
- * Intenta formar mesas con los tickets actuales. Se llama en el tick.
- * Idempotente: si no hay match, devuelve [] sin error.
- *
- * Algoritmo:
- *  1. Agrupar tickets por `mode`.
- *  2. Para cada grupo, ordenar por `enqueuedAt` (más antiguos primero).
- *  3. Para cada ticket en orden, intentar encajar con N-1 tickets
- *     compatibles (mismo mode, ventana OK, mismo fill o uno 'bots').
- *  4. Si se llena, ordenar por rating, formar equipos, emitir match.
- *
- * Devuelve la lista de matches formados (cada uno con N tickets).
- */
-export function tryFormMatch(now: number = Date.now()): FormedMatch[] {
-  const formed: FormedMatch[] = [];
-  // Agrupar por mode
-  const byMode: Record<MatchMode, Ticket[]> = { 2: [], 4: [] };
-  for (const t of queue) {
-    byMode[t.mode].push(t);
-  }
-  for (const mode of [2, 4] as MatchMode[]) {
-    const group = byMode[mode];
-    if (group.length < mode) continue;
-    // Ordenar por enqueuedAt ascendente (más antiguos primero)
-    group.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
-    // Greedy: el más antiguo busca N-1 compañeros compatibles.
-    while (group.length >= mode) {
-      const head = group[0]!;
-      const compatible = findCompatible(head, group.slice(1), mode - 1, now);
-      if (compatible === null) {
-        // El más antiguo no encuentra match: descartarlo del grupo (no
-        // del queue). Así no bloqueamos al resto. Al siguiente tick
-        // vuelve a intentarlo si su ventana ha crecido.
-        group.shift();
-        continue;
-      }
-      const picked = [head, ...compatible];
-      // Quitar del queue
-      for (const t of picked) {
-        const idx = queue.indexOf(t);
-        if (idx >= 0) queue.splice(idx, 1);
-      }
-      // Quitar del grupo
-      for (const t of picked) {
-        const gIdx = group.indexOf(t);
-        if (gIdx >= 0) group.splice(gIdx, 1);
-      }
-      formed.push({
-        tickets: picked,
-      });
-    }
-  }
-  return formed;
+export function enqueue(e: QueueEntry): QueueEntry {
+  dequeue(e.id);
+  queue.push(e);
+  return e;
 }
 
-/**
- * Busca `need` tickets compatibles con `head`. Devuelve null si no hay.
- *
- * Compatibilidad:
- *  - rating dentro de la ventana del head (o el head dentro de la
- *    ventana del candidato, para que la decisión sea simétrica si
- *    entraron en momentos distintos).
- *  - mismo `fill`. Si head es `bots`, candidatos pueden ser `humansOnly`
- *    pero el grupo se vuelve `bots` (segun el primero).
- *  - `humansOnly`: el candidato debe ser humano (no-bot). Si el head
- *    lleva >= BOT_FILL_AFTER_MS y su fill es `bots`, se acepta cualquiera
- *    y los huecos se rellenarán con bots después.
- */
-function findCompatible(
-  head: Ticket,
-  pool: Ticket[],
-  need: number,
-  now: number,
-): Ticket[] | null {
-  const headWindow = ratingWindow(head);
-  const headAcceptsBots = head.fill === 'bots' && now - head.enqueuedAt >= BOT_FILL_AFTER_MS;
-
-  // Filtrar candidatos compatibles
-  const compatible = pool.filter((c) => {
-    // Rating dentro de la ventana del head
-    const winC = ratingWindow(c);
-    const ratingOk =
-      Math.abs(c.rating - head.rating) <= Math.max(headWindow, winC);
-    if (!ratingOk) return false;
-    // humansOnly: rechazar candidatos que lleven mucho esperando con bots
-    if (c.fill === 'humansOnly' && !headAcceptsBots && head.fill === 'bots') {
-      // head quiere bots pero el candidato solo humanos → no encajan
-      return false;
-    }
-    if (head.fill === 'humansOnly' && c.fill === 'bots') {
-      // head solo humanos, candidato acepta bots → no encajan
-      return false;
-    }
-    return true;
-  });
-
-  if (compatible.length < need) return null;
-
-  // Empezar por los más próximos en rating al head (encaje más natural).
-  // Si hay empate, por más antiguos (enqueuedAt ascendente).
-  compatible.sort((a, b) => {
-    const da = Math.abs(a.rating - head.rating);
-    const db = Math.abs(b.rating - head.rating);
-    if (da !== db) return da - db;
-    return a.enqueuedAt - b.enqueuedAt;
-  });
-
-  return compatible.slice(0, need);
-}
-
-/** Añade un ticket a la cola. Devuelve el ticket añadido. */
-export function enqueue(t: Ticket): Ticket {
-  queue.push(t);
-  return t;
-}
-
-/** Quita un ticket de la cola por playerId. */
-export function dequeue(playerId: string): boolean {
-  const idx = queue.findIndex((t) => t.playerId === playerId);
-  if (idx < 0) return false;
-  queue.splice(idx, 1);
+export function dequeue(id: string): boolean {
+  const i = queue.findIndex((e) => e.id === id);
+  if (i < 0) return false;
+  queue.splice(i, 1);
   return true;
 }
 
-/** Snapshot de la cola (solo lectura). */
-export function listQueue(): readonly Ticket[] {
+export function listQueue(): readonly QueueEntry[] {
   return queue;
 }
 
-/** ¿El ticket sigue en cola? */
-export function isInQueue(playerId: string): boolean {
-  return queue.some((t) => t.playerId === playerId);
+export function isInQueue(id: string): boolean {
+  return queue.some((e) => e.id === id);
 }
 
-/** Tamaño actual de la cola. */
-export function queueSize(): number {
-  return queue.length;
+/** Jugadores (no entradas) buscando partida ahora mismo. */
+export function playersSearching(): number {
+  return queue.reduce((n, e) => n + e.members.length, 0);
+}
+
+/** Para tests. */
+export function _clearQueue(): void {
+  queue.length = 0;
+}
+
+export interface FormedTable {
+  entries: QueueEntry[];
+  /** Asiento de cada miembro de cada entrada (mismo orden que `entries`). */
+  seats: Seat[][];
+  bots: number;
+  botLevel: BotLevel;
+}
+
+/** Subconjunto de `pool` (en su orden de preferencia) cuyos tamaños suman `need`. */
+function pickExact(pool: QueueEntry[], need: number): QueueEntry[] | null {
+  const limit = Math.min(pool.length, 12);
+  const pick: QueueEntry[] = [];
+  const dfs = (i: number, left: number): boolean => {
+    if (left === 0) return true;
+    for (let j = i; j < limit; j++) {
+      const e = pool[j]!;
+      if (e.members.length > left) continue;
+      pick.push(e);
+      if (dfs(j + 1, left - e.members.length)) return true;
+      pick.pop();
+    }
+    return false;
+  };
+  return dfs(0, need) ? pick : null;
+}
+
+/** Los que quepan, en orden de preferencia, hasta llenar `room` plazas. */
+function pickGreedy(pool: QueueEntry[], room: number): QueueEntry[] {
+  const pick: QueueEntry[] = [];
+  let left = room;
+  for (const e of pool) {
+    if (e.members.length <= left) {
+      pick.push(e);
+      left -= e.members.length;
+    }
+    if (left === 0) break;
+  }
+  return pick;
+}
+
+export function botLevelFor(entries: QueueEntry[]): BotLevel {
+  const ratings = entries.flatMap((e) => e.members.map((m) => m.rating));
+  const avg = ratings.reduce((a, r) => a + r, 0) / Math.max(1, ratings.length);
+  return avg < EASY_BOTS_BELOW ? 1 : 2;
+}
+
+/**
+ * Asientos para una mesa. Equipos: 0-2 y 1-3.
+ *  - Parejas: cada una un equipo entero.
+ *  - Sueltos ordenados por rating (a ≥ b ≥ c ≥ d):
+ *      4 → a,d (0-2) contra b,c (1-3)
+ *      3 → a + bot contra b,c
+ *      2 → uno en cada equipo (a 0, b 1), con bots de compañeros
+ *      1 → asiento 0
+ *  - Pareja + sueltos: la pareja 0-2, los sueltos 1-3.
+ */
+export function seatTable(entries: QueueEntry[]): Seat[][] {
+  const seats: Seat[][] = entries.map((e) => new Array<Seat>(e.members.length));
+  const pairs = entries.map((e, i) => ({ e, i })).filter((x) => x.e.members.length === 2);
+  const singles = entries
+    .map((e, i) => ({ e, i }))
+    .filter((x) => x.e.members.length === 1)
+    .sort((x, y) => entryRating(y.e) - entryRating(x.e));
+  const teams: [Seat, Seat][] = [
+    [0, 2],
+    [1, 3],
+  ];
+  pairs.forEach((p, k) => {
+    seats[p.i] = [...teams[k]!];
+  });
+  let order: Seat[];
+  if (pairs.length === 1) order = [1, 3];
+  else if (singles.length === 4) order = [0, 1, 3, 2];
+  else if (singles.length === 3) order = [0, 1, 3];
+  else order = [0, 1];
+  singles.forEach((s, k) => {
+    seats[s.i] = [order[k]!];
+  });
+  return seats;
+}
+
+/**
+ * Forma todas las mesas posibles ahora y saca sus entradas de la cola.
+ * Idempotente: si no hay nada que formar, devuelve [].
+ */
+export function formTables(now: number = Date.now()): FormedTable[] {
+  const tables: FormedTable[] = [];
+  const pending = queue.slice().sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  const used = new Set<string>();
+  for (const head of pending) {
+    if (used.has(head.id)) continue;
+    const pool = pending
+      .filter((c) => c !== head && !used.has(c.id) && compatible(head, c, now))
+      .sort((a, b) => {
+        const da = Math.abs(entryRating(a) - entryRating(head));
+        const db = Math.abs(entryRating(b) - entryRating(head));
+        return da !== db ? da - db : a.enqueuedAt - b.enqueuedAt;
+      });
+    const need = 4 - head.members.length;
+    let picked = pickExact(pool, need);
+    let bots = 0;
+    if (!picked) {
+      if (now - head.enqueuedAt < BOT_FILL_AFTER_MS) continue;
+      // Tocan bots: antes, cualquier humano que esté buscando, aunque su
+      // nivel quede fuera de la ventana. Los más cercanos primero.
+      const anyone = pending
+        .filter((c) => c !== head && !used.has(c.id))
+        .sort((a, b) => {
+          const da = Math.abs(entryRating(a) - entryRating(head));
+          const db = Math.abs(entryRating(b) - entryRating(head));
+          return da !== db ? da - db : a.enqueuedAt - b.enqueuedAt;
+        });
+      picked = pickExact(anyone, need) ?? pickGreedy(anyone, need);
+      bots = need - picked.reduce((n, e) => n + e.members.length, 0);
+    }
+    const entries = [head, ...picked];
+    for (const e of entries) used.add(e.id);
+    tables.push({ entries, seats: seatTable(entries), bots, botLevel: botLevelFor(entries) });
+  }
+  for (const t of tables) for (const e of t.entries) dequeue(e.id);
+  return tables;
 }

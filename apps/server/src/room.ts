@@ -95,6 +95,8 @@ export interface PlayerSlot {
   substitute?: boolean;
   /** S2-15: epoch ms en que vence la ventana de reconexión (solo con ws caído). */
   reconnectDeadline?: number;
+  /** S3-04: código del grupo de pareja (los dos se sientan en el mismo equipo). */
+  partyCode?: string;
 }
 
 export interface Room {
@@ -177,6 +179,12 @@ export interface Room {
    * anfitrión), fuera del matchmaking y sin ELO (partidas entre amigos).
    */
   isPrivate: boolean;
+  /**
+   * S3-05: mesa formada por la cola de "Jugar online". Los asientos ya
+   * están reservados; se reparte en cuanto conectan todos o al llegar
+   * `deadline` (los que falten tienen la ventana normal de 45 s).
+   */
+  autoStart?: { deadline: number };
   /** S3-03: asiento del anfitrión (primer humano; si se va antes de empezar, el siguiente). */
   hostSeat: Seat | null;
   /**
@@ -361,6 +369,24 @@ export function scheduleLobbyCheck(room: Room): void {
     // automático; solo se asegura que haya anfitrión y se avisa a todos.
     clearLobbyTimer(room);
     ensureHost(room);
+    broadcastLobbyStatus(room);
+    return;
+  }
+  if (room.autoStart) {
+    // S3-05: mesa de la cola. Se reparte cuando estén todos conectados
+    // o al vencer el plazo; los huecos ya son de bots.
+    clearLobbyTimer(room);
+    const waiting = room.players.some((p) => p.token !== null && p.ws === null);
+    const left = room.autoStart.deadline - Date.now();
+    if (!waiting || left <= 0) {
+      startMatchAndDeal(room);
+      return;
+    }
+    room.lobbyEndsAt = room.autoStart.deadline;
+    room.lobbyTimer = setTimeout(() => {
+      room.lobbyTimer = null;
+      if (room.state === null) startMatchAndDeal(room);
+    }, left);
     broadcastLobbyStatus(room);
     return;
   }
@@ -1106,8 +1132,53 @@ export function ensureHost(room: Room): void {
   room.hostSeat = next ? next.seat : null;
 }
 
+/**
+ * Mueve al jugador entero (nombre, token, conexión, identidad, pareja)
+ * del asiento `a` al `b` y viceversa. Solo antes de repartir. No avisa:
+ * el llamador emite `broadcastSeatsChanged` cuando termine.
+ */
+export function swapSeatFields(room: Room, a: Seat, b: Seat): void {
+  if (a === b) return;
+  const pa = room.players[a]!;
+  const pb = room.players[b]!;
+  const fields = ['name', 'token', 'ws', 'leaving', 'playerId', 'reconnectDeadline', 'partyCode'] as const;
+  for (const f of fields) {
+    const tmp = (pa as unknown as Record<string, unknown>)[f];
+    const other = (pb as unknown as Record<string, unknown>)[f];
+    if (other === undefined) delete (pa as unknown as Record<string, unknown>)[f];
+    else (pa as unknown as Record<string, unknown>)[f] = other;
+    if (tmp === undefined) delete (pb as unknown as Record<string, unknown>)[f];
+    else (pb as unknown as Record<string, unknown>)[f] = tmp;
+  }
+  if (room.hostSeat === a) room.hostSeat = b;
+  else if (room.hostSeat === b) room.hostSeat = a;
+}
+
+/**
+ * S3-04/S3-05: reserva un asiento para alguien que aún no ha conectado
+ * (pareja o cola). Devuelve el token con el que entrará su WebSocket.
+ * Si no llega en 45 s, el asiento se libera (lobby) o lo toma un bot.
+ */
+export function reserveSeat(
+  room: Room,
+  seat: Seat,
+  who: { name: string; playerId?: string | null; partyCode?: string },
+): string {
+  const slot = room.players[seat]!;
+  const token = cryptoToken();
+  slot.token = token;
+  slot.name = who.name;
+  slot.ws = null;
+  if (who.playerId) slot.playerId = who.playerId;
+  else delete slot.playerId;
+  if (who.partyCode) slot.partyCode = who.partyCode;
+  else delete slot.partyCode;
+  markDisconnected(room, seat, { rescheduleAutoPlay: false });
+  return token;
+}
+
 /** Reenvía WELCOME a cada humano (su asiento puede haber cambiado) + LOBBY_STATUS. */
-function broadcastSeatsChanged(room: Room): void {
+export function broadcastSeatsChanged(room: Room): void {
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1 && p.token !== null) {
       p.ws.send(JSON.stringify({
@@ -1134,19 +1205,7 @@ export function swapPrivateSeats(room: Room, bySeat: Seat, a: Seat, b: Seat): st
   if (room.state !== null) return 'La partida ya ha empezado';
   if (room.hostSeat !== bySeat) return 'Solo el anfitrión puede mover a los jugadores';
   if (a === b) return null;
-  const pa = room.players[a]!;
-  const pb = room.players[b]!;
-  const fields = ['name', 'token', 'ws', 'leaving', 'playerId', 'reconnectDeadline'] as const;
-  for (const f of fields) {
-    const tmp = (pa as unknown as Record<string, unknown>)[f];
-    const other = (pb as unknown as Record<string, unknown>)[f];
-    if (other === undefined) delete (pa as unknown as Record<string, unknown>)[f];
-    else (pa as unknown as Record<string, unknown>)[f] = other;
-    if (tmp === undefined) delete (pb as unknown as Record<string, unknown>)[f];
-    else (pb as unknown as Record<string, unknown>)[f] = tmp;
-  }
-  if (room.hostSeat === a) room.hostSeat = b;
-  else if (room.hostSeat === b) room.hostSeat = a;
+  swapSeatFields(room, a, b);
   console.log(`[private] code=${room.code} asientos ${a}↔${b} (anfitrión=${room.hostSeat})`);
   broadcastSeatsChanged(room);
   return null;
@@ -1279,6 +1338,7 @@ export function markDisconnected(room: Room, seat: Seat, opts: { rescheduleAutoP
       now.token = null;
       now.name = '?';
       delete now.playerId;
+      delete now.partyCode;
       delete now.reconnectDeadline;
       scheduleLobbyCheck(room);
     } else if (!room.matchFinished) {

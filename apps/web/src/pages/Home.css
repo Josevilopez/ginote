@@ -92,7 +92,69 @@
   line-height: 1.45;
 }
 
-/* Nombre */
+/* Arriba: tu nombre (discreto) y la cuenta */
+.home-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  margin-bottom: -4px;
+}
+.name-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 225, 0.18);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--fg-mute);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.name-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-chip b { color: var(--fg); font-weight: 700; }
+.name-chip svg { flex: none; opacity: 0.8; }
+.name-chip:hover { background: rgba(0, 0, 0, 0.28); color: var(--fg); }
+.name-chip:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.name-chip.is-unnamed { border-color: rgba(232, 196, 107, 0.6); color: var(--gold); font-weight: 700; }
+.name-edit {
+  flex: 1;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.name-edit input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--gold);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+  user-select: text;
+}
+.name-edit button {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: none;
+  background: var(--gold);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+/* Nombre (campo grande: lo usa la invitación de pareja) */
 .home-name {
   display: flex;
   flex-direction: column;

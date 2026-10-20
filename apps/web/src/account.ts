@@ -110,7 +110,7 @@ export const useAccount = create<AccountState>((set) => ({
 
 // ───────────── Google Identity Services ─────────────
 
-interface GsiButtonOptions {
+export interface GsiButtonOptions {
   theme?: 'outline' | 'filled_blue' | 'filled_black';
   size?: 'large' | 'medium' | 'small';
   shape?: 'rectangular' | 'pill' | 'circle' | 'square';
@@ -159,4 +159,42 @@ export function loadGoogleScript(): Promise<void> {
     document.head.appendChild(s);
   });
   return gsiPromise;
+}
+
+// ───────────── Botón de Google (en uno o varios sitios) ─────────────
+
+let gsiReady = false;
+const givenNameListeners = new Set<(name: string) => void>();
+
+/** Aviso con el nombre de pila de Google al entrar (para el nombre en la mesa). */
+export function onGoogleGivenName(cb: (name: string) => void): () => void {
+  givenNameListeners.add(cb);
+  return () => givenNameListeners.delete(cb);
+}
+
+/**
+ * Pinta el botón de Google en `el`. Inicializa Google una sola vez (el
+ * callback entra con la cuenta y avisa del nombre de pila).
+ */
+export async function renderGoogleButton(el: HTMLElement, clientId: string, opts: GsiButtonOptions): Promise<void> {
+  await loadGoogleScript();
+  const g = window.google;
+  if (!g) throw new Error('Google no disponible');
+  if (!gsiReady) {
+    g.accounts.id.initialize({
+      client_id: clientId,
+      ux_mode: 'popup',
+      callback: (res) => {
+        void useAccount
+          .getState()
+          .login(res.credential)
+          .then((given) => {
+            if (given) for (const l of givenNameListeners) l(given);
+          });
+      },
+    });
+    gsiReady = true;
+  }
+  el.innerHTML = '';
+  g.accounts.id.renderButton(el, opts);
 }

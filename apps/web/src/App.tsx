@@ -3,10 +3,14 @@ import { useGame } from './store.js';
 import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
 import { Profile } from './pages/Profile.js';
+import { Party } from './pages/Party.js';
+import { Searching } from './pages/Searching.js';
+import { partyCodeFromHash, useParty } from './party.js';
 import { ConnectionBanner } from './components/ConnectionBanner.js';
 
 export function App() {
   const you = useGame((s) => s.you);
+  const searching = useGame((s) => s.queue !== null);
   const joinRoom = useGame((s) => s.joinRoom);
 
   // Auto-join desde el hash de la URL: `https://host/#ABCD` mete al
@@ -33,8 +37,15 @@ export function App() {
   // vuelve a la portada). Los códigos de sala son de 4 caracteres, así
   // que no chocan.
   const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
+  // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
+  const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
+  const inParty = useParty((s) => s.saved !== null);
+  const [partyClosed, setPartyClosed] = useState(false);
   useEffect(() => {
-    const onHash = () => setOnProfile(window.location.hash === '#perfil');
+    const onHash = () => {
+      setOnProfile(window.location.hash === '#perfil');
+      setInviteCode(partyCodeFromHash());
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -42,10 +53,30 @@ export function App() {
     history.replaceState(null, '', window.location.pathname + window.location.search);
     setOnProfile(false);
   }, []);
+  const closeParty = useCallback(() => {
+    if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
+    setInviteCode(null);
+    setPartyClosed(true);
+  }, []);
+  // Al crear o unirse a una pareja (o volver de una partida), su pantalla.
+  useEffect(() => {
+    if (inParty) setPartyClosed(false);
+  }, [inParty, you]);
+  const showParty = inviteCode !== null || (inParty && !partyClosed);
 
   return (
     <main className="app">
-      {you === null ? onProfile ? <Profile onBack={closeProfile} /> : <Home /> : <Game />}
+      {you !== null ? (
+        <Game />
+      ) : searching ? (
+        <Searching />
+      ) : showParty ? (
+        <Party inviteCode={inviteCode} onClose={closeParty} />
+      ) : onProfile ? (
+        <Profile onBack={closeProfile} />
+      ) : (
+        <Home />
+      )}
       {you !== null && <ConnectionBanner />}
     </main>
   );

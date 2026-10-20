@@ -1,6 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useGame, getPlayerName, setPlayerName } from '../store.js';
-import { AccountBar } from '../components/AccountBar.js';
+import { AccountBar, AccountHint } from '../components/AccountBar.js';
+import { WelcomeSheet } from '../components/WelcomeSheet.js';
+import { useAccount } from '../account.js';
+import { useParty } from '../party.js';
 import './Home.css';
 
 /**
@@ -12,6 +15,9 @@ const FAN_CARDS = ['01-oros', '03-copas', '12-espadas', '10-bastos'] as const;
 
 export function Home() {
   const createRoom = useGame((s) => s.createRoom);
+  const createParty = useParty((s) => s.create);
+  const partyError = useParty((s) => s.error);
+  const accountError = useAccount((s) => s.error);
   const joinRoom = useGame((s) => s.joinRoom);
   const error = useGame((s) => s.error);
   const [joinInput, setJoinInput] = useState('');
@@ -30,6 +36,21 @@ export function Home() {
   return (
     <div className="home">
       <div className="home-inner">
+        {/* Quién eres: discreto arriba (se cambia poco). La cuenta, a la
+            derecha. Al entrar con Google, si aún te llamas "Jugador",
+            cogemos tu nombre de pila. */}
+        <div className="home-top">
+          <NameChip
+            name={name}
+            onSave={(n) => setNameLocal(n)}
+          />
+          <AccountBar
+            onGivenName={(given) => {
+              if (name.trim() === '' || name === 'Jugador') setNameLocal(given.slice(0, 20));
+            }}
+          />
+        </div>
+
         <div className="home-fan" aria-hidden="true">
           {FAN_CARDS.map((c) => (
             <img key={c} src={`/cards/sprite/${c}.png`} alt="" draggable={false} />
@@ -41,30 +62,15 @@ export function Home() {
         </h1>
         <p className="home-tagline">Por parejas, como en el bar del pueblo.</p>
 
-        <label className="home-name">
-          Tu nombre en la mesa
-          <input
-            type="text"
-            maxLength={20}
-            autoComplete="nickname"
-            spellCheck={false}
-            value={name}
-            onChange={(e) => setNameLocal(e.target.value.slice(0, 20))}
-          />
-        </label>
-
-        {/* S3-01: cuenta opcional. Al entrar, si aún te llamas "Jugador",
-            cogemos tu nombre de pila de Google. */}
-        <AccountBar
-          onGivenName={(given) => {
-            if (name.trim() === '' || name === 'Jugador') setNameLocal(given.slice(0, 20));
-          }}
-        />
-
         <div className="home-play">
           <button type="button" className="home-choice is-main" onClick={() => void createRoom('lobby')}>
             <b>Jugar online</b>
-            <span>Te sentamos con otros jugadores. Si faltan, completan la mesa bots.</span>
+            <span>Te buscamos rivales de tu nivel. Si no hay, completan la mesa bots.</span>
+          </button>
+          {/* S3-04: grupo de 2 → os sentamos enfrente. */}
+          <button type="button" className="home-choice is-alt" onClick={() => void createParty()}>
+            <b>Jugar con mi pareja</b>
+            <span>Invita a un amigo y os sentamos juntos, enfrente.</span>
           </button>
           {/* S3-08: un toque elige nivel y empieza. */}
           <div className="home-choice is-alt home-practice" role="group" aria-labelledby="home-practice-title">
@@ -81,11 +87,13 @@ export function Home() {
           </div>
         </div>
 
-        {error && (
+        {(error || partyError || accountError) && (
           <p className="home-error" role="alert">
-            {error}
+            {error ?? partyError ?? accountError}
           </p>
         )}
+
+        <AccountHint />
 
         <div className="home-friends">
           <h2 className="home-section">Con amigos</h2>
@@ -121,7 +129,80 @@ export function Home() {
         </form>
 
         <p className="home-rules">4 jugadores en 2 parejas. Gana la pareja que se lleve 3 partidas.</p>
+
+        {/* Primera visita: entrar con Google o seguir como invitado. */}
+        <WelcomeSheet />
       </div>
     </div>
+  );
+}
+
+/**
+ * Tu nombre en la mesa, en pequeño: "Jugando como Jose ✎". Al tocarlo se
+ * edita en el sitio. Si aún te llamas "Jugador", invita a ponerte nombre.
+ */
+function NameChip({ name, onSave }: { name: string; onSave: (name: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const unnamed = name.trim() === '' || name === 'Jugador';
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  if (editing) {
+    const save = () => {
+      onSave(draft.trim().slice(0, 20) || 'Jugador');
+      setEditing(false);
+    };
+    return (
+      <form
+        className="name-edit"
+        onSubmit={(e) => {
+          e.preventDefault();
+          save();
+        }}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          maxLength={20}
+          autoComplete="nickname"
+          spellCheck={false}
+          aria-label="Tu nombre en la mesa"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value.slice(0, 20))}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          onBlur={save}
+        />
+        <button type="submit">Listo</button>
+      </form>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className={`name-chip ${unnamed ? 'is-unnamed' : ''}`}
+      onClick={() => {
+        setDraft(unnamed ? '' : name);
+        setEditing(true);
+      }}
+      aria-label={unnamed ? 'Ponte un nombre para la mesa' : `Tu nombre en la mesa: ${name}. Cambiar`}
+    >
+      {unnamed ? (
+        <span>Ponte un nombre</span>
+      ) : (
+        <span>
+          Jugando como <b>{name}</b>
+        </span>
+      )}
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path d="M4 20h4L19 9l-4-4L4 16v4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+      </svg>
+    </button>
   );
 }

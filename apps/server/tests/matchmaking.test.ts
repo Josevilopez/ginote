@@ -1,172 +1,210 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BOT_FILL_AFTER_MS,
+  _clearQueue,
   enqueue,
-  isInQueue,
+  formTables,
   listQueue,
-  queueSize,
-  dequeue,
+  playersSearching,
   ratingWindow,
-  tryFormMatch,
-  type Ticket,
+  type QueueEntry,
 } from '../src/matchmaking.js';
+import { startQueuedTable, QUEUE_START_GRACE_MS } from '../src/queueRoom.js';
+import { scheduleLobbyCheck } from '../src/room.js';
+import { setRoomStore } from '../src/rooms.js';
+import { MemoryRoomStore } from '../src/persistence/memory.js';
 
-// Crea un ticket con rating y enqueuedAt concretos (útil para tests con
-// tiempo fijo).
-function ticket(rating: number, opts: Partial<Ticket> = {}): Ticket {
+/** S3-05 — cola de "Jugar online" por nivel, con sueltos y parejas. */
+const T0 = 1_000_000;
+let n = 0;
+
+function single(name: string, rating = 1000, at = T0): QueueEntry {
+  return { id: `s${++n}`, members: [{ playerId: `pid-${name}`, name, rating }], enqueuedAt: at, notify: vi.fn() };
+}
+function pair(a: string, b: string, rating = 1000, at = T0): QueueEntry {
   return {
-    playerId: `p-${Math.random().toString(36).slice(2, 8)}`,
-    mode: 4,
-    fill: 'bots',
-    rating,
-    enqueuedAt: Date.now(),
-    ws: null,
-    name: 'test',
-    ...opts,
+    id: `p${++n}`,
+    members: [
+      { playerId: `pid-${a}`, name: a, rating },
+      { playerId: `pid-${b}`, name: b, rating },
+    ],
+    enqueuedAt: at,
+    partyCode: `P${n}`,
+    notify: vi.fn(),
   };
 }
+/** Asiento de cada jugador por nombre. */
+function seatsByName(t: ReturnType<typeof formTables>[number]): Record<string, number> {
+  const out: Record<string, number> = {};
+  t.entries.forEach((e, i) => e.members.forEach((m, k) => (out[m.name] = t.seats[i]![k]!)));
+  return out;
+}
 
-// Antes de cada test, vaciamos la cola (el módulo tiene singleton).
 beforeEach(() => {
-  while (listQueue().length > 0) {
-    dequeue(listQueue()[0]!.playerId);
-  }
+  _clearQueue();
+  vi.spyOn(console, 'log').mockImplementation(() => undefined);
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
-describe('matchmaking.ratingWindow', () => {
-  it('empieza en 100', () => {
-    const t = ticket(1000);
-    expect(ratingWindow(t)).toBe(100);
-  });
-  it('crece a 150 tras 5s', () => {
-    const t = ticket(1000, { enqueuedAt: Date.now() - 5_000 });
-    expect(ratingWindow(t)).toBe(150);
-  });
-  it('crece a 250 tras 15s (3 steps)', () => {
-    const t = ticket(1000, { enqueuedAt: Date.now() - 15_000 });
-    expect(ratingWindow(t)).toBe(250);
-  });
-  it('tope en 400 a partir de 30s', () => {
-    const t = ticket(1000, { enqueuedAt: Date.now() - 60_000 });
-    expect(ratingWindow(t)).toBe(400);
+describe('ventana de nivel', () => {
+  it('±100 al entrar, +50 cada 5 s, tope ±400', () => {
+    const e = single('a');
+    expect(ratingWindow(e, T0)).toBe(100);
+    expect(ratingWindow(e, T0 + 5_000)).toBe(150);
+    expect(ratingWindow(e, T0 + 15_000)).toBe(250);
+    expect(ratingWindow(e, T0 + 120_000)).toBe(400);
   });
 });
 
-describe('matchmaking.tryFormMatch', () => {
-  it('no forma con menos de N tickets', () => {
-    enqueue(ticket(1000));
-    enqueue(ticket(1100));
-    enqueue(ticket(900));
-    expect(tryFormMatch()).toHaveLength(0);
+describe('formar mesas', () => {
+  it('4 sueltos de nivel parecido: el mejor con el peor', () => {
+    enqueue(single('A', 1200));
+    enqueue(single('B', 1150));
+    enqueue(single('C', 1120));
+    enqueue(single('D', 1110));
+    const [t, ...rest] = formTables(T0);
+    expect(rest).toHaveLength(0);
+    expect(t!.bots).toBe(0);
+    const s = seatsByName(t!);
+    expect([s.A, s.D].sort()).toEqual([0, 2]);
+    expect([s.B, s.C].sort()).toEqual([1, 3]);
+    expect(listQueue()).toHaveLength(0);
   });
 
-  it('forma una mesa con 4 tickets compatibles', () => {
-    enqueue(ticket(1000, { playerId: 'a' }));
-    enqueue(ticket(1050, { playerId: 'b' }));
-    enqueue(ticket(950, { playerId: 'c' }));
-    enqueue(ticket(1100, { playerId: 'd' }));
-    const formed = tryFormMatch();
-    expect(formed).toHaveLength(1);
-    expect(formed[0]!.tickets).toHaveLength(4);
-    expect(new Set(formed[0]!.tickets.map((t) => t.playerId))).toEqual(new Set(['a', 'b', 'c', 'd']));
+  it('no junta niveles muy distintos al principio; sí cuando la ventana crece', () => {
+    enqueue(single('A', 1000));
+    enqueue(single('B', 1000));
+    enqueue(single('C', 1000));
+    enqueue(single('Pro', 1250));
+    expect(formTables(T0)).toEqual([]);
+    // A los 15 s la ventana es ±250: ya cabe.
+    expect(formTables(T0 + 15_000)).toHaveLength(1);
   });
 
-  it('NO forma si las ratings exceden la ventana', () => {
-    enqueue(ticket(1000, { playerId: 'a' }));
-    enqueue(ticket(1500, { playerId: 'b' })); // diff 500 > ventana 100
-    enqueue(ticket(1100, { playerId: 'c' }));
-    enqueue(ticket(1050, { playerId: 'd' }));
-    expect(tryFormMatch()).toHaveLength(0);
+  it('pareja contra pareja: cada una un equipo', () => {
+    enqueue(pair('Jose', 'Pilar'));
+    enqueue(pair('Ana', 'Bea'));
+    const s = seatsByName(formTables(T0)[0]!);
+    expect([s.Jose, s.Pilar].sort()).toEqual([0, 2]);
+    expect([s.Ana, s.Bea].sort()).toEqual([1, 3]);
   });
 
-  it('forma si la ventana crece con el tiempo', () => {
-    const longAgo = Date.now() - 60_000; // ventana 400
-    enqueue(ticket(1000, { playerId: 'a', enqueuedAt: longAgo }));
-    enqueue(ticket(1400, { playerId: 'b', enqueuedAt: longAgo })); // diff 400, justo en el borde
-    enqueue(ticket(1050, { playerId: 'c', enqueuedAt: longAgo }));
-    enqueue(ticket(1350, { playerId: 'd', enqueuedAt: longAgo }));
-    expect(tryFormMatch()).toHaveLength(1);
+  it('pareja contra dos sueltos', () => {
+    enqueue(single('Ana'));
+    enqueue(pair('Jose', 'Pilar'));
+    enqueue(single('Bea'));
+    const [t] = formTables(T0);
+    const s = seatsByName(t!);
+    expect([s.Jose, s.Pilar].sort()).toEqual([0, 2]);
+    expect([s.Ana, s.Bea].sort()).toEqual([1, 3]);
   });
 
-  it('NO encaja fill=bots con fill=humansOnly', () => {
-    enqueue(ticket(1000, { playerId: 'a', fill: 'bots' }));
-    enqueue(ticket(1050, { playerId: 'b', fill: 'humansOnly' }));
-    enqueue(ticket(950, { playerId: 'c', fill: 'bots' }));
-    enqueue(ticket(1100, { playerId: 'd', fill: 'bots' }));
-    expect(tryFormMatch()).toHaveLength(0);
+  it('con 5 sueltos sale una mesa y uno sigue esperando', () => {
+    for (const x of ['A', 'B', 'C', 'D', 'E']) enqueue(single(x, 1000, T0 + x.charCodeAt(0)));
+    expect(formTables(T0 + 100)).toHaveLength(1);
+    expect(listQueue().map((e) => e.members[0]!.name)).toEqual(['E']);
+    expect(playersSearching()).toBe(1);
   });
 
-  it('cuenta con fill=humansOnly si todos son humansOnly', () => {
-    enqueue(ticket(1000, { playerId: 'a', fill: 'humansOnly' }));
-    enqueue(ticket(1050, { playerId: 'b', fill: 'humansOnly' }));
-    enqueue(ticket(950, { playerId: 'c', fill: 'humansOnly' }));
-    enqueue(ticket(1100, { playerId: 'd', fill: 'humansOnly' }));
-    expect(tryFormMatch()).toHaveLength(1);
+  it(`solo: espera; a los ${BOT_FILL_AFTER_MS / 1000} s, mesa con 3 bots`, () => {
+    enqueue(single('Solo', 900));
+    expect(formTables(T0 + BOT_FILL_AFTER_MS - 1)).toEqual([]);
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    expect(t).toMatchObject({ bots: 3, botLevel: 1 });
+    expect(seatsByName(t!)).toEqual({ Solo: 0 });
   });
 
-  it('match para 2 jugadores', () => {
-    enqueue(ticket(1000, { playerId: 'a', mode: 2 }));
-    enqueue(ticket(1100, { playerId: 'b', mode: 2 }));
-    expect(tryFormMatch()).toHaveLength(1);
+  it('dos sueltos sin más gente: uno en cada equipo, con bots (cuenta para el ELO)', () => {
+    enqueue(single('A', 1100));
+    enqueue(single('B', 1000));
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    expect(t).toMatchObject({ bots: 2, botLevel: 2 });
+    expect(seatsByName(t!)).toEqual({ A: 0, B: 1 });
   });
 
-  it('match entre modos no se mezclan', () => {
-    // 4 tickets de mode 2 (se forman 2 mesas de 2) + 4 de mode 4 (1 mesa).
-    // Ratings dentro de la ventana ±100 para que todos encajen.
-    enqueue(ticket(1000, { playerId: 'a', mode: 2 }));
-    enqueue(ticket(1020, { playerId: 'b', mode: 2 }));
-    enqueue(ticket(1040, { playerId: 'c', mode: 2 }));
-    enqueue(ticket(1060, { playerId: 'd', mode: 2 }));
-    enqueue(ticket(1000, { playerId: 'e', mode: 4 }));
-    enqueue(ticket(1050, { playerId: 'f', mode: 4 }));
-    enqueue(ticket(1020, { playerId: 'g', mode: 4 }));
-    enqueue(ticket(1010, { playerId: 'h', mode: 4 }));
-    const formed = tryFormMatch();
-    expect(formed).toHaveLength(3);
-    expect(formed.filter((m) => m.tickets.length === 2)).toHaveLength(2);
-    expect(formed.filter((m) => m.tickets.length === 4)).toHaveLength(1);
+  it('a la hora de meter bots, antes cualquier humano aunque su nivel sea muy distinto', () => {
+    enqueue(single('Novato', 1000));
+    enqueue(single('Crack', 1400, T0 + 5_000));
+    // Antes de los 20 s no se juntan (fuera de la ventana)…
+    expect(formTables(T0 + 10_000)).toEqual([]);
+    // …pero a los 20 s juegan juntos en vez de cada uno con 3 bots.
+    const tables = formTables(T0 + BOT_FILL_AFTER_MS);
+    expect(tables).toHaveLength(1);
+    expect(tables[0]!.bots).toBe(2);
+    expect(seatsByName(tables[0]!)).toEqual({ Crack: 0, Novato: 1 });
   });
 
-  it('después de formar, los tickets sobrantes siguen en cola', () => {
-    // 5 tickets de mode 4 con ratings compatibles: forman 1 mesa y
-    // sobra 1. El sort por distancia puede meter al 5º en el slice;
-    // para garantizar que sobra uno, los ratings están MUY próximos
-    // y uno está fuera de la ventana. Aquí 5 tickets con ratings
-    // [1000, 1010, 1020, 1030, 2000] — los 4 primeros encajan, el 5º
-    // está fuera de la ventana ±100 del primero (1000+100=1100 < 2000).
-    enqueue(ticket(1000, { playerId: 'a' }));
-    enqueue(ticket(1010, { playerId: 'b' }));
-    enqueue(ticket(1020, { playerId: 'c' }));
-    enqueue(ticket(1030, { playerId: 'd' }));
-    enqueue(ticket(2000, { playerId: 'e' }));
-    const formed = tryFormMatch();
-    expect(formed).toHaveLength(1);
-    // 'e' tiene rating 2000, ventana ±100 vs los demás (±100 ≤2000): está fuera
-    // debe seguir en cola
-    expect(isInQueue('e')).toBe(true);
+  it('con 4 humanos de niveles dispares, a los 20 s mesa completa sin bots', () => {
+    enqueue(single('A', 800));
+    enqueue(single('B', 1000));
+    enqueue(single('C', 1250));
+    enqueue(pair('X', 'Y', 1500));
+    expect(formTables(T0 + 1_000)).toEqual([]);
+    const [t, rest] = formTables(T0 + BOT_FILL_AFTER_MS);
+    // A (800) + B + la pareja: 4 humanos, sin bots.
+    expect(t!.bots).toBe(0);
+    expect(t!.entries.map((e) => e.members[0]!.name)).toEqual(['A', 'B', 'X']);
+    // C también llevaba 20 s: en el mismo tick, su mesa con bots.
+    expect(rest).toMatchObject({ bots: 3 });
+    expect(listQueue()).toHaveLength(0);
   });
 
-  it('queueSize refleja el estado real', () => {
-    expect(queueSize()).toBe(0);
-    enqueue(ticket(1000, { playerId: 'x' }));
-    enqueue(ticket(1100, { playerId: 'y' }));
-    expect(queueSize()).toBe(2);
+  it('tres sueltos: el mejor con un bot contra los otros dos', () => {
+    enqueue(single('A', 1100));
+    enqueue(single('B', 1050));
+    enqueue(single('C', 1000));
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    expect(t!.bots).toBe(1);
+    expect(seatsByName(t!)).toEqual({ A: 0, B: 1, C: 3 });
+  });
+
+  it('pareja sola a los 20 s: contra dos bots', () => {
+    enqueue(pair('Jose', 'Pilar'));
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    expect(t!.bots).toBe(2);
+    expect(seatsByName(t!)).toEqual({ Jose: 0, Pilar: 2 });
   });
 });
 
-describe('matchmaking.dequeue', () => {
-  it('quita por playerId', () => {
-    enqueue(ticket(1000, { playerId: 'x' }));
-    expect(dequeue('x')).toBe(true);
-    expect(queueSize()).toBe(0);
+describe('de la cola a la sala', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setRoomStore(new MemoryRoomStore());
   });
-  it('devuelve false si no existe', () => {
-    expect(dequeue('nonexistent')).toBe(false);
-  });
-});
 
-describe('matchmaking.botFillWindow', () => {
-  it('BOT_FILL_AFTER_MS = 10s', () => {
-    expect(BOT_FILL_AFTER_MS).toBe(10_000);
+  it('reserva asientos, avisa con los tokens y reparte al conectar todos', () => {
+    const a = single('Ana', 1000);
+    const b = single('Bea', 1000);
+    enqueue(a);
+    enqueue(b);
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    const room = startQueuedTable(t!, Date.now());
+    expect(room.botLevel).toBe(2);
+    expect(room.state).toBeNull();
+    const na = (a.notify as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+    expect(na).toMatchObject({ roomCode: room.code, seats: [0] });
+    expect(room.players[0]).toMatchObject({ name: 'Ana', token: na.tokens[0], playerId: 'pid-Ana' });
+    // Ana conecta: aún falta Bea → no se reparte.
+    room.players[0]!.ws = { readyState: 1, send: () => undefined } as never;
+    scheduleLobbyCheck(room);
+    expect(room.state).toBeNull();
+    // Bea conecta → se reparte ya, con bots en los huecos.
+    room.players[1]!.ws = { readyState: 1, send: () => undefined } as never;
+    scheduleLobbyCheck(room);
+    expect(room.state).not.toBeNull();
+    expect(room.players[2]!.token).toBeNull();
+  });
+
+  it(`si alguien no conecta, se reparte igual a los ${QUEUE_START_GRACE_MS / 1000} s`, () => {
+    enqueue(single('Ana'));
+    const [t] = formTables(T0 + BOT_FILL_AFTER_MS);
+    const room = startQueuedTable(t!, Date.now());
+    vi.advanceTimersByTime(QUEUE_START_GRACE_MS - 1);
+    expect(room.state).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(room.state).not.toBeNull();
   });
 });

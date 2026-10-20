@@ -1,0 +1,79 @@
+/* S3-05: "Buscando partida". Hereda el tapete de .home (Home.css). */
+.searching .home-inner { align-items: center; text-align: center; gap: 14px; }
+
+/* Abanico que "baraja": las cartas se abren y cierran despacio. */
+.searching-fan {
+  position: relative;
+  width: 200px;
+  height: 130px;
+  margin-bottom: 8px;
+}
+.searching-fan img {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 70px;
+  margin-left: -35px;
+  border-radius: 6px;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(0, 0, 0, 0.25);
+  transform-origin: 50% 140%;
+  animation: searching-shuffle 2.4s ease-in-out infinite;
+}
+.searching-fan img:nth-child(1) { --r: -21deg; }
+.searching-fan img:nth-child(2) { --r: -7deg; }
+.searching-fan img:nth-child(3) { --r: 7deg; }
+.searching-fan img:nth-child(4) { --r: 21deg; }
+@keyframes searching-shuffle {
+  0%, 100% { transform: rotate(var(--r)); }
+  50% { transform: rotate(calc(var(--r) * 0.25)) translateY(-4px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .searching-fan img { animation: none; transform: rotate(var(--r)); }
+}
+
+.searching-title {
+  margin: 0;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 34px;
+  font-weight: 800;
+  color: var(--gold);
+}
+.searching-clock {
+  margin: 0;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 52px;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.searching-who { margin: 0; font-size: 17px; color: var(--fg); }
+.searching-bar {
+  width: 100%;
+  max-width: 320px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.searching-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold));
+  transform-origin: left center;
+  transition: transform 0.25s linear;
+}
+.searching-hint { margin: 0; font-size: 14px; color: var(--fg-mute); }
+.searching-cancel {
+  margin-top: 10px;
+  padding: 10px 22px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 240, 225, 0.25);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.searching-cancel:hover { background: rgba(0, 0, 0, 0.3); }
+.searching-cancel:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }

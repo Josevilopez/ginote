@@ -64,16 +64,34 @@
 - No entran en el matchmaking ni cuentan para ELO (partidas entre amigos).
 - Hecho: `POST /api/rooms` con `mode: 'private'` (`room.isPrivate`, `room.hostSeat`). Sin cuenta atrás ni relleno automático; mensajes `PRIVATE_SWAP_SEATS` y `PRIVATE_START { botLevel }` solo para el anfitrión. Si el anfitrión se va, pasa al siguiente humano. Abandonar no penaliza ELO. Portada: sección "Con amigos" (crear mesa / entrar con código). Sala de espera: tocar dos asientos para cambiarlos, nivel de bots y "Empezar partida". Tests en `private.test.ts`.
 
-### S3-04 — Pareja fija — ~1,5 d
+### S3-04 — Pareja fija — ✅ cerrado (2026-10-20), salvo "recordar la pareja"
 - Invitar a un amigo a ser tu pareja ("grupo de 2") y pulsar "Jugar online" juntos: el emparejamiento os sienta enfrente (compañeros) contra otra pareja o contra 2 sueltos.
 - En mesas privadas, el anfitrión puede fijar las parejas.
 - Con cuenta, la pareja se recuerda ("Jugar con Pilar otra vez").
+- Hecho:
+  - **Grupo de 2** en memoria (`apps/server/src/parties.ts`): crear, unirse por enlace `/#pareja-ABCD`, salir (el liderazgo pasa al otro), caduca a las 3 h sin actividad. Endpoints `POST /api/parties`, `POST /api/parties/:code/join|play|leave|name`, `GET /api/parties/:code?member=`. Los clientes preguntan cada segundo mientras están en la pantalla de pareja (así se sabe quién está conectado).
+  - **Emparejar**: el líder pulsa "Buscar partida" (los dos tienen que estar en la pantalla). Se busca una mesa de "Jugar online" en lobby donde quepa la pareja **en el mismo equipo** (0-2 o 1-3): un equipo entero libre o, con un suelto en cada equipo, se mueve a uno para hacer sitio. Si no hay, mesa nueva. Contra otra pareja o contra 2 sueltos; si faltan, bots.
+  - **Asientos reservados** con token: cada uno entra con su token como si reconectara; si no llega en 45 s se libera (o lo toma un bot), igual que una desconexión.
+  - **Cliente**: botón "Jugar con mi pareja" en la portada, pantalla de pareja (compartir enlace, quién está conectado, "Buscar partida" / "Esperando a que X busque partida…"), y al acabar la partida se vuelve a la pantalla de pareja para jugar otra juntos.
+  - Mesas privadas: el anfitrión ya fija las parejas desde S3-03.
+  - 8 tests en `parties.test.ts` (166 en total).
+- **Pendiente: "Jugar con Pilar otra vez"**. Recordar el nombre es fácil, pero para que sirva hace falta avisar a Pilar sin pasarle un enlace (amigos, saber quién está conectado). Se pasa a Sprint 4, junto al ranking.
 
-### S3-05 — Matchmaking por nivel (antes S2-11) — ~1 d
+### S3-05 — Matchmaking por nivel (antes S2-11) — ✅ cerrado (2026-10-20)
 - Conectar "Jugar online" a la cola por rating que ya existe en el server (`matchmaking.ts`), con pantalla "Buscando partida" al estilo de la sala de espera.
 - La cola admite **grupos de 2** (pareja fija) además de jugadores sueltos.
 - Bots de relleno con nivel según el rating medio de la mesa (nivel 1 / 2 de S2-10).
 - Si en X segundos no hay rivales humanos, completar con bots (como hoy).
+- Hecho:
+  - **Cola nueva** (`apps/server/src/matchmaking.ts`, reescrita): entradas de 1 (suelto) o 2 (pareja). Ventana de nivel ±100, +50 cada 5 s, tope ±400. Cada segundo forma mesas de 4 humanos compatibles (2+2, 2+1+1, 1+1+1+1); si el que más lleva esperando pasa de **20 s**, mesa con los humanos que haya buscando **sea cual sea su nivel** (mejor un rival más fuerte que un bot; el nivel solo elige entre humanos) y bots.
+  - **Asientos**: pareja = un equipo entero; 4 sueltos → el mejor con el peor; 2 sueltos → uno en cada equipo (así cuenta para el ELO); 3 → el mejor con un bot.
+  - **Bots**: nivel 1 si el rating medio de la mesa es < 950, si no nivel 2.
+  - **Sala** (`queueRoom.ts`): asientos reservados con token; se reparte en cuanto conectan todos (máximo 10 s de espera).
+  - **Cliente**: "Jugar online" abre la pantalla "Buscando partida" (reloj, jugadores buscando, barra hasta los bots, Cancelar). La pareja (S3-04) busca por la misma cola y ve "Buscando partida…" en su pantalla; el líder puede cancelar.
+  - Mensajes `QUEUE_STATUS` (+`fillAfterMs`) y `QUEUE_MATCHED` (+`token`).
+  - Probado de punta a punta con el servidor real: 2 sueltos + 1 pareja → mesa de 4 sin bots (pareja 0-2); uno solo → mesa con 3 bots a los 20 s.
+  - 14 tests en `matchmaking.test.ts` y 5 en `parties.test.ts` (177 en total).
+  - `POST /api/rooms/matchmake` (lobby antiguo) se queda para clientes viejos; la web ya no lo usa.
 
 ### Reglas de coto y match (confirmadas 2026-10-19)
 - **Coto**: lo gana quien gana **3 partidas**.

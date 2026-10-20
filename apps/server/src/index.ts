@@ -22,6 +22,9 @@ import {
 } from './players.js';
 import { registerAuthRoutes, resolvePlayerId } from './auth/routes.js';
 import { initSessionSecret } from './auth/session.js';
+import { cancelPartySearch, createParty, dropStaleSearches, getParty, joinParty, leaveParty, playParty, renameMember, viewParty } from './parties.js';
+import { BOT_FILL_AFTER_MS, dequeue as qDequeue, enqueue as qEnqueue, formTables, isInQueue, listQueue, playersSearching } from './matchmaking.js';
+import { startQueuedTable } from './queueRoom.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -46,6 +49,19 @@ await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 function isHttps(req: import('fastify').FastifyRequest): boolean {
   const proto = (req.headers['x-forwarded-proto'] as string | undefined) ?? req.protocol;
   return proto === 'https';
+}
+
+/** S3-05: ELO de un jugador (1000 si no hay Cosmos, ni doc, ni playerId). */
+async function readRating(playerId: string | null): Promise<number> {
+  const cosmos = getCosmosHandles();
+  if (!cosmos || !playerId) return 1000;
+  try {
+    const { resource } = await cosmos.players.item(playerId, playerId).read();
+    const r = (resource as { rating?: unknown } | undefined)?.rating;
+    return typeof r === 'number' ? r : 1000;
+  } catch {
+    return 1000;
+  }
 }
 
 app.post('/api/rooms', async (req, reply) => {
@@ -104,6 +120,67 @@ app.post('/api/rooms/matchmake', async (req, reply) => {
 });
 
 app.get('/api/health', async () => ({ ok: true }));
+
+// ───────────── S3-04: pareja fija ─────────────
+// El cliente guarda `memberId` (secreto de su plaza en el grupo) y
+// pregunta el estado cada segundo mientras está en la pantalla de pareja.
+app.post('/api/parties', async (req) => {
+  const { party, memberId } = createParty((req.body as { name?: unknown } | undefined)?.name, Date.now(), resolvePlayerId(req));
+  return { code: party.code, memberId, view: viewParty(party, memberId) };
+});
+
+app.post<{ Params: { code: string } }>('/api/parties/:code/join', async (req, reply) => {
+  const r = joinParty(req.params.code, (req.body as { name?: unknown } | undefined)?.name, Date.now(), resolvePlayerId(req));
+  if (!r.ok) {
+    return r.error === 'full'
+      ? reply.code(409).send({ error: 'Esta pareja ya está completa' })
+      : reply.code(404).send({ error: 'Esa pareja ya no existe' });
+  }
+  const party = getParty(req.params.code)!;
+  return { code: party.code, memberId: r.memberId, view: viewParty(party, r.memberId) };
+});
+
+app.get<{ Params: { code: string }; Querystring: { member?: string } }>('/api/parties/:code', async (req, reply) => {
+  const party = getParty(req.params.code);
+  const view = party && req.query.member ? viewParty(party, req.query.member) : null;
+  if (!view) return reply.code(404).send({ error: 'Esa pareja ya no existe' });
+  return view;
+});
+
+app.post<{ Params: { code: string } }>('/api/parties/:code/play', async (req, reply) => {
+  const party = getParty(req.params.code);
+  const memberId = (req.body as { member?: unknown } | undefined)?.member;
+  if (!party || typeof memberId !== 'string') return reply.code(404).send({ error: 'Esa pareja ya no existe' });
+  // S3-05: la pareja entra en la cola con el ELO de cada uno.
+  const ratings: Record<string, number> = {};
+  for (const m of party.members) ratings[m.id] = await readRating(m.playerId);
+  const r = playParty(party, memberId, ratings);
+  if (!r.ok) return reply.code(409).send({ error: r.error });
+  return r.view;
+});
+
+app.post<{ Params: { code: string } }>('/api/parties/:code/cancel', async (req, reply) => {
+  const party = getParty(req.params.code);
+  const memberId = (req.body as { member?: unknown } | undefined)?.member;
+  if (!party || typeof memberId !== 'string') return reply.code(404).send({ error: 'Esa pareja ya no existe' });
+  cancelPartySearch(party, memberId);
+  return viewParty(party, memberId);
+});
+
+app.post<{ Params: { code: string } }>('/api/parties/:code/name', async (req, reply) => {
+  const party = getParty(req.params.code);
+  const body = (req.body ?? {}) as { member?: unknown; name?: unknown };
+  if (!party || typeof body.member !== 'string') return reply.code(404).send({ error: 'Esa pareja ya no existe' });
+  renameMember(party, body.member, body.name);
+  return { ok: true };
+});
+
+app.post<{ Params: { code: string } }>('/api/parties/:code/leave', async (req) => {
+  const party = getParty(req.params.code);
+  const memberId = (req.body as { member?: unknown } | undefined)?.member;
+  if (party && typeof memberId === 'string') leaveParty(party, memberId);
+  return { ok: true };
+});
 
 /**
  * S2-15: ¿sigue siendo mío el asiento de esta sala? El cliente lo
@@ -186,54 +263,50 @@ app.get<{ Params: { '*': string } }>('/*', async (req, reply) => {
 });
 
 app.register(async (instance) => {
-  // ───────────── WS: matchmaking ─────────────
-  // El cliente abre este WS con `?pid=<uuid>&mode=2|4&fill=bots|humansOnly`
-  // y entra a la cola. Cuando se forma match, recibe `QUEUE_MATCHED`
-  // con el `roomCode` y un `seat`. Tras eso, abre `/ws/<roomCode>` con
-  // su token para jugar.
+  // ───────────── WS: cola de "Jugar online" (S3-05) ─────────────
+  // El cliente abre `/ws/matchmake?name=…` y queda en la cola mientras el
+  // WS esté abierto (cerrarlo = cancelar). Cada segundo recibe
+  // QUEUE_STATUS; al formarse la mesa, QUEUE_MATCHED con el código y el
+  // token de su asiento, y entra a `/ws/<code>?token=…`.
   instance.get('/ws/matchmake', { websocket: true }, async (socket: WsSocket, req) => {
     const url = new URL(req.url, 'http://x');
-    // S3-01: con sesión manda la cuenta; si no, `?pid=` o la cookie anónima.
     const playerId = resolvePlayerId(req, url.searchParams.get('pid'));
-    const modeRaw = url.searchParams.get('mode');
-    const fillRaw = url.searchParams.get('fill');
-    const mode: 2 | 4 = modeRaw === '2' ? 2 : 4;
-    const fill: 'bots' | 'humansOnly' = fillRaw === 'humansOnly' ? 'humansOnly' : 'bots';
-    if (!playerId) {
-      send(socket, { type: 'ERROR', code: 'BAD_MESSAGE', message: 'pid requerido' });
-      socket.close();
-      return;
-    }
-    // Leer rating de Cosmos (o 1000 si no está / sin Cosmos).
-    let rating = 1000;
-    const cosmos = getCosmosHandles();
-    if (cosmos) {
-      try {
-        const { resource } = await cosmos.players.item(playerId, playerId).read();
-        if (resource && typeof (resource as { rating?: number }).rating === 'number') {
-          rating = (resource as { rating: number }).rating;
-        }
-      } catch {
-        // doc no existe: rating inicial
-      }
-    }
-    const { enqueue: qEnqueue } = await import('./matchmaking.js');
+    const name = (url.searchParams.get('name') ?? 'Jugador').trim().slice(0, 20) || 'Jugador';
+    const rating = await readRating(playerId);
+    const id = `ws:${cryptoToken()}`;
+    const since = Date.now();
+    let status: NodeJS.Timeout | null = null;
+    const stop = () => {
+      if (status) clearInterval(status);
+      status = null;
+    };
+    const sendStatus = () => {
+      if (!isInQueue(id)) return stop();
+      const waitedMs = Date.now() - since;
+      send(socket, {
+        type: 'QUEUE_STATUS',
+        state: waitedMs >= BOT_FILL_AFTER_MS ? 'filling' : 'searching',
+        waitedMs,
+        humansFound: playersSearching(),
+        fillAfterMs: BOT_FILL_AFTER_MS,
+      });
+    };
     qEnqueue({
-      playerId,
-      mode,
-      fill,
-      rating,
-      enqueuedAt: Date.now(),
-      ws: socket as unknown as import('ws').WebSocket,
-      name: url.searchParams.get('name') ?? 'Jugador',
+      id,
+      members: [{ playerId, name, rating }],
+      enqueuedAt: since,
+      notify: ({ roomCode, seats, tokens }) => {
+        stop();
+        send(socket, { type: 'QUEUE_MATCHED', roomCode, seat: seats[0]!, token: tokens[0]! });
+        try { socket.close(); } catch { /* ignore */ }
+      },
     });
-    app.log.info(`matchmake: enqueued pid=${playerId} mode=${mode} fill=${fill} rating=${rating}`);
-    send(socket, { type: 'QUEUE_STATUS', state: 'searching', waitedMs: 0, humansFound: 1 });
+    app.log.info(`[cola] entra ${name} pid=${playerId ?? '-'} rating=${rating} (en cola: ${listQueue().length})`);
+    sendStatus();
+    status = setInterval(sendStatus, 1000);
     socket.on('close', () => {
-      void (async () => {
-        const { dequeue: qDequeue } = await import('./matchmaking.js');
-        qDequeue(playerId);
-      })();
+      stop();
+      qDequeue(id);
     });
   });
 
@@ -436,6 +509,7 @@ app.register(async (instance) => {
             p.name = '?';
             p.ws = null;
             delete p.playerId; // que nadie herede su ELO
+            delete p.partyCode;
             p.leaving = false;
             scheduleLobbyCheck(room);
           } else if (room.postgame !== null) {
@@ -694,53 +768,14 @@ process.on('SIGINT', async () => {
 });
 
 /**
- * Tick del matchmaking. Cada 1s llama `tryFormMatch` y, para cada
- * mesa formada, crea la Room, asigna seats según equipos (a,d vs b,c
- * por rating descendente), y notifica a los 4 WS con `QUEUE_MATCHED`.
+ * S3-05: tick de la cola. Cada segundo forma las mesas posibles y crea
+ * sus salas; además cancela búsquedas de parejas que ya no miran.
  */
 let matchmakingTimer: NodeJS.Timeout | null = null;
 
 async function tickMatchmaking(): Promise<void> {
-  const { tryFormMatch } = await import('./matchmaking.js');
-  const formed = tryFormMatch();
-  if (formed.length === 0) return;
-  for (const match of formed) {
-    // Ordenar por rating desc; ranked[0]+ranked[3] = equipo 0,
-    // ranked[1]+ranked[2] = equipo 1. Seats 0,2 = equipo 0; 1,3 = eq 1.
-    const ranked = match.tickets
-      .slice()
-      .sort((a, b) => b.rating - a.rating);
-    const seatByPlayer = new Map<string, number>();
-    seatByPlayer.set(ranked[0]!.playerId, 0);
-    seatByPlayer.set(ranked[3]!.playerId, 2);
-    if (ranked[1]) seatByPlayer.set(ranked[1].playerId, 1);
-    if (ranked[2]) seatByPlayer.set(ranked[2].playerId, 3);
-    // Crear la sala con fillWithBots=true (los 4 humanos ocupan los 4
-    // seats; no quedan huecos para bots, pero si quedaran se rellenarian).
-    const room = createRoomWithBots({ fillWithBots: true });
-    // Asignar playerId a cada slot para que el hook de ELO reconozca
-    // a los humanos cuando termine la mano.
-    for (const [playerId, seat] of seatByPlayer) {
-      room.players[seat]!.playerId = playerId;
-    }
-    // Notificar a cada WS con `QUEUE_MATCHED`.
-    for (const t of match.tickets) {
-      const seat = seatByPlayer.get(t.playerId);
-      if (t.ws && seat !== undefined) {
-        try {
-          t.ws.send(JSON.stringify({
-            type: 'QUEUE_MATCHED',
-            roomCode: room.code,
-            seat,
-          }));
-          t.ws.close();
-        } catch {
-          // WS ya cerrado; lo ignoramos
-        }
-      }
-    }
-    app.log.info(`matchmaking: formed room=${room.code} seats=[${[...seatByPlayer.entries()].map(([p, s]) => `${p}@${s}`).join(', ')}]`);
-  }
+  dropStaleSearches();
+  for (const table of formTables()) startQueuedTable(table);
 }
 
 function startMatchmakingTick(): void {

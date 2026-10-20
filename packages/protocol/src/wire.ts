@@ -169,12 +169,17 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('QUEUE_STATUS'),
     state: z.enum(['searching', 'filling']),
     waitedMs: z.number().int().min(0),
+    /** Jugadores buscando partida ahora mismo (incluido tú). */
     humansFound: z.number().int().min(0),
+    /** S3-05: a partir de cuánto esperando se completa con bots. */
+    fillAfterMs: z.number().int().min(0).optional(),
   }),
   z.object({
     type: z.literal('QUEUE_MATCHED'),
     roomCode: z.string(),
     seat: z.number().int().min(0).max(3),
+    /** S3-05: token del asiento reservado (se entra con él al WS de la sala). */
+    token: z.string().optional(),
   }),
   z.object({
     type: z.literal('REMATCH_STATUS'),

@@ -133,12 +133,21 @@ interface State {
    *    a que entre un amigo antes de repartir.
    */
   createRoom: (mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) => Promise<void>;
+  /**
+   * S3-05: en la cola de "Jugar online" (buscando rivales de tu nivel).
+   * `null` = no estás buscando.
+   */
+  queue: { waitedMs: number; players: number; fillAfterMs: number } | null;
+  /** S3-05: salir de la cola. */
+  cancelQueue: () => void;
   /** S3-03 (anfitrión): intercambia dos asientos de la mesa privada. */
   swapSeats: (a: number, b: number) => void;
   /** S3-03 (anfitrión): empieza la mesa privada; los huecos, bots del nivel dado. */
   startPrivate: (botLevel: 1 | 2, format?: { partidasPorCoto: number; cotosParaGanar: number }) => void;
   /** Une al cliente a una sala existente por código. NO crea la sala. */
   joinRoom: (code: string) => void;
+  /** S3-04: entra en un asiento ya reservado (pareja) con su token. */
+  joinReserved: (code: string, token: string) => void;
   sendAction: (action: Action) => void;
   /** Pide al servidor que reparta la siguiente mano. Lo dispara el botón
    *  "Continuar" del panel de resumen tras un GAME_OVER (o MATCH_OVER). */
@@ -175,6 +184,44 @@ let reconnectUntil: number | null = null;
 let reconnectAttempt = 0;
 /** Código de la sala a la que estamos reconectando. */
 let reconnectCode: string | null = null;
+
+// ───────────── S3-05: cola de "Jugar online" ─────────────
+let queueWs: WebSocket | null = null;
+
+function stopQueue(): void {
+  const ws = queueWs;
+  queueWs = null;
+  if (ws) {
+    ws.onclose = null;
+    try { ws.close(); } catch { /* ignore */ }
+  }
+}
+
+function startQueue(set: (p: Partial<State>) => void, get: () => State): void {
+  stopQueue();
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  const params = new URLSearchParams({ name: getPlayerName() });
+  const ws = new WebSocket(`${proto}://${window.location.host}/ws/matchmake?${params.toString()}`);
+  queueWs = ws;
+  set({ queue: { waitedMs: 0, players: 1, fillAfterMs: 20_000 }, error: null });
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data) as ServerMessage;
+    if (msg.type === 'QUEUE_STATUS') {
+      set({ queue: { waitedMs: msg.waitedMs, players: msg.humansFound, fillAfterMs: msg.fillAfterMs ?? 20_000 } });
+    } else if (msg.type === 'QUEUE_MATCHED') {
+      queueWs = null;
+      ws.onclose = null;
+      set({ queue: null });
+      if (msg.token) get().joinReserved(msg.roomCode, msg.token);
+      else get().joinRoom(msg.roomCode);
+    }
+  };
+  ws.onclose = () => {
+    if (queueWs !== ws) return;
+    queueWs = null;
+    set({ queue: null, error: 'Se perdió la conexión mientras buscábamos partida. Vuelve a intentarlo.' });
+  };
+}
 
 function stopReconnect(): void {
   if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -333,6 +380,7 @@ export const useGame = create<State>((set, get) => ({
   matchOver: null,
   swapAnnouncement: null,
   lobby: null,
+  queue: null,
   pendingActionCardId: null,
   lastError: null,
   error: null,
@@ -386,18 +434,9 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
           clearStoredToken(lastCode);
           clearLastRoomCode();
         }
-        // Sin sala previa → matchmaking normal: el server asigna a la
-        // sala con más humanos en lobby o crea una nueva.
-        const resp = await fetch('/api/rooms/matchmake', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ name }),
-        });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const { code } = (await resp.json()) as { code: string };
-        if (!code) throw new Error('Servidor no devolvió código de sala');
-        history.replaceState(null, '', `#${code}`);
-        connect(code, set, get);
+        // S3-05: sin sala previa → cola por nivel. El server nos avisa
+        // con la mesa y el token de nuestro asiento.
+        startQueue(set, get);
       } else {
         // 'bots': mesa con bots, empieza al instante.
         // 'private' (S3-03): mesa privada; espera a que el anfitrión empiece.
@@ -428,6 +467,16 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
    * Se usa desde la URL con hash `#ABCD` (auto-join al cargar) y desde
    * el input de "Unirse a sala" de la Home.
    */
+  cancelQueue() {
+    stopQueue();
+    set({ queue: null });
+  },
+
+  joinReserved(code: string, token: string) {
+    setStoredToken(code.toUpperCase(), token);
+    get().joinRoom(code);
+  },
+
   joinRoom(code: string) {
     const clean = code.trim().toUpperCase();
     if (!/^[A-Z0-9]{4}$/.test(clean)) {

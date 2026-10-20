@@ -55,6 +55,7 @@ export function findOrCreateMatchmakeRoom(): { room: Room; created: boolean } {
   for (const room of store.list()) {
     if (room.state !== null) continue; // partida empezada, no admitir más humanos
     if (room.isPrivate) continue; // S3-03: las mesas privadas no entran en el matchmaking
+    if (room.autoStart) continue; // S3-05: mesa ya formada por la cola
     // Saltar salas cuyo lobby esté a punto de expirar: el siguiente humano
     // que entre entraría justo cuando los bots van a aparecer. Mejor que
     // el matchmaker cree una sala nueva en ese caso.

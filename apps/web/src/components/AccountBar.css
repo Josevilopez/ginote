@@ -1,53 +1,18 @@
-/* S3-01: bloque de cuenta en la portada. Va debajo del nombre. */
-.account {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.account-guest {
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px dashed rgba(232, 196, 107, 0.35);
-  background: rgba(0, 0, 0, 0.12);
-}
-.account-why {
-  margin: 0;
-  font-size: 14px;
-  line-height: 1.35;
-  color: var(--fg-mute);
-}
-.account-why b { color: var(--fg); }
+/* S3-01: cuenta en la esquina de la portada. */
 .account-gsi {
-  min-height: 44px;
-  display: flex;
-  justify-content: center;
-  color-scheme: normal;
-}
-.account-error {
-  margin: 0;
-  font-size: 14px;
-  color: #ffd6cf;
-}
-
-.account-summary {
+  min-height: 32px;
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 10px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(232, 196, 107, 0.28);
-  background: rgba(0, 0, 0, 0.18);
-  color: var(--fg);
-  font-family: inherit;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
+  justify-content: flex-end;
+  color-scheme: normal;
 }
-.account-summary:hover { background: rgba(0, 0, 0, 0.26); }
-.account-summary:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.account-me {
+  display: inline-flex;
+  border-radius: 50%;
+  text-decoration: none;
+}
+.account-me:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .account-avatar {
-  flex: none;
   width: 38px;
   height: 38px;
   border-radius: 50%;
@@ -58,24 +23,13 @@
   font-weight: 800;
   color: #0b2440;
   background: linear-gradient(180deg, #a8cdfb, var(--team-mine, #5aa0f0));
+  box-shadow: 0 2px 0 #2b5f9e, 0 4px 10px rgba(0, 0, 0, 0.3);
 }
-.account-who {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  line-height: 1.25;
-}
-.account-who b {
-  font-size: 17px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.account-who small {
+.account-me:hover .account-avatar { filter: brightness(1.08); }
+.account-hint {
+  margin: 0;
+  text-align: center;
   font-size: 13px;
-  color: var(--fg-mute);
-  font-variant-numeric: lining-nums;
+  line-height: 1.4;
+  color: rgba(185, 197, 184, 0.75);
 }
-.account-caret { flex: none; font-size: 14px; font-weight: 700; color: var(--gold); }
-
