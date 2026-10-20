@@ -153,3 +153,112 @@
 .profile-confirm p { margin: 0 0 8px; font-size: 14px; line-height: 1.35; color: #ffd6cf; }
 .profile-confirm div { display: flex; justify-content: flex-end; gap: 6px; }
 .profile-confirm .is-danger { background: rgba(226, 109, 92, 0.25); color: #fff; }
+
+/* S4-01: rachas e historial */
+.profile-streak {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  font-size: 15px;
+}
+.profile-best { font-size: 13px; color: var(--fg-mute); }
+
+.profile-history {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.history-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(245, 240, 225, 0.12);
+}
+.history-badge {
+  min-width: 70px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 800;
+}
+.history-row.is-win .history-badge { background: rgba(90, 160, 240, 0.2); color: #a8cdfb; }
+.history-row.is-loss .history-badge { background: rgba(245, 240, 225, 0.08); color: var(--fg-mute); }
+.history-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.25;
+}
+.history-who b { font-weight: 700; }
+.history-line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-who small,
+.history-pair {
+  font-size: 13px;
+  color: var(--fg-mute);
+}
+.history-who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.history-side b { font-size: 17px; }
+.history-side b.is-up { color: #7ed39a; }
+.history-side b.is-down { color: #ff9c8c; }
+.history-side small { font-size: 12px; color: var(--fg-mute); white-space: nowrap; }
+
+/* S4-02: división */
+.division-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(232, 196, 107, 0.3);
+}
+.division-info { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.division-info b { font-family: 'Alegreya', Georgia, serif; font-size: 26px; line-height: 1; color: var(--gold); }
+.division-info small { font-size: 14px; color: var(--fg-mute); font-variant-numeric: lining-nums; }
+.division-bar {
+  display: block;
+  height: 6px;
+  margin: 4px 0 2px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+.division-bar span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--gold-deep), var(--gold));
+  transform-origin: left center;
+}
+.division-card.is-unranked { border-style: dashed; }
+.division-card.is-unranked b { color: var(--fg); font-size: 22px; }
+.division-placeholder {
+  width: 52px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 2px dashed rgba(232, 196, 107, 0.5);
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 28px;
+  font-weight: 800;
+  color: rgba(232, 196, 107, 0.7);
+}

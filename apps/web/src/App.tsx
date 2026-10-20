@@ -3,6 +3,7 @@ import { useGame } from './store.js';
 import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
 import { Profile } from './pages/Profile.js';
+import { Privacy } from './pages/Privacy.js';
 import { Party } from './pages/Party.js';
 import { Searching } from './pages/Searching.js';
 import { partyCodeFromHash, useParty } from './party.js';
@@ -37,6 +38,8 @@ export function App() {
   // vuelve a la portada). Los códigos de sala son de 4 caracteres, así
   // que no chocan.
   const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
+  // S4-00: política de privacidad en `#privacidad`.
+  const [onPrivacy, setOnPrivacy] = useState(() => window.location.hash === '#privacidad');
   // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
   const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
   const inParty = useParty((s) => s.saved !== null);
@@ -44,6 +47,7 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       setOnProfile(window.location.hash === '#perfil');
+      setOnPrivacy(window.location.hash === '#privacidad');
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
@@ -52,6 +56,14 @@ export function App() {
   const closeProfile = useCallback(() => {
     history.replaceState(null, '', window.location.pathname + window.location.search);
     setOnProfile(false);
+  }, []);
+  const closePrivacy = useCallback(() => {
+    // Si vienes de otra pantalla de la app (perfil, portada), vuelve atrás.
+    if (history.length > 1) history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setOnPrivacy(false);
+    }
   }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
@@ -68,6 +80,8 @@ export function App() {
     <main className="app">
       {you !== null ? (
         <Game />
+      ) : onPrivacy ? (
+        <Privacy onBack={closePrivacy} />
       ) : searching ? (
         <Searching />
       ) : showParty ? (

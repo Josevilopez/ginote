@@ -14,13 +14,25 @@ export interface Me {
   since?: string;
 }
 
+/** S4-03: de dónde eres (como lo devuelve el servidor). */
+export interface PlaceView {
+  province: string | null;
+  provinceName: string | null;
+  municipio: string | null;
+  municipioName: string | null;
+  nextChangeAt: string | null;
+}
+
 interface AccountState {
   /** `loading` hasta saber si hay login configurado y si hay sesión. */
   status: 'loading' | 'ready';
   googleClientId: string | null;
   me: Me | null;
-  stats: { games: number; wins: number; losses: number } | null;
+  stats: { games: number; wins: number; losses: number; streak?: number; bestStreak?: number; rating?: number } | null;
   error: string | null;
+  /** S4-03. */
+  place: PlaceView | null;
+  savePlace: (province: string | null, municipio: string | null) => Promise<boolean>;
   init: () => Promise<void>;
   /** Vuelve a pedir `/api/me` (p. ej. al abrir el perfil tras jugar). */
   refresh: () => Promise<void>;
@@ -38,6 +50,7 @@ export const useAccount = create<AccountState>((set) => ({
   me: null,
   stats: null,
   error: null,
+  place: null,
 
   async init() {
     if (initStarted) return;
@@ -48,9 +61,10 @@ export const useAccount = create<AccountState>((set) => ({
         fetch('/api/me', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : { user: null })) as Promise<{
           user: Me | null;
           player?: AccountState['stats'];
+          place?: PlaceView;
         }>,
       ]);
-      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null });
+      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null, place: me.place ?? null });
     } catch {
       // Servidor viejo o sin red: la portada funciona igual, sin login.
       set({ status: 'ready' });
@@ -61,10 +75,32 @@ export const useAccount = create<AccountState>((set) => ({
     try {
       const r = await fetch('/api/me', { credentials: 'same-origin' });
       if (!r.ok) return;
-      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats'] };
-      set({ me: m.user, stats: m.player ?? null });
+      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView };
+      set({ me: m.user, stats: m.player ?? null, place: m.place ?? null });
     } catch {
       // Sin red: nos quedamos con lo que había.
+    }
+  },
+
+  async savePlace(province, municipio) {
+    set({ error: null });
+    try {
+      const r = await fetch('/api/me/place', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ province, municipio }),
+      });
+      const body = (await r.json()) as { place?: PlaceView; error?: string };
+      if (body.place) set({ place: body.place });
+      if (!r.ok) {
+        set({ error: body.error ?? 'No se pudo guardar' });
+        return false;
+      }
+      return true;
+    } catch {
+      set({ error: 'No se pudo guardar. ¿Hay conexión?' });
+      return false;
     }
   },
 
@@ -93,7 +129,7 @@ export const useAccount = create<AccountState>((set) => ({
   async logout() {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
     window.google?.accounts.id.disableAutoSelect();
-    set({ me: null, stats: null });
+    set({ me: null, stats: null, place: null });
   },
 
   async deleteAccount() {
@@ -103,7 +139,7 @@ export const useAccount = create<AccountState>((set) => ({
       return false;
     }
     window.google?.accounts.id.disableAutoSelect();
-    set({ me: null, stats: null, error: null });
+    set({ me: null, stats: null, place: null, error: null });
     return true;
   },
 }));
@@ -197,4 +233,42 @@ export async function renderGoogleButton(el: HTMLElement, clientId: string, opts
   }
   el.innerHTML = '';
   g.accounts.id.renderButton(el, opts);
+}
+
+// ───────────── S4-01: historial ─────────────
+
+export interface ResultRow {
+  at: string;
+  kind: 'online' | 'pareja';
+  won: boolean;
+  abandoned: boolean;
+  /** Puntos de nivel ganados (+) o perdidos (−). */
+  delta: number;
+  mate: { name: string; bot: boolean } | null;
+  rivals: { name: string; bot: boolean }[];
+}
+
+export async function fetchMyResults(): Promise<ResultRow[] | null> {
+  try {
+    const r = await fetch('/api/me/results', { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    return ((await r.json()) as { results: ResultRow[] }).results;
+  } catch {
+    return null;
+  }
+}
+
+/** S4-03: municipios de una provincia: [código, nombre, nombre bilingüe?]. */
+export type MunicipioRow = [string, string] | [string, string, string];
+const municipiosCache = new Map<string, Promise<MunicipioRow[]>>();
+export function fetchMunicipios(province: string): Promise<MunicipioRow[]> {
+  let p = municipiosCache.get(province);
+  if (!p) {
+    p = fetch(`/api/places/${province}`)
+      .then((r) => (r.ok ? (r.json() as Promise<{ municipios: MunicipioRow[] }>) : { municipios: [] }))
+      .then((b) => b.municipios);
+    p.catch(() => municipiosCache.delete(province));
+    municipiosCache.set(province, p);
+  }
+  return p;
 }

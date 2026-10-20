@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ClientMessage, ServerMessage } from '@guinote/protocol';
+import type { ClientMessage, Division, ServerMessage } from '@guinote/protocol';
 import type { Action, Card, PlayerView } from '@guinote/engine';
 
 interface PartidaScore {
@@ -106,6 +106,11 @@ interface State {
   seatKinds: Array<'human' | 'disconnected' | 'bot' | 'substitute'>;
   /** S2-15: epoch ms en que vence la ventana de 45 s de cada asiento desconectado. */
   seatDeadlines: Array<number | null>;
+  /** S4-02: división de cada asiento (null = sin cuenta, sin clasificar o bot). */
+  seatDivisions: Array<Division | null>;
+  /** S4-02: has cambiado de división al acabar la partida (para el aviso). */
+  divisionChange: { from: Division | null; to: Division } | null;
+  dismissDivisionChange: () => void;
   /**
    * S2-15: estado de MI conexión con la mesa.
    *  - `connected`: todo bien.
@@ -170,6 +175,8 @@ const MATCH_RESET = {
   matchEnded: null,
   seatKinds: [] as State['seatKinds'],
   seatDeadlines: [] as State['seatDeadlines'],
+  seatDivisions: [] as State['seatDivisions'],
+  divisionChange: null as State['divisionChange'],
   connection: 'connected' as State['connection'],
   connectionMessage: null,
 } satisfies Partial<State>;
@@ -396,6 +403,8 @@ export const useGame = create<State>((set, get) => ({
   matchEnded: null,
   seatKinds: [],
   seatDeadlines: [],
+  seatDivisions: [],
+  divisionChange: null,
   connection: 'connected',
   connectionMessage: null,
 
@@ -467,6 +476,10 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
    * Se usa desde la URL con hash `#ABCD` (auto-join al cargar) y desde
    * el input de "Unirse a sala" de la Home.
    */
+  dismissDivisionChange() {
+    set({ divisionChange: null });
+  },
+
   cancelQueue() {
     stopQueue();
     set({ queue: null });
@@ -756,7 +769,10 @@ function connect(
         seatKinds: msg.seatKinds,
         seatDeadlines: msg.reconnectDeadlines,
         isBot: msg.seatKinds.map((k) => k === 'bot' || k === 'substitute'),
+        seatDivisions: msg.seatDivisions ?? [],
       });
+    } else if (msg.type === 'DIVISION_CHANGED') {
+      set({ divisionChange: { from: msg.from, to: msg.to } });
     } else if (msg.type === 'REMATCH_STATUS') {
       // S2-13: votación de revancha abierta (o actualizada con un voto).
       set({

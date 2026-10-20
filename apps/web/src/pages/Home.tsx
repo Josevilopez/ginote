@@ -129,6 +129,7 @@ export function Home() {
         </form>
 
         <p className="home-rules">4 jugadores en 2 parejas. Gana la pareja que se lleve 3 partidas.</p>
+        <p className="home-legal"><a href="#privacidad">Privacidad</a></p>
 
         {/* Primera visita: entrar con Google o seguir como invitado. */}
         <WelcomeSheet />

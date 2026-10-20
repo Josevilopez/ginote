@@ -95,7 +95,10 @@ export function WelcomeSheet() {
         <button type="button" className="welcome-guest" onClick={close}>
           Seguir como invitado
         </button>
-        <p className="welcome-later">Puedes entrar cuando quieras desde arriba a la derecha.</p>
+        <p className="welcome-later">
+          Puedes entrar cuando quieras desde arriba a la derecha. ·{' '}
+          <a href="#privacidad" onClick={close}>Privacidad</a>
+        </p>
       </div>
     </div>
   );

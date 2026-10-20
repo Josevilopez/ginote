@@ -33,6 +33,14 @@ export interface Player {
   wins: number;
   losses: number;
   createdAt: string;
+  /** S4-01: racha actual (+ victorias seguidas, − derrotas seguidas). */
+  streak?: number;
+  /** S4-01: mejor racha de victorias. */
+  bestStreak?: number;
+  /** S4-03: de dónde eres (provincia y municipio INE); null = no lo dices. */
+  place?: { province: string; municipio: string | null } | null;
+  /** S4-03: último cambio de `place` (ISO), para el límite de 30 días. */
+  placeChangedAt?: string;
 }
 
 /**
@@ -118,7 +126,7 @@ export async function ensurePlayer(
 export async function updatePlayerRating(
   cosmos: CosmosHandles,
   playerId: string,
-  patch: Partial<Pick<Player, 'rating' | 'games' | 'wins' | 'losses'>>,
+  patch: Partial<Pick<Player, 'rating' | 'games' | 'wins' | 'losses' | 'streak' | 'bestStreak'>>,
 ): Promise<void> {
   const { resource } = await cosmos.players.item(playerId, playerId).read();
   if (!resource) {

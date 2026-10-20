@@ -9,7 +9,7 @@ import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
-import { HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { persistRoom, setSnapshotSink } from './persistHooks.js';
 import { isRoomSnapshot, roomFromSnapshot, serializeRoom } from './snapshot.js';
@@ -380,6 +380,8 @@ app.register(async (instance) => {
       if (room.state !== null) persistRoom(room, 'jugador se sienta');
     }
 
+    // S4-02: su división (si tiene cuenta), para la insignia en la mesa.
+    void loadSeatDivision(room, seat as Seat);
     send(socket, {
       type: 'WELCOME',
       you: seat,
@@ -510,6 +512,7 @@ app.register(async (instance) => {
             p.ws = null;
             delete p.playerId; // que nadie herede su ELO
             delete p.partyCode;
+            delete p.division;
             p.leaving = false;
             scheduleLobbyCheck(room);
           } else if (room.postgame !== null) {

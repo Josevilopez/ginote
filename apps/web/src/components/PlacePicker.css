@@ -1,0 +1,100 @@
+/* S4-03: "De dónde eres" */
+.place {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(245, 240, 225, 0.14);
+}
+.place p { margin: 0; }
+.place-now { font-size: 18px; }
+.place-now b { font-weight: 700; }
+.place-prov { color: var(--fg-mute); }
+.place-none { color: var(--fg-mute); }
+.place-why, .place-warn, .place-locked { font-size: 14px; color: var(--fg-mute); }
+.place-locked { font-style: italic; }
+.place-btn {
+  align-self: flex-start;
+  padding: 9px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 240, 225, 0.25);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.place-btn:hover { background: rgba(0, 0, 0, 0.3); }
+.place-btn.is-main { border: none; background: var(--gold); color: var(--ink); }
+.place-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.place-btn:focus-visible, .place-clear:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.place-field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--fg-mute); }
+.place-field select,
+.place-field input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(232, 196, 107, 0.35);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 16px;
+  user-select: text;
+}
+.place-field select option { color: #111; }
+.place-suggest {
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(245, 240, 225, 0.14);
+}
+.place-suggest button {
+  width: 100%;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+.place-suggest button:hover, .place-suggest button:focus-visible { background: rgba(245, 240, 225, 0.1); outline: none; }
+.place-suggest small { color: var(--fg-mute); }
+.place-empty { font-size: 14px; color: var(--fg-mute); }
+.place-chosen {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--gold);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--fg);
+  font-size: 16px;
+}
+.place-chosen button {
+  border: none;
+  background: transparent;
+  color: var(--gold);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.place-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.place-clear {
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: var(--fg-mute);
+  font-family: inherit;
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+}

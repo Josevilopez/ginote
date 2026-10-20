@@ -6,6 +6,8 @@ import { SuitGlyph } from '../components/SuitGlyph.js';
 import { LobbyScreen } from '../components/LobbyScreen.js';
 import './Game.css';
 import { playSound, useMuted } from '../sounds.js';
+import { DivisionBadge } from '../components/DivisionBadge.js';
+import { DIVISIONS, divisionName } from '@guinote/protocol';
 import {
   card,
   teamOf,
@@ -100,6 +102,7 @@ export function Game() {
   // S2-15: estado de cada asiento (desconectado / bot sustituto).
   const seatKinds = useGame((s) => s.seatKinds);
   const seatDeadlines = useGame((s) => s.seatDeadlines);
+  const seatDivisions = useGame((s) => s.seatDivisions);
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
   // IDs en el orden actual; `null` = orden por defecto (palo + fuerza).
@@ -854,6 +857,7 @@ export function Game() {
         <MuteButton />
         <button className="btn small" onClick={leave}>Salir</button>
       </header>
+      <DivisionToast />
 
       {/* Solo se renderiza el seat activo, en la celda de su posición.
           Cuando cambia el turno, el panel "salta" a otra celda. */}
@@ -908,6 +912,12 @@ export function Game() {
                 {initials}
                 {/* Insignia de bot: robot pequeño en la esquina del avatar.
                     Los humanos no llevan nada. */}
+                {/* S4-02: división (jugadores con cuenta ya clasificados). */}
+                {!botSeat && seatDivisions[seat] && (
+                  <span className="seat-division">
+                    <DivisionBadge division={seatDivisions[seat]!} size={16} />
+                  </span>
+                )}
                 {botSeat && (
                   <span
                     className="seat-bot-badge"
@@ -2156,5 +2166,31 @@ function BotIcon() {
       <circle cx="15" cy="12" r="1.9" fill="var(--bot-badge-bg, #0b3b2d)" />
       <rect x="9" y="15.3" width="6" height="1.6" rx="0.8" fill="var(--bot-badge-bg, #0b3b2d)" />
     </svg>
+  );
+}
+
+/** S4-02: aviso al cambiar de división al acabar una partida. */
+function DivisionToast() {
+  const change = useGame((s) => s.divisionChange);
+  const dismiss = useGame((s) => s.dismissDivisionChange);
+  useEffect(() => {
+    if (!change) return;
+    const id = window.setTimeout(dismiss, 7000);
+    return () => window.clearTimeout(id);
+  }, [change, dismiss]);
+  if (!change) return null;
+  const order = (d: string) => DIVISIONS.findIndex((x) => x.id === d);
+  const name = divisionName(change.to);
+  const up = change.from === null || order(change.to) > order(change.from);
+  const text =
+    change.from === null ? `¡Ya tienes división: ${name}!` : up ? `¡Subes a ${name}!` : `Bajas a ${name}`;
+  return (
+    <button type="button" className={`division-toast ${up ? 'is-up' : 'is-down'}`} onClick={dismiss} role="status">
+      <DivisionBadge division={change.to} size={34} label />
+      <span>
+        <b>{text}</b>
+        <small>{up ? 'Sigue así.' : 'La próxima la recuperas.'}</small>
+      </span>
+    </button>
   );
 }

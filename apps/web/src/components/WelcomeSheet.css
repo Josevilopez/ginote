@@ -82,6 +82,7 @@
 .welcome-guest:hover { background: rgba(0, 0, 0, 0.3); }
 .welcome-guest:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .welcome-later { text-align: center; font-size: 13px; color: var(--fg-mute); }
+.welcome-later a { color: inherit; }
 .welcome-error { font-size: 14px; color: #ffd6cf; }
 @keyframes welcome-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes welcome-up { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }

@@ -1,0 +1,7 @@
+/* S4-02: colores de las divisiones. */
+.division-badge { display: inline-flex; line-height: 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4)); }
+.division-badge.is-bronce { --div-hi: #e2a476; --div-lo: #9a5a2c; }
+.division-badge.is-plata { --div-hi: #eef2f5; --div-lo: #9aa5ae; }
+.division-badge.is-oro { --div-hi: #f7dc8e; --div-lo: #c08f1f; }
+.division-badge.is-maestro { --div-hi: #a8d4ff; --div-lo: #2f6fc0; }
+.division-badge.is-leyenda { --div-hi: #d6a8ff; --div-lo: #6d2fb8; }

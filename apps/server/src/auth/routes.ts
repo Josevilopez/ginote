@@ -10,6 +10,8 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getCosmosHandles } from '../globalHandles.js';
+import { recentFor, resultRepo, type ResultRepo } from '../results.js';
+import { checkPlaceChange, municipiosOf, viewPlace } from '../places.js';
 import { PLAYER_COOKIE, PLAYER_COOKIE_MAX_AGE } from '../players.js';
 import {
   CosmosPlayerRepo,
@@ -85,12 +87,14 @@ export interface AuthRouteOptions {
   googleClientId?: string | null;
   keys?: KeySource;
   repos?: () => AuthRepos;
+  results?: () => ResultRepo;
 }
 
 export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOptions = {}): Promise<void> {
   const clientId = opts.googleClientId !== undefined ? opts.googleClientId : process.env.GOOGLE_CLIENT_ID || null;
   const keys = opts.keys ?? googleKeys;
   const repos = opts.repos ?? authRepos;
+  const results = opts.results ?? resultRepo;
 
   app.get('/api/config', async () => ({ googleClientId: clientId }));
 
@@ -115,8 +119,12 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     }
     const p = await players.get(user.primaryPlayerId).catch(() => null);
     return {
+      // S4-03: de dónde eres.
+      place: viewPlace(p?.place, p?.placeChangedAt),
       user: { name: user.name ?? null, email: user.email ?? null, since: user.createdAt },
-      player: p ? { games: p.games, wins: p.wins, losses: p.losses } : null,
+      player: p
+        ? { games: p.games, wins: p.wins, losses: p.losses, streak: p.streak ?? 0, bestStreak: p.bestStreak ?? 0, rating: Math.round(p.rating) }
+        : null,
     };
   });
 
@@ -166,6 +174,61 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     };
   });
 
+  // S4-03: municipios de una provincia (lista del INE), para el buscador del perfil.
+  app.get<{ Params: { prov: string } }>('/api/places/:prov', async (req, reply) => {
+    const list = municipiosOf(req.params.prov);
+    if (!list) return reply.code(404).send({ error: 'Provincia no válida' });
+    reply.header('Cache-Control', 'public, max-age=86400');
+    return { municipios: list };
+  });
+
+  // S4-03: guardar de dónde eres (una vez cada 30 días; la primera, libre).
+  app.put('/api/me/place', async (req, reply) => {
+    const s = sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    const { users, players } = repos();
+    const user = await users.get(s.uid);
+    if (!user) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+    const p = await players.get(user.primaryPlayerId);
+    if (!p) return reply.code(404).send({ error: 'Jugador no encontrado' });
+    const body = (req.body ?? {}) as { province?: unknown; municipio?: unknown };
+    // Sin cambios de verdad → no gasta el cambio del mes.
+    const same =
+      (p.place?.province ?? null) === (body.province || null) && (p.place?.municipio ?? null) === (body.municipio || null);
+    if (same) return { place: viewPlace(p.place, p.placeChangedAt) };
+    const check = checkPlaceChange(body, p.placeChangedAt);
+    if (!check.ok) return reply.code(409).send({ error: check.error, place: viewPlace(p.place, p.placeChangedAt) });
+    const changedAt = new Date().toISOString();
+    await players.put({ ...p, place: check.place, placeChangedAt: changedAt });
+    return { place: viewPlace(check.place, changedAt) };
+  });
+
+  // S4-01: tus últimas partidas (de la cuenta y de los dispositivos fusionados).
+  app.get('/api/me/results', async (req, reply) => {
+    const s = sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    const { users } = repos();
+    const user = await users.get(s.uid).catch(() => null);
+    if (!user) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+    try {
+      const list = await recentFor([user.primaryPlayerId, ...user.linkedPlayerIds], 20, results());
+      return {
+        results: list.map(({ at, kind, won, abandoned, ratingBefore, ratingAfter, mate, rivals }) => ({
+          at,
+          kind,
+          won,
+          abandoned: abandoned === true,
+          delta: ratingAfter - ratingBefore,
+          mate,
+          rivals,
+        })),
+      };
+    } catch (err) {
+      req.log.error({ err }, '[historial] no se pudo leer');
+      return { results: [] };
+    }
+  });
+
   app.post('/api/auth/logout', async (req, reply) => {
     clearCookies(req, reply);
     return { ok: true };
@@ -177,14 +240,21 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     const { users, players } = repos();
     const data = await exportAccount(users, players, s.uid);
     if (!data) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+    const history = await recentFor([data.user.primaryPlayerId, ...data.user.linkedPlayerIds], 10_000, results()).catch(() => []);
     reply.header('Content-Disposition', 'attachment; filename="guinote-mis-datos.json"');
-    return data;
+    return { ...data, results: history };
   });
 
   app.delete('/api/me', async (req, reply) => {
     const s = sessionOf(req);
     if (!s) return reply.code(401).send({ error: 'Sin sesión' });
     const { users, players } = repos();
+    const user = await users.get(s.uid);
+    if (user) {
+      for (const id of new Set([user.primaryPlayerId, ...user.linkedPlayerIds])) {
+        await results().removeAll(id).catch((err) => req.log.error({ err }, '[historial] no se pudo borrar'));
+      }
+    }
     await deleteAccount(users, players, s.uid);
     clearCookies(req, reply);
     req.log.info(`[auth] cuenta borrada ${s.uid}`);

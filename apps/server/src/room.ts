@@ -19,6 +19,7 @@ import {
   recordPartidaResult,
   type MatchFormat,
 } from '@guinote/engine';
+import { describeTable, nextStreak, recordResult, type MatchResult } from './results.js';
 import { botAction as decideBotAction, botThinkDelayMs, DEFAULT_BOT_LEVEL, heuristicBotAction, type BotLevel } from '@guinote/bots';
 import { applyElo, applyEloTeam } from './elo.js';
 import { updatePlayerRating } from './players.js';
@@ -62,7 +63,7 @@ function pickAragonBotNames(n: number): string[] {
   }
   return pool.slice(0, Math.min(n, pool.length));
 }
-import type { ServerMessage } from '@guinote/protocol';
+import { divisionFor, type Division, type ServerMessage } from '@guinote/protocol';
 
 export interface PlayerSlot {
   seat: Seat;
@@ -97,6 +98,8 @@ export interface PlayerSlot {
   reconnectDeadline?: number;
   /** S3-04: código del grupo de pareja (los dos se sientan en el mismo equipo). */
   partyCode?: string;
+  /** S4-02: división (solo jugadores con cuenta y ya clasificados). */
+  division?: Division;
 }
 
 export interface Room {
@@ -478,6 +481,7 @@ function startMatchAndDeal(room: Room): void {
   // pero aquí ya es no-null. stepBots arranca por si el primer turno
   // cae en un bot (mesa recién creada con dealer aleatorio).
   broadcastView(room);
+  broadcastSeats(room); // S4-02: divisiones de los que ya estaban sentados
   persistRoom(room, 'reparto');
   void stepBots(room).catch(() => undefined);
 }
@@ -1141,7 +1145,7 @@ export function swapSeatFields(room: Room, a: Seat, b: Seat): void {
   if (a === b) return;
   const pa = room.players[a]!;
   const pb = room.players[b]!;
-  const fields = ['name', 'token', 'ws', 'leaving', 'playerId', 'reconnectDeadline', 'partyCode'] as const;
+  const fields = ['name', 'token', 'ws', 'leaving', 'playerId', 'reconnectDeadline', 'partyCode', 'division'] as const;
   for (const f of fields) {
     const tmp = (pa as unknown as Record<string, unknown>)[f];
     const other = (pb as unknown as Record<string, unknown>)[f];
@@ -1249,7 +1253,30 @@ export function broadcastSeats(room: Room): void {
     reconnectDeadlines: room.players.map((p) =>
       p.token !== null && p.ws === null && p.reconnectDeadline !== undefined ? p.reconnectDeadline : null,
     ),
+    seatDivisions: room.players.map((p) => (p.token !== null ? (p.division ?? null) : null)),
   });
+}
+
+/**
+ * S4-02: lee de Cosmos la división del jugador sentado en `seat` (solo si
+ * tiene cuenta y ha jugado las partidas de clasificación) y la reparte.
+ */
+export async function loadSeatDivision(room: Room, seat: Seat): Promise<void> {
+  const slot = room.players[seat];
+  const cosmos = getCosmosHandles();
+  if (!slot?.playerId || !cosmos) return;
+  const pid = slot.playerId;
+  try {
+    const { resource } = await cosmos.players.item(pid, pid).read();
+    const r = resource as { rating?: number; games?: number; userId?: string } | undefined;
+    if (room.players[seat]?.playerId !== pid) return; // cambió de dueño mientras leíamos
+    const d = r?.userId ? divisionFor(r.rating ?? 1000, r.games ?? 0) : null;
+    if (d) slot.division = d;
+    else delete slot.division;
+    broadcastSeats(room);
+  } catch {
+    // Sin división: no pasa nada.
+  }
 }
 
 /**
@@ -1280,7 +1307,7 @@ export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'tim
   if (!p || p.token === null) return;
   // S3-03: en mesas privadas no hay ELO, tampoco derrota por abandono.
   const penalize = isMidPartida(room) && p.playerId !== undefined && !room.isPrivate;
-  const abandoner = penalize ? { playerId: p.playerId!, team: teamOfSeat(seat) } : null;
+  const abandoner = penalize ? { playerId: p.playerId!, team: teamOfSeat(seat), table: describeTable(room, seat) } : null;
   // Rivales humanos en este momento (para el ELO del abandono).
   const opponents = room.players
     .filter((o) => o.token !== null && o.playerId && teamOfSeat(o.seat) !== teamOfSeat(seat))
@@ -1292,13 +1319,14 @@ export function substituteWithBot(room: Room, seat: Seat, reason: 'leave' | 'tim
   p.leaving = false;
   delete p.playerId;
   delete p.reconnectDeadline;
+  delete p.division;
   p.substitute = true;
   // El nombre se conserva: la UI marca el asiento con "🤖 bot" (SEATS.seatKinds).
   console.log(`[seat] code=${room.code} seat=${seat} sustituido por bot (${reason}) penaliza=${penalize}`);
   persistRoom(room, 'sustitución'); // si no, tras un reinicio se le volvería a penalizar
   broadcastSeats(room);
 
-  if (abandoner) void penalizeAbandon(room, abandoner.playerId, opponents);
+  if (abandoner) void penalizeAbandon(room, abandoner.playerId, opponents, abandoner.table);
 
   // Postgame: el bot sustituto vota yes; si con eso hay unanimidad, resolver.
   if (room.postgame) {
@@ -1339,6 +1367,7 @@ export function markDisconnected(room: Room, seat: Seat, opts: { rescheduleAutoP
       now.name = '?';
       delete now.playerId;
       delete now.partyCode;
+      delete now.division;
       delete now.reconnectDeadline;
       scheduleLobbyCheck(room);
     } else if (!room.matchFinished) {
@@ -1386,14 +1415,19 @@ export function resumeRestoredRoom(room: Room, opts: { postgameOpen: boolean }):
  * medio de los rivales humanos. Fire-and-forget, como el hook de fin de
  * partida.
  */
-async function penalizeAbandon(room: Room, playerId: string, opponentIds: string[]): Promise<void> {
+async function penalizeAbandon(
+  room: Room,
+  playerId: string,
+  opponentIds: string[],
+  table: Pick<MatchResult, 'kind' | 'mate' | 'rivals'>,
+): Promise<void> {
   const cosmos = getCosmosHandles();
   if (!cosmos) return;
   if (opponentIds.length === 0) {
     console.log(`[elo] abandono code=${room.code} ${playerId.slice(0, 8)}: sin rivales humanos, no cuenta`);
     return;
   }
-  type Doc = { rating?: number; games?: number; wins?: number; losses?: number };
+  type Doc = { rating?: number; games?: number; wins?: number; losses?: number; streak?: number; bestStreak?: number };
   const read = async (id: string): Promise<Doc | null> => {
     try {
       const { resource } = await cosmos.players.item(id, id).read();
@@ -1417,8 +1451,20 @@ async function penalizeAbandon(room: Room, playerId: string, opponentIds: string
       games: games + 1,
       wins: me.wins ?? 0,
       losses: (me.losses ?? 0) + 1,
+      streak: nextStreak(me.streak ?? 0, false),
+      bestStreak: me.bestStreak ?? 0,
     });
     console.log(`[elo] abandono code=${room.code} ${playerId.slice(0, 8)} ${rating} → ${rating + deltaA} (derrota por abandono)`);
+    // S4-01: al historial.
+    await recordResult({
+      playerId,
+      won: false,
+      abandoned: true,
+      ratingBefore: rating,
+      ratingAfter: rating + deltaA,
+      roomCode: room.code,
+      ...table,
+    });
   } catch (err) {
     console.log(`[elo] error actualizando ${playerId}: ${(err as Error).message}`);
   }
@@ -1440,7 +1486,7 @@ async function penalizeAbandon(room: Room, playerId: string, opponentIds: string
  *    pieza 4 si el usuario quiere histórico); solo actualizamos los
  *    ratings de los 4 humanos.
  */
-async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
+export async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
   if (room.isPrivate) {
     console.log(`[elo] skip code=${room.code}: mesa privada (no cuenta para ELO)`);
     return;
@@ -1455,7 +1501,17 @@ async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
     .join(' ');
   console.log(`[elo] fin de partida code=${room.code} winner=team${winner} seats=[${seatsInfo}]`);
 
-  type HumanRating = { playerId: string; rating: number; games: number; wins: number; losses: number };
+  type HumanRating = {
+    playerId: string;
+    hasAccount: boolean;
+    seat: number;
+    rating: number;
+    games: number;
+    wins: number;
+    losses: number;
+    streak: number;
+    bestStreak: number;
+  };
   const humans: Record<0 | 1, HumanRating[]> = { 0: [], 1: [] };
 
   for (const slot of room.players) {
@@ -1472,13 +1528,17 @@ async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
         console.log(`[elo] player ${slot.playerId} no existe en Cosmos`);
         continue;
       }
-      const r = resource as { rating?: number; games?: number; wins?: number; losses?: number };
+      const r = resource as { rating?: number; games?: number; wins?: number; losses?: number; streak?: number; bestStreak?: number; userId?: string };
       humans[team].push({
         playerId: slot.playerId,
+        hasAccount: !!r.userId,
+        seat: slot.seat,
         rating: r.rating ?? 1000,
         games: r.games ?? 0,
         wins: r.wins ?? 0,
         losses: r.losses ?? 0,
+        streak: r.streak ?? 0,
+        bestStreak: r.bestStreak ?? 0,
       });
     } catch (err) {
       console.log(`[elo] error leyendo player ${slot.playerId}: ${(err as Error).message}`);
@@ -1505,14 +1565,39 @@ async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
   const apply = async (hs: HumanRating[], delta: number, won: boolean): Promise<void> => {
     for (const h of hs) {
       try {
+        const streak = nextStreak(h.streak, won);
         await updatePlayerRating(cosmos, h.playerId, {
           rating: h.rating + delta,
           games: h.games + 1,
           // Acumulamos (antes se sobrescribía con 1/0).
           wins: h.wins + (won ? 1 : 0),
           losses: h.losses + (won ? 0 : 1),
+          streak,
+          bestStreak: Math.max(h.bestStreak, streak),
         });
         console.log(`[elo] ${h.playerId.slice(0, 8)} ${h.rating} → ${h.rating + delta} (${won ? 'gana' : 'pierde'})`);
+        // S4-02: división nueva (solo con cuenta); aviso si cambia.
+        if (h.hasAccount) {
+          const before = divisionFor(h.rating, h.games);
+          const after = divisionFor(h.rating + delta, h.games + 1);
+          const slot = room.players[h.seat];
+          if (slot && slot.playerId === h.playerId) {
+            if (after) slot.division = after;
+            if (after && after !== before) {
+              const msg: ServerMessage = { type: 'DIVISION_CHANGED', from: before, to: after };
+              if (slot.ws && slot.ws.readyState === 1) slot.ws.send(JSON.stringify(msg));
+            }
+          }
+        }
+        // S4-01: al historial.
+        await recordResult({
+          playerId: h.playerId,
+          won,
+          ratingBefore: h.rating,
+          ratingAfter: h.rating + delta,
+          roomCode: room.code,
+          ...describeTable(room, h.seat),
+        });
       } catch (err) {
         // Si falla un player, seguimos con los demás (no rompemos la partida).
         console.log(`[elo] error actualizando ${h.playerId}: ${(err as Error).message}`);
@@ -1522,4 +1607,5 @@ async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
 
   await apply(humans[winnerTeam], elo.deltaA, true);
   await apply(humans[loserTeam], elo.deltaB, false);
+  broadcastSeats(room); // S4-02: divisiones al día
 }

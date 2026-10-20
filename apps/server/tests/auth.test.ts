@@ -21,6 +21,7 @@ import {
   userIdForGoogle,
 } from '../src/auth/accounts.js';
 import { registerAuthRoutes, resolvePlayerId } from '../src/auth/routes.js';
+import { MemoryResultRepo } from '../src/results.js';
 
 const CLIENT_ID = 'test-client.apps.googleusercontent.com';
 let privateKey: KeyObject;
@@ -159,9 +160,10 @@ describe('endpoints', () => {
   async function makeApp(clientId: string | null = CLIENT_ID) {
     const users = new MemoryUserRepo();
     const players = new MemoryPlayerRepo();
+    const results = new MemoryResultRepo();
     const app = Fastify();
-    await registerAuthRoutes(app, { googleClientId: clientId, keys, repos: () => ({ users, players }) });
-    return { app, users, players };
+    await registerAuthRoutes(app, { googleClientId: clientId, keys, repos: () => ({ users, players }), results: () => results });
+    return { app, users, players, results };
   }
   function cookiesOf(res: { headers: Record<string, unknown> }): Record<string, string> {
     const raw = res.headers['set-cookie'];
@@ -216,6 +218,43 @@ describe('endpoints', () => {
     const bad = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '1', aud: 'otro' }) } });
     expect(bad.statusCode).toBe(401);
     expect((await app.inject({ url: '/api/me' })).json()).toEqual({ user: null });
+  });
+
+  it('S4-01: tus últimas partidas (también las de dispositivos fusionados)', async () => {
+    const { app, players, results } = await makeApp();
+    await players.put({ ...freshPlayer('pc'), games: 1 });
+    await players.put({ ...freshPlayer('movil'), games: 1 });
+    const base = { kind: 'online' as const, mate: { name: 'Pilar', bot: false }, rivals: [], roomCode: 'X' };
+    await results.add({ ...base, id: '1', playerId: 'pc', at: '2026-10-01T10:00:00Z', won: true, ratingBefore: 1000, ratingAfter: 1012 });
+    await results.add({ ...base, id: '2', playerId: 'movil', at: '2026-10-02T10:00:00Z', won: false, ratingBefore: 990, ratingAfter: 981 });
+    const l1 = await app.inject({ method: 'POST', url: '/api/auth/google', headers: { cookie: 'guinote_pid=pc' }, payload: { credential: googleToken({ sub: '5' }) } });
+    await app.inject({ method: 'POST', url: '/api/auth/google', headers: { cookie: 'guinote_pid=movil' }, payload: { credential: googleToken({ sub: '5' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(l1)[SESSION_COOKIE]}`;
+    const r = (await app.inject({ url: '/api/me/results', headers: { cookie } })).json();
+    expect(r.results.map((x: { delta: number }) => x.delta)).toEqual([-9, 12]);
+    expect(r.results[0]).toMatchObject({ won: false, abandoned: false, mate: { name: 'Pilar' } });
+    expect((await app.inject({ url: '/api/me/results' })).statusCode).toBe(401);
+    // RGPD: van en la descarga y se borran con la cuenta.
+    expect((await app.inject({ url: '/api/me/data', headers: { cookie } })).json().results).toHaveLength(2);
+    await app.inject({ method: 'DELETE', url: '/api/me', headers: { cookie } });
+    expect(results.list).toHaveLength(0);
+  });
+
+  it('S4-03: elegir pueblo; volver a cambiarlo espera 30 días', async () => {
+    const { app } = await makeApp();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '33' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(login)[SESSION_COOKIE]}`;
+    const list = (await app.inject({ url: '/api/places/44' })).json().municipios;
+    expect(list.find((r: string[]) => r[1] === 'Alcañiz')[0]).toBe('44013');
+    const put1 = await app.inject({ method: 'PUT', url: '/api/me/place', headers: { cookie }, payload: { province: '44', municipio: '44013' } });
+    expect(put1.json().place).toMatchObject({ provinceName: 'Teruel', municipioName: 'Alcañiz' });
+    expect(put1.json().place.nextChangeAt).not.toBeNull();
+    // Volver a mandar lo mismo no cuenta como cambio.
+    expect((await app.inject({ method: 'PUT', url: '/api/me/place', headers: { cookie }, payload: { province: '44', municipio: '44013' } })).statusCode).toBe(200);
+    const put2 = await app.inject({ method: 'PUT', url: '/api/me/place', headers: { cookie }, payload: { province: '50' } });
+    expect(put2.statusCode).toBe(409);
+    expect((await app.inject({ url: '/api/me', headers: { cookie } })).json().place.municipioName).toBe('Alcañiz');
+    expect((await app.inject({ method: 'PUT', url: '/api/me/place', payload: { province: '50' } })).statusCode).toBe(401);
   });
 
   it('borrar cuenta: borra datos y cookies; la sesión vieja ya no vale', async () => {

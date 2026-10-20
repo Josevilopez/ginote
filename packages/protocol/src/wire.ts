@@ -7,6 +7,8 @@ import { z } from 'zod';
  * luego valida con `legalActions` del motor, y aplica con `apply`.
  */
 export const SuitSchema = z.enum(['oros', 'copas', 'espadas', 'bastos']);
+/** S4-02: divisiones (ver `divisions.ts`). */
+export const DivisionSchema = z.enum(['bronce', 'plata', 'oro', 'maestro', 'leyenda']);
 
 export const ClientMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -207,6 +209,14 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     /** Epoch ms en que vence la ventana de reconexión de cada asiento
      *  `disconnected` (null en el resto). Para la cuenta atrás de la UI. */
     reconnectDeadlines: z.array(z.number().int().nullable()),
+    /** S4-02: división de cada asiento (solo jugadores con cuenta y clasificados). */
+    seatDivisions: z.array(DivisionSchema.nullable()).optional(),
+  }),
+  /** S4-02: al acabar una partida con ELO, si cambias de división. */
+  z.object({
+    type: z.literal('DIVISION_CHANGED'),
+    from: DivisionSchema.nullable(),
+    to: DivisionSchema,
   }),
   /** Empezado por el servidor justo después de aplicar un SWAP_SEVEN.
    *  El cliente lo usa para mostrar el overlay centrado (igual que el
