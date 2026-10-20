@@ -5,7 +5,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { resolve as resolvePath, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ClientMessageSchema, type ServerMessage } from '@guinote/protocol';
+import { ClientMessageSchema, rolloverSeason, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, findOrCreateMatchmakeRoom, getRoom, setRoomStore } from './rooms.js';
@@ -22,9 +22,13 @@ import {
 } from './players.js';
 import { registerAuthRoutes, resolvePlayerId } from './auth/routes.js';
 import { initSessionSecret } from './auth/session.js';
+import { registerRateLimit } from './ratelimit.js';
+import { safeName } from './names.js';
+import { netFingerprint } from './netprint.js';
 import { cancelPartySearch, createParty, dropStaleSearches, getParty, joinParty, leaveParty, playParty, renameMember, viewParty } from './parties.js';
 import { BOT_FILL_AFTER_MS, dequeue as qDequeue, enqueue as qEnqueue, formTables, isInQueue, listQueue, playersSearching } from './matchmaking.js';
 import { startQueuedTable } from './queueRoom.js';
+import { activeBan } from './abandons.js';
 
 type WsSocket = {
   send: (data: string) => void;
@@ -33,12 +37,15 @@ type WsSocket = {
   readyState: number;
 };
 
-const app = Fastify({ logger: true });
+// S4-08: detrás del proxy de Azure, la IP real del cliente viene en X-Forwarded-For.
+const app = Fastify({ logger: true, trustProxy: true });
 
 await app.register(cors, { origin: true });
 await app.register(websocket);
 // S3-01: cuentas con Google (opcional). Sin GOOGLE_CLIENT_ID el login
 // queda desactivado y todo sigue funcionando como invitado.
+// S4-08: límites de peticiones por IP / cuenta.
+registerRateLimit(app);
 const sessionsOk = initSessionSecret(process.env, (m) => app.log.warn(m));
 await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 
@@ -51,22 +58,31 @@ function isHttps(req: import('fastify').FastifyRequest): boolean {
   return proto === 'https';
 }
 
-/** S3-05: ELO de un jugador (1000 si no hay Cosmos, ni doc, ni playerId). */
-async function readRating(playerId: string | null): Promise<number> {
+/**
+ * S3-05/S4-07: ELO de un jugador (1000 si no hay Cosmos, ni doc, ni
+ * playerId) y, si lo tiene, hasta cuándo no puede buscar partida.
+ */
+async function readQueueInfo(playerId: string | null): Promise<{ rating: number; banUntil: number | null }> {
   const cosmos = getCosmosHandles();
-  if (!cosmos || !playerId) return 1000;
+  if (!cosmos || !playerId) return { rating: 1000, banUntil: null };
   try {
     const { resource } = await cosmos.players.item(playerId, playerId).read();
-    const r = (resource as { rating?: unknown } | undefined)?.rating;
-    return typeof r === 'number' ? r : 1000;
+    const doc = resource as { rating?: unknown; games?: number; queueBanUntil?: string; seasonId?: string; seasonPeak?: number } | undefined;
+    const raw = typeof doc?.rating === 'number' ? doc.rating : 1000;
+    // S4-09: con el cambio de temporada aplicado (aunque aún no se haya guardado).
+    const roll = rolloverSeason({ rating: raw, games: doc?.games ?? 0, seasonId: doc?.seasonId, seasonPeak: doc?.seasonPeak });
+    return {
+      rating: roll?.rating ?? raw,
+      banUntil: activeBan(doc?.queueBanUntil),
+    };
   } catch {
-    return 1000;
+    return { rating: 1000, banUntil: null };
   }
 }
 
 app.post('/api/rooms', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' | 'private' };
-  const name = (body.name ?? 'Jugador').slice(0, 20);
+  const name = safeName(body.name);
   // `mode: 'bots'`  → mesa con bots ya listos, reparte al instante.
   // `mode: 'lobby'` (defecto) → sala en lobby: el humano espera 30 s a
   // que se le una un amigo antes de repartir (si nadie entra, los huecos
@@ -102,7 +118,7 @@ app.post('/api/rooms', async (req, reply) => {
 // con bots al instante — el lobbyTimer del server se ocupa al expirar.
 app.post('/api/rooms/matchmake', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string };
-  const name = (body.name ?? 'Jugador').slice(0, 20);
+  const name = safeName(body.name);
 
   let playerId: string;
   const cosmos = (await import('./globalHandles.js')).getCosmosHandles();
@@ -152,8 +168,18 @@ app.post<{ Params: { code: string } }>('/api/parties/:code/play', async (req, re
   const memberId = (req.body as { member?: unknown } | undefined)?.member;
   if (!party || typeof memberId !== 'string') return reply.code(404).send({ error: 'Esa pareja ya no existe' });
   // S3-05: la pareja entra en la cola con el ELO de cada uno.
+  // S4-07: si alguno está castigado por abandonos, no se busca.
   const ratings: Record<string, number> = {};
-  for (const m of party.members) ratings[m.id] = await readRating(m.playerId);
+  for (const m of party.members) {
+    const info = await readQueueInfo(m.playerId);
+    if (info.banUntil) {
+      const mins = Math.max(1, Math.ceil((info.banUntil - Date.now()) / 60_000));
+      return reply.code(409).send({
+        error: `${m.name} ha abandonado 3 partidas en las últimas 24 horas y no puede buscar partida durante ${mins} min más.`,
+      });
+    }
+    ratings[m.id] = info.rating;
+  }
   const r = playParty(party, memberId, ratings);
   if (!r.ok) return reply.code(409).send({ error: r.error });
   return r.view;
@@ -271,8 +297,14 @@ app.register(async (instance) => {
   instance.get('/ws/matchmake', { websocket: true }, async (socket: WsSocket, req) => {
     const url = new URL(req.url, 'http://x');
     const playerId = resolvePlayerId(req, url.searchParams.get('pid'));
-    const name = (url.searchParams.get('name') ?? 'Jugador').trim().slice(0, 20) || 'Jugador';
-    const rating = await readRating(playerId);
+    const name = safeName(url.searchParams.get('name'));
+    const { rating, banUntil } = await readQueueInfo(playerId);
+    if (banUntil) {
+      // S4-07: castigado por abandonos repetidos.
+      send(socket, { type: 'QUEUE_BLOCKED', until: banUntil, reason: 'abandons' });
+      socket.close();
+      return;
+    }
     const id = `ws:${cryptoToken()}`;
     const since = Date.now();
     let status: NodeJS.Timeout | null = null;
@@ -372,7 +404,7 @@ app.register(async (instance) => {
       }
       seat = free;
       room.players[seat]!.token = cryptoToken();
-      room.players[seat]!.name = url.searchParams.get('name') ?? `Jugador ${seat + 1}`;
+      room.players[seat]!.name = safeName(url.searchParams.get('name') ?? `Jugador ${seat + 1}`);
       if (playerId) room.players[seat]!.playerId = playerId;
       room.players[seat]!.ws = socket as never;
       // S2-14: con la partida ya repartida (mesa con bots), guardar el
@@ -380,6 +412,8 @@ app.register(async (instance) => {
       if (room.state !== null) persistRoom(room, 'jugador se sienta');
     }
 
+    // S4-08: huella anónima de la conexión (ver room.ts `net`).
+    room.players[seat]!.net = netFingerprint(req.ip);
     // S4-02: su división (si tiene cuenta), para la insignia en la mesa.
     void loadSeatDivision(room, seat as Seat);
     send(socket, {

@@ -262,3 +262,41 @@
   font-weight: 800;
   color: rgba(232, 196, 107, 0.7);
 }
+
+/* S4-04 */
+.profile-tag { margin-left: 4px; font-size: 0.55em; font-weight: 700; color: var(--fg-mute); }
+.profile-rank-link {
+  margin-top: 6px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(232, 196, 107, 0.45);
+  color: var(--gold);
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.profile-rank-link:hover { background: rgba(0, 0, 0, 0.2); }
+
+/* S4-09: temporadas */
+.season-line { margin: -10px 0 0; text-align: center; font-size: 14px; color: var(--fg-mute); }
+.season-line b { color: var(--fg); }
+.season-badges {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+.season-badges li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(245, 240, 225, 0.14);
+}
+.season-badges span { display: flex; flex-direction: column; line-height: 1.2; }
+.season-badges b { font-size: 16px; }
+.season-badges small { font-size: 13px; color: var(--fg-mute); }

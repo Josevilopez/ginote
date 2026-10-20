@@ -1,0 +1,100 @@
+/* S4-04: ranking. Hereda el tapete de .home. */
+.ranking .home-inner { gap: 14px; margin: 0; }
+.ranking-title {
+  margin: 0;
+  font-family: 'Alegreya', Georgia, serif;
+  font-size: 34px;
+  font-weight: 800;
+  color: var(--gold);
+}
+.ranking-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.ranking-tabs button {
+  min-width: 0;
+  padding: 9px 6px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--fg-mute);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ranking-tabs button.is-on { background: var(--gold); color: var(--ink); }
+.ranking-tabs button:focus-visible { outline: 3px solid #fff; outline-offset: 1px; }
+.ranking-me {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(232, 196, 107, 0.45);
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 16px;
+  font-variant-numeric: lining-nums;
+}
+.ranking-me b { color: var(--gold); font-size: 19px; }
+.ranking-me small { color: var(--fg-mute); }
+.ranking-me.is-muted { border-style: dashed; color: var(--fg-mute); }
+.ranking-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ranking-row {
+  display: grid;
+  grid-template-columns: 34px 22px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.16);
+}
+.ranking-row.is-you { background: rgba(90, 160, 240, 0.18); border: 1px solid rgba(90, 160, 240, 0.5); }
+.ranking-pos { text-align: center; font-weight: 800; font-size: 16px; font-variant-numeric: lining-nums tabular-nums; color: var(--fg-mute); }
+.ranking-nobadge { width: 20px; }
+.ranking-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 700; }
+.ranking-name small { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--fg-mute); }
+.ranking-name em { font-style: normal; font-weight: 400; color: #a8cdfb; }
+.ranking-points { font-variant-numeric: lining-nums tabular-nums; font-weight: 700; color: var(--fg); }
+.ranking-note, .ranking-loading { margin: 0; padding: 14px; border-radius: 12px; border: 1px dashed rgba(232, 196, 107, 0.35); text-align: center; color: var(--fg-mute); }
+.ranking-note p { margin: 0 0 10px; color: var(--fg); }
+.ranking-cta {
+  display: inline-block;
+  padding: 9px 16px;
+  border-radius: 10px;
+  background: var(--gold);
+  color: var(--ink);
+  font-weight: 800;
+  text-decoration: none;
+}
+.ranking-hint, .ranking-rules { margin: 0; text-align: center; font-size: 13px; color: var(--fg-mute); }
+
+/* S4-06: general / esta semana */
+.ranking-period { display: flex; gap: 6px; }
+.ranking-period button {
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 225, 0.25);
+  background: transparent;
+  color: var(--fg-mute);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ranking-period button.is-on { border-color: var(--gold); color: var(--gold); background: rgba(0, 0, 0, 0.2); }
+.ranking-period button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.ranking-week-note { margin: -6px 0 0; font-size: 13px; color: var(--fg-mute); }
+.ranking-points.is-neg { color: #ff9c8c; }

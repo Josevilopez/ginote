@@ -3,6 +3,7 @@ import { useGame, getPlayerName, setPlayerName } from '../store.js';
 import { AccountBar, AccountHint } from '../components/AccountBar.js';
 import { WelcomeSheet } from '../components/WelcomeSheet.js';
 import { useAccount } from '../account.js';
+import { isOffensiveName } from '@guinote/protocol';
 import { useParty } from '../party.js';
 import './Home.css';
 
@@ -42,7 +43,11 @@ export function Home() {
         <div className="home-top">
           <NameChip
             name={name}
-            onSave={(n) => setNameLocal(n)}
+            onSave={(n) => {
+              setNameLocal(n);
+              // S4-04: con cuenta, también es tu nombre en el ranking.
+              void useAccount.getState().saveName(n);
+            }}
           />
           <AccountBar
             onGivenName={(given) => {
@@ -86,6 +91,11 @@ export function Home() {
             </div>
           </div>
         </div>
+
+        {/* S4-04 */}
+        <a className="home-ranking" href="#ranking">
+          🏆 Ver el ranking
+        </a>
 
         {(error || partyError || accountError) && (
           <p className="home-error" role="alert">
@@ -145,6 +155,8 @@ export function Home() {
 function NameChip({ name, onSave }: { name: string; onSave: (name: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
+  // S4-08: aviso si el nombre no está permitido (el servidor lo cambiaría por "Jugador").
+  const [bad, setBad] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const unnamed = name.trim() === '' || name === 'Jugador';
 
@@ -154,7 +166,14 @@ function NameChip({ name, onSave }: { name: string; onSave: (name: string) => vo
 
   if (editing) {
     const save = () => {
-      onSave(draft.trim().slice(0, 20) || 'Jugador');
+      const clean = draft.trim().slice(0, 20) || 'Jugador';
+      if (isOffensiveName(clean)) {
+        setBad(true);
+        inputRef.current?.focus();
+        return;
+      }
+      setBad(false);
+      onSave(clean);
       setEditing(false);
     };
     return (
@@ -173,13 +192,28 @@ function NameChip({ name, onSave }: { name: string; onSave: (name: string) => vo
           spellCheck={false}
           aria-label="Tu nombre en la mesa"
           value={draft}
-          onChange={(e) => setDraft(e.target.value.slice(0, 20))}
-          onKeyDown={(e) => {
-            if (e.key === 'Escape') setEditing(false);
+          onChange={(e) => {
+            setDraft(e.target.value.slice(0, 20));
+            setBad(false);
           }}
-          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              setBad(false);
+              setEditing(false);
+            }
+          }}
+          onBlur={() => {
+            if (!bad) save();
+          }}
+          aria-invalid={bad}
+          aria-describedby={bad ? 'name-bad' : undefined}
         />
         <button type="submit">Listo</button>
+        {bad && (
+          <p id="name-bad" className="name-bad" role="alert">
+            Ese nombre no está permitido. Elige otro.
+          </p>
+        )}
       </form>
     );
   }

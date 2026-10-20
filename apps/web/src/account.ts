@@ -6,12 +6,21 @@
  * (entrar, salir, descargar datos, borrar cuenta).
  */
 import { create } from 'zustand';
+import { getPlayerName } from './store.js';
 
 export interface Me {
   name: string | null;
   email: string | null;
   /** Fecha de alta (ISO). Solo viene de `/api/me`. */
   since?: string;
+}
+
+/** S4-09: temporada actual e insignias de las pasadas. */
+export interface SeasonView {
+  id: string;
+  name: string;
+  ends: string;
+  badges: { season: string; name: string; division: 'bronce' | 'plata' | 'oro' | 'maestro' | 'leyenda' }[];
 }
 
 /** S4-03: de dónde eres (como lo devuelve el servidor). */
@@ -28,11 +37,25 @@ interface AccountState {
   status: 'loading' | 'ready';
   googleClientId: string | null;
   me: Me | null;
-  stats: { games: number; wins: number; losses: number; streak?: number; bestStreak?: number; rating?: number } | null;
+  stats: {
+    games: number;
+    wins: number;
+    losses: number;
+    streak?: number;
+    bestStreak?: number;
+    rating?: number;
+    /** S4-04: nombre público (ranking) y etiqueta. */
+    publicName?: string | null;
+    tag?: string | null;
+  } | null;
   error: string | null;
   /** S4-03. */
   place: PlaceView | null;
+  /** S4-09. */
+  season: SeasonView | null;
   savePlace: (province: string | null, municipio: string | null) => Promise<boolean>;
+  /** S4-04: guarda tu nombre en la mesa en la cuenta (es tu nombre en el ranking). */
+  saveName: (name: string) => Promise<void>;
   init: () => Promise<void>;
   /** Vuelve a pedir `/api/me` (p. ej. al abrir el perfil tras jugar). */
   refresh: () => Promise<void>;
@@ -44,13 +67,14 @@ interface AccountState {
 
 let initStarted = false;
 
-export const useAccount = create<AccountState>((set) => ({
+export const useAccount = create<AccountState>((set, get) => ({
   status: 'loading',
   googleClientId: null,
   me: null,
   stats: null,
   error: null,
   place: null,
+  season: null,
 
   async init() {
     if (initStarted) return;
@@ -62,9 +86,11 @@ export const useAccount = create<AccountState>((set) => ({
           user: Me | null;
           player?: AccountState['stats'];
           place?: PlaceView;
+          season?: SeasonView;
         }>,
       ]);
-      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null, place: me.place ?? null });
+      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null, place: me.place ?? null, season: me.season ?? null });
+      ensurePublicName();
     } catch {
       // Servidor viejo o sin red: la portada funciona igual, sin login.
       set({ status: 'ready' });
@@ -75,10 +101,31 @@ export const useAccount = create<AccountState>((set) => ({
     try {
       const r = await fetch('/api/me', { credentials: 'same-origin' });
       if (!r.ok) return;
-      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView };
-      set({ me: m.user, stats: m.player ?? null, place: m.place ?? null });
+      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView; season?: SeasonView };
+      set({ me: m.user, stats: m.player ?? null, place: m.place ?? null, season: m.season ?? null });
+      ensurePublicName();
     } catch {
       // Sin red: nos quedamos con lo que había.
+    }
+  },
+
+  async saveName(name) {
+    if (!get().me) return;
+    const clean = name.replace(/\s+/g, ' ').trim().slice(0, 20);
+    if (!clean || clean === get().stats?.publicName) return;
+    try {
+      const r = await fetch('/api/me/name', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: clean }),
+      });
+      if (!r.ok) return;
+      const b = (await r.json()) as { publicName: string; tag: string };
+      const stats = get().stats;
+      if (stats) set({ stats: { ...stats, publicName: b.publicName, tag: b.tag } });
+    } catch {
+      // Se reintentará la próxima vez que cambies el nombre o entres.
     }
   },
 
@@ -271,4 +318,16 @@ export function fetchMunicipios(province: string): Promise<MunicipioRow[]> {
     municipiosCache.set(province, p);
   }
   return p;
+}
+
+/**
+ * S4-04: si la cuenta aún no tiene nombre público, se le pone el nombre en
+ * la mesa de este dispositivo (o el nombre de pila de Google).
+ */
+function ensurePublicName(): void {
+  const { me, stats, saveName } = useAccount.getState();
+  if (!me || !stats || stats.publicName) return;
+  const local = getPlayerName();
+  const name = local && local !== 'Jugador' ? local : (me.name?.trim().split(/\s+/)[0] ?? '');
+  if (name) void saveName(name);
 }

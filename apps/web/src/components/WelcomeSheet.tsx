@@ -1,23 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import { renderGoogleButton, useAccount } from '../account.js';
+import { getPartidasJugadas } from '../store.js';
 import './WelcomeSheet.css';
 
 const SEEN_KEY = 'guinote:welcomeSeen';
+/** S4-10: recordatorio a los invitados tras unas partidas (una sola vez). */
+const REMINDER_KEY = 'guinote:reminderSeen';
+export const REMINDER_AFTER = 5;
 
-function seen(): boolean {
+function flag(key: string): boolean {
   try {
-    return window.localStorage.getItem(SEEN_KEY) === '1';
+    return window.localStorage.getItem(key) === '1';
   } catch {
     return false;
   }
 }
 
-function markSeen(): void {
+function setFlag(key: string): void {
   try {
-    window.localStorage.setItem(SEEN_KEY, '1');
+    window.localStorage.setItem(key, '1');
   } catch {
     // Sin localStorage volverá a salir la próxima vez; no pasa nada.
   }
+}
+
+/** Qué ventana toca: la bienvenida (primera vez) o el recordatorio (tras 5 partidas). */
+function pickMode(): 'welcome' | 'reminder' | null {
+  if (!flag(SEEN_KEY)) return 'welcome';
+  if (!flag(REMINDER_KEY) && getPartidasJugadas() >= REMINDER_AFTER) return 'reminder';
+  return null;
 }
 
 /**
@@ -27,7 +38,8 @@ function markSeen(): void {
  */
 export function WelcomeSheet() {
   const { status, googleClientId, me } = useAccount();
-  const [open, setOpen] = useState(() => !seen());
+  const [mode] = useState(pickMode);
+  const [open, setOpen] = useState(() => mode !== null);
   const [gsiFailed, setGsiFailed] = useState(false);
   const btnRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -35,7 +47,8 @@ export function WelcomeSheet() {
   const visible = open && status === 'ready' && !!googleClientId && !me;
 
   const close = () => {
-    markSeen();
+    setFlag(SEEN_KEY);
+    if (mode === 'reminder') setFlag(REMINDER_KEY);
     setOpen(false);
   };
 
@@ -74,10 +87,21 @@ export function WelcomeSheet() {
   return (
     <div className="welcome-backdrop" onClick={(e) => e.target === e.currentTarget && close()}>
       <div ref={dialogRef} tabIndex={-1} className="welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-        <h2 id="welcome-title">¿Guardamos tus partidas?</h2>
-        <p className="welcome-free">
-          <b>No hace falta registrarse.</b> Puedes jugar ya mismo como invitado.
-        </p>
+        {mode === 'reminder' ? (
+          <>
+            <h2 id="welcome-title">Llevas {getPartidasJugadas()} partidas. ¿Las guardamos?</h2>
+            <p className="welcome-free">
+              Ahora se guardan solo en este navegador: si borras los datos o cambias de móvil, empiezas de cero.
+            </p>
+          </>
+        ) : (
+          <>
+            <h2 id="welcome-title">¿Guardamos tus partidas?</h2>
+            <p className="welcome-free">
+              <b>No hace falta registrarse.</b> Puedes jugar ya mismo como invitado.
+            </p>
+          </>
+        )}
         <p className="welcome-if">Si entras con tu cuenta de Google:</p>
         <ul className="welcome-list">
           <li>
@@ -93,7 +117,7 @@ export function WelcomeSheet() {
         <div ref={btnRef} className="welcome-google" />
         {gsiFailed && <p className="welcome-error">No se pudo cargar el botón de Google. Puedes entrar más tarde desde arriba.</p>}
         <button type="button" className="welcome-guest" onClick={close}>
-          Seguir como invitado
+          {mode === 'reminder' ? 'Ahora no, seguir como invitado' : 'Seguir como invitado'}
         </button>
         <p className="welcome-later">
           Puedes entrar cuando quieras desde arriba a la derecha. ·{' '}

@@ -125,9 +125,11 @@
 .name-edit {
   flex: 1;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
 }
+.name-bad { flex-basis: 100%; margin: 0; font-size: 13px; color: #ffb4a8; }
 .name-edit input {
   flex: 1;
   min-width: 0;
@@ -335,6 +337,18 @@
 }
 .home-join button:disabled { opacity: 0.4; cursor: default; }
 
+.home-ranking {
+  align-self: center;
+  padding: 9px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(232, 196, 107, 0.45);
+  color: var(--gold);
+  font-size: 16px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.home-ranking:hover { background: rgba(0, 0, 0, 0.2); }
+.home-ranking:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .home-legal { margin: -8px 0 0; text-align: center; font-size: 13px; }
 .home-legal a { color: rgba(185, 197, 184, 0.75); }
 .home-rules {

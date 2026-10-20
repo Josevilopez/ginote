@@ -12,7 +12,7 @@ import { DIVISIONS, PLACEMENT_GAMES, divisionFor, divisionName, nextDivision } f
  * Aquí viven también las acciones de la cuenta (salir, mis datos, borrar).
  */
 export function Profile({ onBack }: { onBack: () => void }) {
-  const { status, me, stats, error, init, refresh, logout, deleteAccount } = useAccount();
+  const { status, me, stats, error, init, refresh, logout, deleteAccount, season } = useAccount();
   const [confirmDelete, setConfirmDelete] = useState(false);
   // S4-01: últimas partidas (null = cargando o sin datos).
   const [history, setHistory] = useState<ResultRow[] | null>(null);
@@ -50,13 +50,39 @@ export function Profile({ onBack }: { onBack: () => void }) {
 
         <header className="profile-head">
           <div className="profile-avatar" aria-hidden="true">{initial}</div>
-          <h1 className="profile-name">{label}</h1>
+          {/* S4-04: tu nombre público (el de la mesa) con su etiqueta; si aún no hay, el de Google. */}
+          <h1 className="profile-name">
+            {stats?.publicName ?? label}
+            {stats?.tag && <small className="profile-tag">#{stats.tag}</small>}
+          </h1>
           {me.email && me.name && <p className="profile-email">{me.email}</p>}
           {since && <p className="profile-since">Jugando desde {since}</p>}
+          <a className="profile-rank-link" href="#ranking">🏆 Ver el ranking</a>
         </header>
 
-        {/* S4-02: tu división. */}
+        {/* S4-02: tu división. S4-09: de la temporada en curso. */}
         <DivisionCard rating={stats?.rating ?? 1000} games={games} />
+        {season && (
+          <p className="season-line">
+            Temporada <b>{season.name}</b> · termina el {season.ends}
+          </p>
+        )}
+        {season && season.badges.length > 0 && (
+          <section aria-labelledby="profile-seasons-title">
+            <h2 id="profile-seasons-title" className="home-section">Tus temporadas</h2>
+            <ul className="season-badges">
+              {[...season.badges].reverse().map((b) => (
+                <li key={b.season}>
+                  <DivisionBadge division={b.division} size={30} label />
+                  <span>
+                    <b>{divisionName(b.division)}</b>
+                    <small>{b.name}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
 
         <section aria-labelledby="profile-stats-title">
           <h2 id="profile-stats-title" className="home-section">Tus partidas</h2>

@@ -11,7 +11,22 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { getCosmosHandles } from '../globalHandles.js';
 import { recentFor, resultRepo, type ResultRepo } from '../results.js';
-import { checkPlaceChange, municipiosOf, viewPlace } from '../places.js';
+import { checkPlaceChange, municipioName, municipiosOf, viewPlace } from '../places.js';
+import { PAIR_MIN_GAMES, pairName, pairRepo, topPairEntries, type PairRepo } from '../pairs.js';
+import {
+  CosmosRankingSource,
+  MemoryRankingSource,
+  activeSince,
+  cleanPublicName,
+  eligibility,
+  newTag,
+  topEntries,
+  weekEligibility,
+  type Period,
+  type RankingSource,
+  type Scope,
+} from '../ranking.js';
+import { divisionFor, isOffensiveName, provinceName, rolloverSeason, seasonEndLabel, seasonId, seasonName, weekId } from '@guinote/protocol';
 import { PLAYER_COOKIE, PLAYER_COOKIE_MAX_AGE } from '../players.js';
 import {
   CosmosPlayerRepo,
@@ -88,6 +103,8 @@ export interface AuthRouteOptions {
   keys?: KeySource;
   repos?: () => AuthRepos;
   results?: () => ResultRepo;
+  ranking?: () => RankingSource;
+  pairs?: () => PairRepo;
 }
 
 export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOptions = {}): Promise<void> {
@@ -95,6 +112,13 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
   const keys = opts.keys ?? googleKeys;
   const repos = opts.repos ?? authRepos;
   const results = opts.results ?? resultRepo;
+  const pairs = opts.pairs ?? pairRepo;
+  const ranking =
+    opts.ranking ??
+    (() => {
+      const h = getCosmosHandles();
+      return h ? new CosmosRankingSource(h.players) : new MemoryRankingSource(() => memoryPlayers.map.values());
+    });
 
   app.get('/api/config', async () => ({ googleClientId: clientId }));
 
@@ -117,13 +141,39 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
       clearCookies(req, reply);
       return { user: null };
     }
-    const p = await players.get(user.primaryPlayerId).catch(() => null);
+    let p = await players.get(user.primaryPlayerId).catch(() => null);
+    // S4-09: si cambió la temporada desde tu última visita, se aplica ya
+    // (insignia + nivel a medio camino de 1000).
+    if (p) {
+      const roll = rolloverSeason(p);
+      if (roll) {
+        p = { ...p, ...roll };
+        await players.put(p).catch(() => undefined);
+      }
+    }
+    const current = seasonId();
     return {
+      // S4-09: temporada actual e insignias de las pasadas.
+      season: {
+        id: current,
+        name: seasonName(current),
+        ends: seasonEndLabel(current),
+        badges: (p?.seasonBadges ?? []).map((b) => ({ season: b.season, name: seasonName(b.season), division: b.division })),
+      },
       // S4-03: de dónde eres.
       place: viewPlace(p?.place, p?.placeChangedAt),
       user: { name: user.name ?? null, email: user.email ?? null, since: user.createdAt },
       player: p
-        ? { games: p.games, wins: p.wins, losses: p.losses, streak: p.streak ?? 0, bestStreak: p.bestStreak ?? 0, rating: Math.round(p.rating) }
+        ? {
+            games: p.games,
+            wins: p.wins,
+            losses: p.losses,
+            streak: p.streak ?? 0,
+            bestStreak: p.bestStreak ?? 0,
+            rating: Math.round(p.rating),
+            publicName: p.publicName ?? null,
+            tag: p.tag ?? null,
+          }
         : null,
     };
   });
@@ -172,6 +222,113 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
       created: result.created,
       merged: result.merged,
     };
+  });
+
+  // S4-04: tu nombre público (el nombre en la mesa) para el ranking.
+  app.put('/api/me/name', async (req, reply) => {
+    const s = sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    const raw = (req.body as { name?: unknown } | undefined)?.name;
+    const name = cleanPublicName(raw);
+    if (!name) {
+      const offensive = typeof raw === 'string' && isOffensiveName(raw);
+      return reply.code(400).send({ error: offensive ? 'Ese nombre no está permitido' : 'Nombre no válido' });
+    }
+    const { users, players } = repos();
+    const user = await users.get(s.uid);
+    if (!user) return reply.code(404).send({ error: 'Cuenta no encontrada' });
+    const p = await players.get(user.primaryPlayerId);
+    if (!p) return reply.code(404).send({ error: 'Jugador no encontrado' });
+    // S4-08: nombre + etiqueta únicos. Se conserva tu etiqueta salvo que
+    // otro jugador ya sea "ese nombre#esa etiqueta".
+    let tag = p.tag ?? newTag();
+    for (let i = 0; i < 20 && (await players.nameTaken(name, tag, p.id)); i++) tag = newTag();
+    if (p.publicName !== name || p.tag !== tag) await players.put({ ...p, publicName: name, tag });
+    return { publicName: name, tag };
+  });
+
+  // S4-04: ranking. `scope` = es | prov | mun (los dos últimos, el tuyo).
+  app.get<{ Querystring: { scope?: string; period?: string } }>('/api/ranking', async (req) => {
+    const kind = req.query.scope === 'prov' || req.query.scope === 'mun' ? req.query.scope : 'es';
+    // S4-06: `period=week` → clasificación de esta semana. S4-05: `period=pairs` → parejas.
+    const isPairs = req.query.period === 'pairs';
+    const period: Period = req.query.period === 'week' ? 'week' : 'all';
+    const sess = sessionOf(req);
+    const { users, players } = repos();
+    const user = sess ? await users.get(sess.uid).catch(() => null) : null;
+    const me = user ? await players.get(user.primaryPlayerId).catch(() => null) : null;
+
+    let scope: Scope = { kind: 'es' };
+    let label = 'España';
+    if (kind === 'prov') {
+      if (!me?.place?.province) return { scope: kind, period, label: null, needsPlace: true, entries: [], me: null };
+      scope = { kind: 'prov', province: me.place.province };
+      label = provinceName(me.place.province) ?? '';
+    } else if (kind === 'mun') {
+      if (!me?.place?.municipio) return { scope: kind, period, label: null, needsPlace: true, entries: [], me: null };
+      scope = { kind: 'mun', municipio: me.place.municipio };
+      label = municipioName(me.place.municipio) ?? '';
+    }
+
+    if (isPairs) {
+      try {
+        const repo = pairs();
+        const pid = me?.id ?? null;
+        const entries = await topPairEntries(repo, scope, activeSince(), pid);
+        let mine = null;
+        if (user && pid) {
+          const mineList = (await repo.forPlayer(pid)).sort((a, b) => b.rating - a.rating);
+          const best = mineList[0];
+          if (!best) mine = { eligible: false, reason: 'no_pair', gamesLeft: null };
+          else if (best.games < PAIR_MIN_GAMES) mine = { eligible: false, reason: 'pair_games', gamesLeft: PAIR_MIN_GAMES - best.games, pairName: pairName(best) };
+          else if (best.lastPlayedAt < activeSince()) mine = { eligible: false, reason: 'inactive', gamesLeft: null, pairName: pairName(best) };
+          else if ((scope.kind === 'prov' && best.place.province !== scope.province) || (scope.kind === 'mun' && best.place.municipio !== scope.municipio)) {
+            mine = { eligible: false, reason: 'pair_place', gamesLeft: null, pairName: pairName(best) };
+          } else {
+            const inTop = entries.find((e) => e.you);
+            const pos = inTop?.pos ?? (await repo.countAbove(scope, activeSince(), best.rating)) + 1;
+            mine = { eligible: true, pos, points: Math.round(best.rating), rating: Math.round(best.rating), division: null, pairName: pairName(best) };
+          }
+        }
+        return { scope: kind, period: 'pairs', label, needsPlace: false, entries, me: mine };
+      } catch (err) {
+        req.log.error({ err }, '[ranking] parejas: no se pudo leer');
+        return { scope: kind, period: 'pairs', label, needsPlace: false, entries: [], me: null, error: 'No se pudo cargar el ranking' };
+      }
+    }
+
+    const source = ranking();
+    try {
+      const entries = await topEntries(source, scope, me?.id ?? null, new Date(), period);
+      let mine = null;
+      if (user) {
+        const division = me ? divisionFor(me.rating, me.games) : null;
+        const inTop = entries.find((e) => e.you);
+        if (period === 'week') {
+          const week = weekId();
+          const el = weekEligibility(me, week);
+          if (el.ok) {
+            const pts = Math.round(me!.weekPoints ?? 0);
+            const pos = inTop?.pos ?? (await source.countAboveWeek(scope, week, me!.weekPoints ?? 0)) + 1;
+            mine = { eligible: true, pos, points: pts, rating: Math.round(me!.rating), division };
+          } else {
+            mine = { eligible: false, reason: el.reason, gamesLeft: el.gamesLeft ?? null };
+          }
+        } else {
+          const el = eligibility(me);
+          if (el.ok) {
+            const pos = inTop?.pos ?? (await source.countAbove(scope, activeSince(), me!.rating)) + 1;
+            mine = { eligible: true, pos, points: Math.round(me!.rating), rating: Math.round(me!.rating), division };
+          } else {
+            mine = { eligible: false, reason: el.reason, gamesLeft: el.gamesLeft ?? null };
+          }
+        }
+      }
+      return { scope: kind, period, label, needsPlace: false, entries, me: mine };
+    } catch (err) {
+      req.log.error({ err }, '[ranking] no se pudo leer');
+      return { scope: kind, period, label, needsPlace: false, entries: [], me: null, error: 'No se pudo cargar el ranking' };
+    }
   });
 
   // S4-03: municipios de una provincia (lista del INE), para el buscador del perfil.
@@ -241,8 +398,9 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     const data = await exportAccount(users, players, s.uid);
     if (!data) return reply.code(404).send({ error: 'Cuenta no encontrada' });
     const history = await recentFor([data.user.primaryPlayerId, ...data.user.linkedPlayerIds], 10_000, results()).catch(() => []);
+    const myPairs = (await Promise.all([...new Set([data.user.primaryPlayerId, ...data.user.linkedPlayerIds])].map((id) => pairs().forPlayer(id).catch(() => [])))).flat();
     reply.header('Content-Disposition', 'attachment; filename="guinote-mis-datos.json"');
-    return { ...data, results: history };
+    return { ...data, results: history, pairs: myPairs };
   });
 
   app.delete('/api/me', async (req, reply) => {
@@ -253,6 +411,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     if (user) {
       for (const id of new Set([user.primaryPlayerId, ...user.linkedPlayerIds])) {
         await results().removeAll(id).catch((err) => req.log.error({ err }, '[historial] no se pudo borrar'));
+        await pairs().removePlayer(id).catch((err) => req.log.error({ err }, '[parejas] no se pudo borrar'));
       }
     }
     await deleteAccount(users, players, s.uid);

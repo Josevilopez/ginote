@@ -22,6 +22,9 @@ import {
 } from '../src/auth/accounts.js';
 import { registerAuthRoutes, resolvePlayerId } from '../src/auth/routes.js';
 import { MemoryResultRepo } from '../src/results.js';
+import { MemoryRankingSource, _clearRankingCache } from '../src/ranking.js';
+import { MemoryPairRepo, _clearPairCache } from '../src/pairs.js';
+import { seasonId } from '@guinote/protocol';
 
 const CLIENT_ID = 'test-client.apps.googleusercontent.com';
 let privateKey: KeyObject;
@@ -161,9 +164,17 @@ describe('endpoints', () => {
     const users = new MemoryUserRepo();
     const players = new MemoryPlayerRepo();
     const results = new MemoryResultRepo();
+    const pairRepo = new MemoryPairRepo();
     const app = Fastify();
-    await registerAuthRoutes(app, { googleClientId: clientId, keys, repos: () => ({ users, players }), results: () => results });
-    return { app, users, players, results };
+    await registerAuthRoutes(app, {
+      googleClientId: clientId,
+      keys,
+      repos: () => ({ users, players }),
+      results: () => results,
+      ranking: () => new MemoryRankingSource(() => players.map.values()),
+      pairs: () => pairRepo,
+    });
+    return { app, users, players, results, pairRepo };
   }
   function cookiesOf(res: { headers: Record<string, unknown> }): Record<string, string> {
     const raw = res.headers['set-cookie'];
@@ -255,6 +266,103 @@ describe('endpoints', () => {
     expect(put2.statusCode).toBe(409);
     expect((await app.inject({ url: '/api/me', headers: { cookie } })).json().place.municipioName).toBe('Alcañiz');
     expect((await app.inject({ method: 'PUT', url: '/api/me/place', payload: { province: '50' } })).statusCode).toBe(401);
+  });
+
+  it('S4-04: nombre público con etiqueta y ranking (España, provincia, pueblo)', async () => {
+    _clearRankingCache();
+    const { app, players } = await makeApp();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '77', name: 'Jose López' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(login)[SESSION_COOKIE]}`;
+    const named = (await app.inject({ method: 'PUT', url: '/api/me/name', headers: { cookie }, payload: { name: ' Jose ' } })).json();
+    expect(named.publicName).toBe('Jose');
+    expect(named.tag).toMatch(/^\d{4}$/);
+    // La etiqueta no cambia al cambiar de nombre.
+    expect((await app.inject({ method: 'PUT', url: '/api/me/name', headers: { cookie }, payload: { name: 'Josevi' } })).json().tag).toBe(named.tag);
+    expect((await app.inject({ url: '/api/me', headers: { cookie } })).json().player).toMatchObject({ publicName: 'Josevi', tag: named.tag });
+
+    // Aún sin clasificar: el ranking dice por qué no sales.
+    let r = (await app.inject({ url: '/api/ranking', headers: { cookie } })).json();
+    expect(r.me).toEqual({ eligible: false, reason: 'placement', gamesLeft: 10 });
+    expect((await app.inject({ url: '/api/ranking?scope=prov', headers: { cookie } })).json().needsPlace).toBe(true);
+
+    // Con partidas, pueblo y un rival por encima.
+    const mine = [...players.map.values()].find((x) => x.userId === 'g_77')!;
+    await players.put({ ...mine, games: 12, rating: 1100, lastPlayedAt: new Date().toISOString(), seasonId: seasonId() });
+    await app.inject({ method: 'PUT', url: '/api/me/place', headers: { cookie }, payload: { province: '44', municipio: '44013' } });
+    await players.put({ ...freshPlayer('rival'), userId: 'g_r', games: 30, rating: 1250, lastPlayedAt: new Date().toISOString(), publicName: 'Pilar', tag: '0007', place: { province: '50', municipio: null }, seasonId: seasonId() });
+    _clearRankingCache();
+    r = (await app.inject({ url: '/api/ranking', headers: { cookie } })).json();
+    expect(r.label).toBe('España');
+    expect(r.entries.map((e: { name: string; tag: string; you: boolean }) => [e.name, e.tag, e.you])).toEqual([
+      ['Pilar', '0007', false],
+      ['Josevi', named.tag, true],
+    ]);
+    expect(r.me).toEqual({ eligible: true, pos: 2, points: 1100, rating: 1100, division: 'oro' });
+    // S4-06: semanal. Aún no he jugado 3 partidas esta semana.
+    const wk = (await app.inject({ url: '/api/ranking?period=week', headers: { cookie } })).json();
+    expect(wk).toMatchObject({ period: 'week', label: 'España', entries: [], me: { eligible: false, reason: 'week_games', gamesLeft: 3 } });
+    const prov = (await app.inject({ url: '/api/ranking?scope=prov', headers: { cookie } })).json();
+    expect(prov.label).toBe('Teruel');
+    expect(prov.me.pos).toBe(1);
+    expect((await app.inject({ url: '/api/ranking?scope=mun', headers: { cookie } })).json().label).toBe('Alcañiz');
+    // Sin sesión se puede ver el de España.
+    expect((await app.inject({ url: '/api/ranking' })).json()).toMatchObject({ me: null, entries: [{ name: 'Pilar' }, { name: 'Josevi' }] });
+  });
+
+  it('S4-08: nombre ofensivo rechazado; nombre#etiqueta único', async () => {
+    const { app, players } = await makeApp();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '88' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(login)[SESSION_COOKIE]}`;
+    const bad = await app.inject({ method: 'PUT', url: '/api/me/name', headers: { cookie }, payload: { name: 'Gilipollas' } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error).toBe('Ese nombre no está permitido');
+    // Ya existe "Pilar#1234": si yo también tengo la 1234, me toca otra.
+    const mine = [...players.map.values()].find((x) => x.userId === 'g_88')!;
+    await players.put({ ...mine, tag: '1234' });
+    await players.put({ ...freshPlayer('otra'), userId: 'g_o', publicName: 'Pilar', tag: '1234' });
+    const r = (await app.inject({ method: 'PUT', url: '/api/me/name', headers: { cookie }, payload: { name: 'pilar' } })).json();
+    expect(r.publicName).toBe('pilar');
+    expect(r.tag).not.toBe('1234');
+    // Con otro nombre, la etiqueta 1234 está libre y se conserva.
+    await players.put({ ...(await players.get(mine.id))!, tag: '1234' });
+    expect((await app.inject({ method: 'PUT', url: '/api/me/name', headers: { cookie }, payload: { name: 'Josevi' } })).json().tag).toBe('1234');
+  });
+
+  it('S4-05: ranking de parejas y por qué no sales', async () => {
+    _clearPairCache();
+    const { app, players, pairRepo } = await makeApp();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '99' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(login)[SESSION_COOKIE]}`;
+    const pid = [...players.map.values()].find((x) => x.userId === 'g_99')!.id;
+    expect((await app.inject({ url: '/api/ranking?period=pairs', headers: { cookie } })).json().me).toMatchObject({ eligible: false, reason: 'no_pair' });
+    const mem = (id: string, name: string) => ({ playerId: id, name, tag: '0001', province: null, municipio: null });
+    const now = new Date().toISOString();
+    await pairRepo.put({ id: `${pid}|zz`, players: [pid, 'zz'], members: [mem(pid, 'Josevi'), mem('zz', 'Pilar')], rating: 1080, games: 3, wins: 2, losses: 1, lastPlayedAt: now, place: { province: null, municipio: null } });
+    expect((await app.inject({ url: '/api/ranking?period=pairs', headers: { cookie } })).json().me).toMatchObject({ eligible: false, reason: 'pair_games', gamesLeft: 2, pairName: 'Josevi & Pilar' });
+    await pairRepo.put({ ...(await pairRepo.get(`${pid}|zz`))!, games: 6 });
+    await pairRepo.put({ id: 'x|y', players: ['x', 'y'], members: [mem('x', 'Ana'), mem('y', 'Bea')], rating: 1150, games: 9, wins: 6, losses: 3, lastPlayedAt: now, place: { province: null, municipio: null } });
+    _clearPairCache();
+    const r = (await app.inject({ url: '/api/ranking?period=pairs', headers: { cookie } })).json();
+    expect(r.entries.map((e: { name: string; you: boolean }) => [e.name, e.you])).toEqual([['Ana & Bea', false], ['Josevi & Pilar', true]]);
+    expect(r.me).toMatchObject({ eligible: true, pos: 2, points: 1080, pairName: 'Josevi & Pilar' });
+    // RGPD: va en la descarga y se borra con la cuenta.
+    expect((await app.inject({ url: '/api/me/data', headers: { cookie } })).json().pairs).toHaveLength(1);
+    await app.inject({ method: 'DELETE', url: '/api/me', headers: { cookie } });
+    expect([...pairRepo.map.keys()]).toEqual(['x|y']);
+  });
+
+  it('S4-09: al entrar en una temporada nueva, insignia y nivel a medio camino', async () => {
+    const { app, players } = await makeApp();
+    const login = await app.inject({ method: 'POST', url: '/api/auth/google', payload: { credential: googleToken({ sub: '66' }) } });
+    const cookie = `${SESSION_COOKIE}=${cookiesOf(login)[SESSION_COOKIE]}`;
+    const mine = [...players.map.values()].find((x) => x.userId === 'g_66')!;
+    await players.put({ ...mine, rating: 1300, games: 40, seasonId: '2020-T2', seasonPeak: 1320 });
+    const me = (await app.inject({ url: '/api/me', headers: { cookie } })).json();
+    expect(me.season).toMatchObject({ id: seasonId(), badges: [{ season: '2020-T2', name: 'Primavera 2020', division: 'maestro' }] });
+    expect((await players.get(mine.id))!).toMatchObject({ rating: 1150, seasonId: seasonId() });
+    // La segunda vez ya no cambia nada.
+    await app.inject({ url: '/api/me', headers: { cookie } });
+    expect((await players.get(mine.id))!.rating).toBe(1150);
   });
 
   it('borrar cuenta: borra datos y cookies; la sesión vieja ya no vale', async () => {

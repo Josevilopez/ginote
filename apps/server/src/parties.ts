@@ -16,6 +16,7 @@
  * de asiento; su WebSocket entra con ese token como si reconectara.
  */
 import { newRoomCode } from './roomCodes.js';
+import { safeName } from './names.js';
 import { dequeue, enqueue, type QueueEntry } from './matchmaking.js';
 
 export const PARTY_SIZE = 2;
@@ -70,7 +71,7 @@ function uuid(): string {
 }
 
 function cleanName(name: unknown): string {
-  return (typeof name === 'string' ? name.trim() : '').slice(0, 20) || 'Jugador';
+  return safeName(name); // S4-08: sin nombres ofensivos
 }
 
 export function gcParties(now: number = Date.now()): void {

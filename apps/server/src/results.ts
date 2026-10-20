@@ -33,6 +33,8 @@ export interface MatchResult {
   mate: ResultPlayer | null;
   rivals: ResultPlayer[];
   roomCode: string;
+  /** S4-08: señal para revisar (rivales desde la misma conexión). */
+  flag?: 'misma_conexion';
 }
 
 export interface ResultRepo {
@@ -78,7 +80,7 @@ export class CosmosResultRepo implements ResultRepo {
         { partitionKey: playerId },
       )
       .fetchAll();
-    return resources.map(({ id, playerId: pid, at, kind, won, abandoned, ratingBefore, ratingAfter, mate, rivals, roomCode }) => ({
+    return resources.map(({ id, playerId: pid, at, kind, won, abandoned, ratingBefore, ratingAfter, mate, rivals, roomCode, flag }) => ({
       id,
       playerId: pid,
       at,
@@ -90,6 +92,7 @@ export class CosmosResultRepo implements ResultRepo {
       mate,
       rivals,
       roomCode,
+      ...(flag ? { flag } : {}),
     }));
   }
   async removeAll(playerId: string) {

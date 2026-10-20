@@ -60,6 +60,10 @@ export function Privacy({ onBack }: { onBack: () => void }) {
             <li>Para mostrarte tu perfil y tu historial.</li>
             <li>Para los rankings: si tienes cuenta, apareces con el nombre que eliges (nunca con tu email).</li>
           </ul>
+          <p>
+            Para evitar trampas, comprobamos si dos rivales de una partida juegan desde la misma conexión. Para eso usamos
+            una huella anónima que se calcula al momento y no permite saber tu IP; tu IP no se guarda.
+          </p>
           <p>No hay publicidad. No vendemos ni cedemos tus datos a nadie.</p>
         </section>
 

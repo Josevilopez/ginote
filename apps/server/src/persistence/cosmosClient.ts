@@ -38,6 +38,8 @@ export interface CosmosHandles {
   users: Container;
   /** S4-01: historial de partidas (PK `/playerId`). Hay que crearlo en el portal. */
   results: Container;
+  /** S4-05: parejas fijas con su nivel (PK `/id`). Hay que crearlo en el portal. */
+  pairs: Container;
 }
 
 export interface CosmosConfig {
@@ -83,8 +85,9 @@ export async function initCosmos(config: CosmosConfig): Promise<CosmosHandles> {
   const snapshots = client.database(config.database).container('snapshots');
   const users = client.database(config.database).container('users');
   const results = client.database(config.database).container('results');
+  const pairs = client.database(config.database).container('pairs');
   // Si quisieras crear la BD por código, sería aquí con
   //   await client.databases.createIfNotExists({ id: config.database })
   // pero eso requiere control plane RBAC, no data plane.
-  return { client, database: client.database(config.database), players, matches, snapshots, users, results };
+  return { client, database: client.database(config.database), players, matches, snapshots, users, results, pairs };
 }

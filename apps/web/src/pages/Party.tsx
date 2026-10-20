@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getPlayerName, setPlayerName } from '../store.js';
 import { partyInviteUrl, useParty } from '../party.js';
+import { isOffensiveName } from '@guinote/protocol';
 import './Home.css';
 import './Party.css';
 
@@ -51,7 +52,7 @@ export function Party({ inviteCode, onClose }: { inviteCode: string | null; onCl
           <button
             type="button"
             className="home-choice is-main"
-            disabled={busy}
+            disabled={busy || isOffensiveName(name)}
             onClick={() => {
               setPlayerName(name);
               void join(inviteCode!).then((ok) => ok && onClose());
@@ -59,6 +60,7 @@ export function Party({ inviteCode, onClose }: { inviteCode: string | null; onCl
           >
             <b>Unirme a la pareja</b>
           </button>
+          {isOffensiveName(name) && <p className="home-error" role="alert">Ese nombre no está permitido. Elige otro.</p>}
           {error && <p className="home-error" role="alert">{error}</p>}
           <button type="button" className="party-secondary" onClick={onClose}>
             Ahora no

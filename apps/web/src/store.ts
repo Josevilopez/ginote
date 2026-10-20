@@ -110,6 +110,8 @@ interface State {
   seatDivisions: Array<Division | null>;
   /** S4-02: has cambiado de división al acabar la partida (para el aviso). */
   divisionChange: { from: Division | null; to: Division } | null;
+  /** S4-07: la mesa es privada (salir no penaliza). Se recuerda tras empezar. */
+  isPrivateRoom: boolean;
   dismissDivisionChange: () => void;
   /**
    * S2-15: estado de MI conexión con la mesa.
@@ -177,6 +179,7 @@ const MATCH_RESET = {
   seatDeadlines: [] as State['seatDeadlines'],
   seatDivisions: [] as State['seatDivisions'],
   divisionChange: null as State['divisionChange'],
+  isPrivateRoom: false,
   connection: 'connected' as State['connection'],
   connectionMessage: null,
 } satisfies Partial<State>;
@@ -191,6 +194,29 @@ let reconnectUntil: number | null = null;
 let reconnectAttempt = 0;
 /** Código de la sala a la que estamos reconectando. */
 let reconnectCode: string | null = null;
+
+// ───────────── S4-10: partidas terminadas en este navegador ─────────────
+const PLAYED_KEY = 'guinote:partidasJugadas';
+const LAST_COUNTED_KEY = 'guinote:ultimaPartidaContada';
+
+function countFinishedPartida(key: string): void {
+  try {
+    if (window.localStorage.getItem(LAST_COUNTED_KEY) === key) return;
+    window.localStorage.setItem(LAST_COUNTED_KEY, key);
+    window.localStorage.setItem(PLAYED_KEY, String(getPartidasJugadas() + 1));
+  } catch {
+    // Sin localStorage no hay recordatorio; no pasa nada.
+  }
+}
+
+/** Partidas terminadas en este navegador (cualquier modo). */
+export function getPartidasJugadas(): number {
+  try {
+    return Number(window.localStorage.getItem(PLAYED_KEY) ?? '0') || 0;
+  } catch {
+    return 0;
+  }
+}
 
 // ───────────── S3-05: cola de "Jugar online" ─────────────
 let queueWs: WebSocket | null = null;
@@ -215,6 +241,15 @@ function startQueue(set: (p: Partial<State>) => void, get: () => State): void {
     const msg = JSON.parse(e.data) as ServerMessage;
     if (msg.type === 'QUEUE_STATUS') {
       set({ queue: { waitedMs: msg.waitedMs, players: msg.humansFound, fillAfterMs: msg.fillAfterMs ?? 20_000 } });
+    } else if (msg.type === 'QUEUE_BLOCKED') {
+      // S4-07: castigado por abandonos repetidos.
+      queueWs = null;
+      ws.onclose = null;
+      const at = new Date(msg.until).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+      set({
+        queue: null,
+        error: `Has abandonado 3 partidas en las últimas 24 horas. Podrás buscar partida online a partir de las ${at}. Mientras, puedes practicar contra bots o jugar en una mesa privada.`,
+      });
     } else if (msg.type === 'QUEUE_MATCHED') {
       queueWs = null;
       ws.onclose = null;
@@ -405,6 +440,7 @@ export const useGame = create<State>((set, get) => ({
   seatDeadlines: [],
   seatDivisions: [],
   divisionChange: null,
+  isPrivateRoom: false,
   connection: 'connected',
   connectionMessage: null,
 
@@ -682,6 +718,7 @@ function connect(
           isPrivate: msg.isPrivate ?? false,
           hostSeat: msg.hostSeat ?? null,
         },
+        isPrivateRoom: msg.isPrivate ?? false,
         // Quién está sentado ya (la pantalla de espera pinta la mesa).
         seatNames: msg.seatNames,
         isBot: msg.isBot,
@@ -749,6 +786,11 @@ function connect(
         justResolvedTimer = null;
       }, 2500);
     } else if (msg.type === 'GAME_OVER') {
+      // S4-10: partidas terminadas en este navegador (para el recordatorio
+      // de crear cuenta). Una vez por partida aunque reconectes.
+      if (msg.matchWinner !== null && msg.matchWinner !== undefined) {
+        countFinishedPartida(`${get().roomCode}:${JSON.stringify(msg.score ?? msg.gamePoints)}:${msg.vuelta ?? ''}`);
+      }
       set({
         gameOver: msg,
         // La mano terminó → ya no hay nada en vuelo.

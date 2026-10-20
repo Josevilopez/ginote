@@ -4,6 +4,7 @@ import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
 import { Profile } from './pages/Profile.js';
 import { Privacy } from './pages/Privacy.js';
+import { Ranking } from './pages/Ranking.js';
 import { Party } from './pages/Party.js';
 import { Searching } from './pages/Searching.js';
 import { partyCodeFromHash, useParty } from './party.js';
@@ -40,6 +41,8 @@ export function App() {
   const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
   // S4-00: política de privacidad en `#privacidad`.
   const [onPrivacy, setOnPrivacy] = useState(() => window.location.hash === '#privacidad');
+  // S4-04: ranking en `#ranking`.
+  const [onRanking, setOnRanking] = useState(() => window.location.hash === '#ranking');
   // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
   const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
   const inParty = useParty((s) => s.saved !== null);
@@ -48,6 +51,7 @@ export function App() {
     const onHash = () => {
       setOnProfile(window.location.hash === '#perfil');
       setOnPrivacy(window.location.hash === '#privacidad');
+      setOnRanking(window.location.hash === '#ranking');
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
@@ -65,6 +69,13 @@ export function App() {
       setOnPrivacy(false);
     }
   }, []);
+  const closeRanking = useCallback(() => {
+    if (history.length > 1) history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setOnRanking(false);
+    }
+  }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
     setInviteCode(null);
@@ -80,6 +91,8 @@ export function App() {
     <main className="app">
       {you !== null ? (
         <Game />
+      ) : onRanking ? (
+        <Ranking onBack={closeRanking} />
       ) : onPrivacy ? (
         <Privacy onBack={closePrivacy} />
       ) : searching ? (

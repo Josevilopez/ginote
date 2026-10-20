@@ -43,6 +43,8 @@ export interface PlayerRepo {
   get(id: string): Promise<LinkedPlayer | null>;
   put(player: LinkedPlayer): Promise<void>;
   delete(id: string): Promise<void>;
+  /** S4-08: ¿otro jugador ya es "nombre#etiqueta"? (sin distinguir mayúsculas) */
+  nameTaken(name: string, tag: string, exceptId: string): Promise<boolean>;
 }
 
 export function userIdForGoogle(sub: string): string {
@@ -187,6 +189,11 @@ export class MemoryPlayerRepo implements PlayerRepo {
   async delete(id: string) {
     this.map.delete(id);
   }
+  async nameTaken(name: string, tag: string, exceptId: string) {
+    const n = name.toLowerCase();
+    for (const p of this.map.values()) if (p.id !== exceptId && p.tag === tag && p.publicName?.toLowerCase() === n) return true;
+    return false;
+  }
 }
 
 function isNotFound(err: unknown): boolean {
@@ -238,5 +245,18 @@ export class CosmosPlayerRepo implements PlayerRepo {
     } catch (err) {
       if (!isNotFound(err)) throw err;
     }
+  }
+  async nameTaken(name: string, tag: string, exceptId: string) {
+    const { resources } = await this.c.items
+      .query<number>({
+        query: 'SELECT VALUE COUNT(1) FROM c WHERE c.tag = @t AND LOWER(c.publicName) = @n AND c.id != @id',
+        parameters: [
+          { name: '@t', value: tag },
+          { name: '@n', value: name.toLowerCase() },
+          { name: '@id', value: exceptId },
+        ],
+      })
+      .fetchAll();
+    return (resources[0] ?? 0) > 0;
   }
 }

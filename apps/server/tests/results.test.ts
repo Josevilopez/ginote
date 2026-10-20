@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * S4-01 — Historial de partidas y rachas. Cosmos `players` se simula con
  * un Map; el historial va a un repo en memoria.
  */
-type Doc = { id: string; rating: number; games: number; wins: number; losses: number; streak?: number; bestStreak?: number; userId?: string };
+type Doc = { id: string; rating: number; games: number; wins: number; losses: number; streak?: number; bestStreak?: number; userId?: string; weekId?: string; weekPoints?: number; weekGames?: number; lastPlayedAt?: string; abandons?: string[]; queueBanUntil?: string; publicName?: string; seasonId?: string; seasonPeak?: number; seasonBadges?: { season: string; division: string }[] };
 const docs = new Map<string, Doc>();
 const fakeCosmos = {
   players: {
@@ -16,6 +16,9 @@ vi.mock('../src/globalHandles.js', () => ({ getCosmosHandles: () => fakeCosmos, 
 
 const { createRoom, substituteWithBot, updateEloOnHandEnd } = await import('../src/room.js');
 const { MemoryResultRepo, setResultRepo, nextStreak, describeTable, recentFor, recordResult } = await import('../src/results.js');
+const { weekId, seasonId } = await import('@guinote/protocol');
+const { MemoryPairRepo, setPairRepo, pairId } = await import('../src/pairs.js');
+const pairs = new MemoryPairRepo();
 
 const repo = new MemoryResultRepo();
 const player = (id: string, extra: Partial<Doc> = {}) => docs.set(id, { id, rating: 1000, games: 0, wins: 0, losses: 0, ...extra });
@@ -38,10 +41,13 @@ describe('S4-01 historial', () => {
     docs.clear();
     repo.list.length = 0;
     setResultRepo(repo);
+    pairs.map.clear();
+    setPairRepo(pairs);
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
   afterEach(() => {
     setResultRepo(null);
+    setPairRepo(null);
     vi.restoreAllMocks();
   });
 
@@ -95,6 +101,81 @@ describe('S4-01 historial', () => {
     expect(room.players[1]!.division).toBeUndefined();
     expect(inbox.find((m) => m.type === 'DIVISION_CHANGED')).toEqual({ type: 'DIVISION_CHANGED', from: null, to: 'oro' });
     expect(inbox.filter((m) => m.type === 'SEATS').at(-1)!.seatDivisions).toEqual(['oro', null, null, null]);
+  });
+
+  it('S4-08: rivales desde la misma conexión → partida marcada para revisar (sin castigo)', async () => {
+    player('ana'); player('cris'); player('dani');
+    const room = mkRoom({ 0: 'ana', 1: 'cris', 3: 'dani' });
+    room.players[0]!.net = 'casa';
+    room.players[1]!.net = 'casa';
+    room.players[3]!.net = 'otra';
+    await updateEloOnHandEnd(room, 0);
+    expect(repo.list.every((r) => r.flag === 'misma_conexion')).toBe(true);
+    expect(docs.get('ana')!.games).toBe(1); // el ELO se aplica igual
+    // Compañeros en la misma conexión (pareja en casa): sin marca.
+    repo.list.length = 0;
+    room.players[1]!.net = 'otra';
+    room.players[2]!.net = 'casa';
+    await updateEloOnHandEnd(room, 1);
+    expect(repo.list.some((r) => r.flag)).toBe(false);
+  });
+
+  it('S4-06: suma a la semana en curso y reinicia al cambiar de semana', async () => {
+    const week = weekId();
+    player('ana', { weekId: week, weekPoints: 10, weekGames: 2 });
+    player('cris', { weekId: '2020-W01', weekPoints: 99, weekGames: 9 });
+    await updateEloOnHandEnd(mkRoom({ 0: 'ana', 1: 'cris' }), 0);
+    const ana = docs.get('ana')!;
+    const cris = docs.get('cris')!;
+    expect(ana).toMatchObject({ weekId: week, weekGames: 3, weekPoints: 10 + (ana.rating - 1000) });
+    expect(cris).toMatchObject({ weekId: week, weekGames: 1, weekPoints: cris.rating - 1000 });
+    expect(cris.weekPoints).toBeLessThan(0);
+    expect(Date.parse(ana.lastPlayedAt!)).toBeGreaterThan(Date.now() - 5000);
+  });
+
+  it('S4-07: el tercer abandono en 24 h castiga 5 min sin buscar partida', async () => {
+    const recent = new Date(Date.now() - 3600_000).toISOString();
+    player('ana');
+    player('cris', { abandons: [recent, recent] });
+    const room = mkRoom({ 0: 'ana', 1: 'cris' });
+    substituteWithBot(room, 1, 'leave');
+    await flush();
+    const c = docs.get('cris')!;
+    expect(c.abandons).toHaveLength(3);
+    expect(Date.parse(c.queueBanUntil!)).toBeGreaterThan(Date.now() + 4 * 60_000);
+  });
+
+  it('S4-05: pareja fija con cuenta → sube su nivel de pareja; sin cuenta, no', async () => {
+    player('ana', { userId: 'g_a', publicName: 'Ana' });
+    player('bea', { userId: 'g_b', publicName: 'Bea' });
+    player('cris');
+    const room = mkRoom({ 0: 'ana', 2: 'bea', 1: 'cris' });
+    room.players[0]!.partyCode = 'P1';
+    room.players[2]!.partyCode = 'P1';
+    await updateEloOnHandEnd(room, 0);
+    const p = (await pairs.get(pairId('ana', 'bea')))!;
+    expect(p).toMatchObject({ games: 1, wins: 1 });
+    expect(p.members.map((x) => x.name)).toEqual(['Ana', 'Bea']);
+    // Sin cuenta uno de los dos: no hay pareja en el ranking.
+    pairs.map.clear();
+    delete docs.get('bea')!.userId;
+    await updateEloOnHandEnd(room, 0);
+    expect(pairs.map.size).toBe(0);
+  });
+
+  it('S4-09: primera partida de la temporada nueva → insignia y nivel reiniciado antes de calcular', async () => {
+    player('ana', { rating: 1300, games: 40, seasonId: '2020-T2', seasonPeak: 1300 });
+    player('cris', { seasonId: seasonId() });
+    await updateEloOnHandEnd(mkRoom({ 0: 'ana', 1: 'cris' }), 0);
+    const ana = docs.get('ana')!;
+    expect(ana.seasonId).toBe(seasonId());
+    expect(ana.seasonBadges).toEqual([{ season: '2020-T2', division: 'maestro' }]);
+    // Empezó en 1150 (no en 1300) y ganó.
+    expect(ana.rating).toBeGreaterThan(1150);
+    expect(ana.rating).toBeLessThan(1180);
+    expect(ana.seasonPeak).toBe(ana.rating);
+    const hist = repo.list.find((r) => r.playerId === 'ana')!;
+    expect(hist.ratingBefore).toBe(1150);
   });
 
   it('partida sin humanos en un equipo: no cuenta, no hay historial', async () => {

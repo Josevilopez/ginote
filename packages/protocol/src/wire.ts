@@ -176,6 +176,12 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     /** S3-05: a partir de cuánto esperando se completa con bots. */
     fillAfterMs: z.number().int().min(0).optional(),
   }),
+  /** S4-07: no puedes buscar partida hasta `until` (epoch ms) por abandonos repetidos. */
+  z.object({
+    type: z.literal('QUEUE_BLOCKED'),
+    until: z.number().int(),
+    reason: z.literal('abandons'),
+  }),
   z.object({
     type: z.literal('QUEUE_MATCHED'),
     roomCode: z.string(),

@@ -41,6 +41,21 @@ export interface Player {
   place?: { province: string; municipio: string | null } | null;
   /** S4-03: último cambio de `place` (ISO), para el límite de 30 días. */
   placeChangedAt?: string;
+  /** S4-04: nombre público en el ranking (el nombre en la mesa) y su etiqueta "#4821". */
+  publicName?: string;
+  tag?: string;
+  /** S4-04: última partida con ELO (ISO); el ranking pide haber jugado en 30 días. */
+  lastPlayedAt?: string;  /** S4-06: semana en curso (`2026-W43`), puntos de nivel ganados y partidas en ella. */
+  weekId?: string;
+  weekPoints?: number;
+  weekGames?: number;
+  /** S4-07: abandonos con ELO de las últimas 24 h (ISO) y castigo en vigor. */
+  abandons?: string[];
+  queueBanUntil?: string;
+  /** S4-09: temporada (`2026-T4`), mejor nivel en ella e insignias de las pasadas. */
+  seasonId?: string;
+  seasonPeak?: number;
+  seasonBadges?: { season: string; division: 'bronce' | 'plata' | 'oro' | 'maestro' | 'leyenda' }[];
 }
 
 /**
@@ -126,7 +141,7 @@ export async function ensurePlayer(
 export async function updatePlayerRating(
   cosmos: CosmosHandles,
   playerId: string,
-  patch: Partial<Pick<Player, 'rating' | 'games' | 'wins' | 'losses' | 'streak' | 'bestStreak'>>,
+  patch: Partial<Pick<Player, 'rating' | 'games' | 'wins' | 'losses' | 'streak' | 'bestStreak' | 'lastPlayedAt' | 'weekId' | 'weekPoints' | 'weekGames' | 'abandons' | 'queueBanUntil' | 'seasonId' | 'seasonPeak' | 'seasonBadges'>>,
 ): Promise<void> {
   const { resource } = await cosmos.players.item(playerId, playerId).read();
   if (!resource) {

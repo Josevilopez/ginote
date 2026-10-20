@@ -23,10 +23,12 @@ export function AccountBar({ onGivenName }: { onGivenName: (name: string) => voi
 
   // Con sesión abierta, si en este dispositivo aún te llamas "Jugador",
   // usamos tu nombre de pila (la portada decide si lo cambia).
+  // S4-04: en un dispositivo nuevo, mejor el nombre que ya usas en tu cuenta.
+  const publicName = useAccount((st) => st.stats?.publicName ?? null);
   useEffect(() => {
-    const first = me?.name?.trim().split(/\s+/)[0];
-    if (first) onNameRef.current(first);
-  }, [me?.name]);
+    const preferred = publicName ?? me?.name?.trim().split(/\s+/)[0];
+    if (preferred) onNameRef.current(preferred);
+  }, [me?.name, publicName]);
 
   // Al entrar con Google (desde aquí o desde la bienvenida), el nombre de pila.
   useEffect(() => onGoogleGivenName((given) => onNameRef.current(given)), []);

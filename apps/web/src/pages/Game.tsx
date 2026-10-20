@@ -103,6 +103,18 @@ export function Game() {
   const seatKinds = useGame((s) => s.seatKinds);
   const seatDeadlines = useGame((s) => s.seatDeadlines);
   const seatDivisions = useGame((s) => s.seatDivisions);
+  // S4-07: salir a mitad de una partida con rivales humanos (no privada)
+  // cuenta como derrota y suma un abandono: se pide confirmación.
+  const isPrivateRoom = useGame((s) => s.isPrivateRoom);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const leaveCounts =
+    !isPrivateRoom &&
+    !!view &&
+    you !== null &&
+    !view.matchEnded &&
+    !rematch &&
+    !matchEnded &&
+    [0, 1, 2, 3].some((s) => s % 2 !== you % 2 && (seatKinds[s] === 'human' || seatKinds[s] === 'disconnected'));
 
   // Drag & drop para reordenar la mano. `customOrder` es la permutación de
   // IDs en el orden actual; `null` = orden por defecto (palo + fuerza).
@@ -855,9 +867,33 @@ export function Game() {
             (móvil = código solo). */}
         <InviteButton code={roomCode} />
         <MuteButton />
-        <button className="btn small" onClick={leave}>Salir</button>
+        <button className="btn small" onClick={() => (leaveCounts ? setConfirmLeave(true) : leave())}>Salir</button>
       </header>
       <DivisionToast />
+      {confirmLeave && (
+        <div className="leave-backdrop" onClick={(e) => e.target === e.currentTarget && setConfirmLeave(false)}>
+          <div className="leave-confirm" role="alertdialog" aria-modal="true" aria-labelledby="leave-title">
+            <h2 id="leave-title">¿Salir de la partida?</h2>
+            <p>Si sales ahora, cuenta como <b>partida perdida</b> y un bot ocupa tu asiento.</p>
+            <p className="leave-small">Si abandonas 3 partidas en 24 horas, no podrás buscar partida online durante 5 minutos.</p>
+            <div className="leave-actions">
+              <button type="button" className="leave-stay" onClick={() => setConfirmLeave(false)} autoFocus>
+                Seguir jugando
+              </button>
+              <button
+                type="button"
+                className="leave-go"
+                onClick={() => {
+                  setConfirmLeave(false);
+                  leave();
+                }}
+              >
+                Salir igualmente
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Solo se renderiza el seat activo, en la celda de su posición.
           Cuando cambia el turno, el panel "salta" a otra celda. */}
