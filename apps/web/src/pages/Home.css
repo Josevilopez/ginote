@@ -347,6 +347,23 @@
   font-weight: 700;
   text-decoration: none;
 }
+.home-links { align-self: center; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.home-links .home-ranking { position: relative; }
+.home-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+}
 .home-ranking:hover { background: rgba(0, 0, 0, 0.2); }
 .home-ranking:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 .home-legal { margin: -8px 0 0; text-align: center; font-size: 13px; }

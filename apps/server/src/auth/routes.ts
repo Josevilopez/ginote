@@ -39,6 +39,8 @@ import {
   type PlayerRepo,
   type UserRepo,
 } from './accounts.js';
+import { forgetUser } from '../friends.js';
+import { pushRepo } from '../push.js';
 import { GoogleTokenError, verifyGoogleIdToken, type KeySource, googleKeys } from './google.js';
 import {
   SESSION_COOKIE,
@@ -400,7 +402,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
     const history = await recentFor([data.user.primaryPlayerId, ...data.user.linkedPlayerIds], 10_000, results()).catch(() => []);
     const myPairs = (await Promise.all([...new Set([data.user.primaryPlayerId, ...data.user.linkedPlayerIds])].map((id) => pairs().forPlayer(id).catch(() => [])))).flat();
     reply.header('Content-Disposition', 'attachment; filename="guinote-mis-datos.json"');
-    return { ...data, results: history, pairs: myPairs };
+    const pushDevices = await pushRepo(() => getCosmosHandles()?.pushSubs ?? null)
+      .list(s.uid)
+      .catch(() => []);
+    return { ...data, results: history, pairs: myPairs, pushDevices };
   });
 
   app.delete('/api/me', async (req, reply) => {
@@ -414,6 +419,11 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
         await pairs().removePlayer(id).catch((err) => req.log.error({ err }, '[parejas] no se pudo borrar'));
       }
     }
+    // S5-01: sale de las listas de amigos de los demás.
+    await pushRepo(() => getCosmosHandles()?.pushSubs ?? null)
+      .removeAll(s.uid)
+      .catch((err) => req.log.error({ err }, '[push] no se pudo borrar'));
+    await forgetUser(users, s.uid).catch((err) => req.log.error({ err }, '[amigos] no se pudo limpiar'));
     await deleteAccount(users, players, s.uid);
     clearCookies(req, reply);
     req.log.info(`[auth] cuenta borrada ${s.uid}`);

@@ -45,6 +45,8 @@ export interface PlayerRepo {
   delete(id: string): Promise<void>;
   /** S4-08: ¿otro jugador ya es "nombre#etiqueta"? (sin distinguir mayúsculas) */
   nameTaken(name: string, tag: string, exceptId: string): Promise<boolean>;
+  /** S5-01: player con cuenta cuyo código público es "nombre#etiqueta". */
+  findByNameTag(name: string, tag: string): Promise<LinkedPlayer | null>;
 }
 
 export function userIdForGoogle(sub: string): string {
@@ -194,6 +196,13 @@ export class MemoryPlayerRepo implements PlayerRepo {
     for (const p of this.map.values()) if (p.id !== exceptId && p.tag === tag && p.publicName?.toLowerCase() === n) return true;
     return false;
   }
+  async findByNameTag(name: string, tag: string) {
+    const n = name.toLowerCase();
+    for (const p of this.map.values()) {
+      if (p.tag === tag && p.publicName?.toLowerCase() === n && p.userId && !p.mergedInto) return structuredClone(p);
+    }
+    return null;
+  }
 }
 
 function isNotFound(err: unknown): boolean {
@@ -258,5 +267,18 @@ export class CosmosPlayerRepo implements PlayerRepo {
       })
       .fetchAll();
     return (resources[0] ?? 0) > 0;
+  }
+  async findByNameTag(name: string, tag: string) {
+    const { resources } = await this.c.items
+      .query<LinkedPlayer>({
+        query:
+          'SELECT TOP 1 * FROM c WHERE c.tag = @t AND LOWER(c.publicName) = @n AND IS_DEFINED(c.userId) AND NOT IS_DEFINED(c.mergedInto)',
+        parameters: [
+          { name: '@t', value: tag },
+          { name: '@n', value: name.toLowerCase() },
+        ],
+      })
+      .fetchAll();
+    return resources[0] ?? null;
   }
 }

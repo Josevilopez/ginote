@@ -45,6 +45,11 @@ export function Privacy({ onBack }: { onBack: () => void }) {
             <li>Tu nombre y tu email de Google, y un identificador de tu cuenta de Google.</li>
             <li>La fecha en que creaste la cuenta y la del último acceso.</li>
             <li>Tus partidas (con quién y contra quién jugaste, si ganaste y los puntos de nivel) y tus rachas.</li>
+            <li>Tu lista de amigos y las solicitudes de amistad. Tus amigos ven si estás conectado o jugando (no dónde ni con quién).</li>
+            <li>
+              Si activas los avisos: la dirección que da tu navegador para enviártelos (de Google, Apple o Mozilla, según el
+              navegador). Se borra al desactivarlos, al cerrar sesión o al borrar la cuenta.
+            </li>
           </ul>
           <p>
             Google solo nos dice quién eres; no vemos tu contraseña ni nada más de tu cuenta. Tu nombre de Google no lo ven

@@ -4,6 +4,7 @@ import './Home.css';
 import './Profile.css';
 import { DivisionBadge } from '../components/DivisionBadge.js';
 import { PlacePicker } from '../components/PlacePicker.js';
+import { PushSettings } from '../components/PushPrompt.js';
 import { DIVISIONS, PLACEMENT_GAMES, divisionFor, divisionName, nextDivision } from '@guinote/protocol';
 
 /**
@@ -122,6 +123,12 @@ export function Profile({ onBack }: { onBack: () => void }) {
         <section aria-labelledby="profile-place-title">
           <h2 id="profile-place-title" className="home-section">De dónde eres</h2>
           <PlacePicker />
+        </section>
+
+        {/* S5-02 */}
+        <section aria-labelledby="profile-push-title">
+          <h2 id="profile-push-title" className="home-section">Avisos</h2>
+          <PushSettings />
         </section>
 
         <section className="profile-account" aria-labelledby="profile-account-title">

@@ -5,6 +5,7 @@ import { WelcomeSheet } from '../components/WelcomeSheet.js';
 import { useAccount } from '../account.js';
 import { isOffensiveName } from '@guinote/protocol';
 import { useParty } from '../party.js';
+import { useFriends } from '../friends.js';
 import './Home.css';
 
 /**
@@ -33,6 +34,8 @@ export function Home() {
   }, [name]);
 
   const codeReady = joinInput.trim().length === 4;
+  // S5-01: solicitudes de amistad sin responder.
+  const pendingFriends = useFriends((s) => s.data?.incoming.length ?? 0);
 
   return (
     <div className="home">
@@ -93,9 +96,20 @@ export function Home() {
         </div>
 
         {/* S4-04 */}
-        <a className="home-ranking" href="#ranking">
-          🏆 Ver el ranking
-        </a>
+        <div className="home-links">
+          <a className="home-ranking" href="#ranking">
+            🏆 Ranking
+          </a>
+          {/* S5-01 */}
+          <a className="home-ranking" href="#amigos">
+            👥 Amigos
+            {pendingFriends > 0 && (
+              <span className="home-badge" aria-label={`${pendingFriends} solicitudes`}>
+                {pendingFriends}
+              </span>
+            )}
+          </a>
+        </div>
 
         {(error || partyError || accountError) && (
           <p className="home-error" role="alert">

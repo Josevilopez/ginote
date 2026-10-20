@@ -20,7 +20,10 @@ import {
   ensurePlayer,
   setPlayerCookie,
 } from './players.js';
-import { registerAuthRoutes, resolvePlayerId } from './auth/routes.js';
+import { authRepos, registerAuthRoutes, resolvePlayerId, sessionOf } from './auth/routes.js';
+import { registerFriendRoutes } from './friends.js';
+import { Pusher, initPushSender, pushRepo, registerPushRoutes } from './push.js';
+import { listRooms } from './rooms.js';
 import { initSessionSecret } from './auth/session.js';
 import { registerRateLimit } from './ratelimit.js';
 import { safeName } from './names.js';
@@ -47,6 +50,44 @@ await app.register(websocket);
 // S4-08: límites de peticiones por IP / cuenta.
 registerRateLimit(app);
 const sessionsOk = initSessionSecret(process.env, (m) => app.log.warn(m));
+// S5-01: amigos, presencia e invitaciones (su hook de presencia va antes
+// que el resto de rutas para que /api/me y compañía cuenten como "conectado").
+// S5-02: avisos push (solo si hay claves VAPID).
+const pushSetup = await initPushSender();
+if (!pushSetup) app.log.warn('[push] sin VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY: avisos push desactivados');
+const pushSubs = () => pushRepo(() => getCosmosHandles()?.pushSubs ?? null);
+const pusher = new Pusher(pushSubs, () => authRepos().users, pushSetup?.sender ?? null, (m, err) => app.log.error({ err }, m));
+registerPushRoutes(app, { sessionOf, users: () => authRepos().users, repo: pushSubs, publicKey: pushSetup?.publicKey ?? null });
+registerFriendRoutes(app, {
+  repos: authRepos,
+  notify: (to, kind, msg) => {
+    pusher.notify(to, kind, msg).catch((err) => app.log.error({ err }, '[push] fallo'));
+  },
+  sessionOf,
+  playingPlayerIds: () => {
+    const ids = new Set<string>();
+    for (const room of listRooms()) {
+      if (room.matchFinished) continue;
+      for (const p of room.players) if (p.playerId && p.token !== null && !p.substitute) ids.add(p.playerId);
+    }
+    return ids;
+  },
+  canInvite: (kind, code, fromPid) => {
+    if (kind === 'pareja') {
+      const party = getParty(code);
+      return !!party && party.members.length < 2 && !party.match && party.members.some((m) => m.playerId === fromPid);
+    }
+    const room = getRoom(code);
+    return (
+      !!room &&
+      room.isPrivate &&
+      room.state === null &&
+      !room.matchFinished &&
+      room.players.some((p) => p.token === null && !p.substitute) &&
+      room.players.some((p) => p.playerId === fromPid)
+    );
+  },
+});
 await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 
 /**
@@ -260,7 +301,10 @@ async function serveStatic(filePath: string, reply: import('fastify').FastifyRep
     reply.type(MIME[extname(filePath)] ?? 'application/octet-stream');
     // Cache en el cliente: 1 día. Los assets de Vite ya llevan hash
     // en el nombre (`index-ABCDEF.js`), así que cacheamos tranquilos.
-    reply.header('Cache-Control', 'public, max-age=86400');
+    // S5-02: el service worker y el manifest, sin caché (si no, un SW viejo
+    // podría quedarse hasta un día).
+    const base = filePath.split(/[\\/]/).pop();
+    reply.header('Cache-Control', base === 'sw.js' || base === 'manifest.webmanifest' ? 'no-cache' : 'public, max-age=86400');
     return reply.send(data);
   } catch {
     return reply.code(404).send('Not found');

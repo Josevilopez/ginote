@@ -1,0 +1,43 @@
+/* S5-02: tarjeta de avisos (Amigos) y sección del perfil. */
+.push-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(232, 196, 107, 0.55);
+  background: rgba(0, 0, 0, 0.25);
+}
+.push-card p,
+.push-settings p { margin: 0; font-size: 15px; line-height: 1.45; }
+.push-card b { color: var(--accent); }
+.push-card ol { margin: 0; padding-left: 22px; font-size: 15px; line-height: 1.6; }
+.push-card > div { display: flex; gap: 8px; }
+.push-card button,
+.push-toggle {
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.push-card .is-yes,
+.push-toggle.is-yes { flex: 1; border: none; background: var(--accent); color: #241a05; }
+.push-card .is-no,
+.push-toggle:not(.is-yes) { border: 1px solid rgba(255, 255, 255, 0.28); background: transparent; color: var(--fg-mute); }
+.push-card button:disabled,
+.push-toggle:disabled { opacity: 0.6; cursor: default; }
+.push-card button:focus-visible,
+.push-toggle:focus-visible,
+.push-prefs input:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.push-share { vertical-align: -3px; color: #8ec5ff; }
+.push-error { color: #ffb3a7; }
+
+.push-settings { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.push-state { color: var(--fg-mute); }
+.push-state.is-on { color: var(--ok); }
+.push-prefs { margin: 0; padding: 10px 12px; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 10px; display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+.push-prefs legend { padding: 0 4px; font-size: 14px; color: var(--fg-mute); }
+.push-prefs label { display: flex; align-items: center; gap: 10px; font-size: 16px; cursor: pointer; }
+.push-prefs input { width: 20px; height: 20px; accent-color: var(--accent); }

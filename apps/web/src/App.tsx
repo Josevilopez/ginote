@@ -7,6 +7,10 @@ import { Privacy } from './pages/Privacy.js';
 import { Ranking } from './pages/Ranking.js';
 import { Party } from './pages/Party.js';
 import { Searching } from './pages/Searching.js';
+import { Friends } from './pages/Friends.js';
+import { InviteToast } from './components/InviteToast.js';
+import { friendsRoute } from './friends.js';
+import { listenForPushClicks } from './push.js';
 import { partyCodeFromHash, useParty } from './party.js';
 import { ConnectionBanner } from './components/ConnectionBanner.js';
 
@@ -35,6 +39,9 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // S5-02: tocar un aviso con la web ya abierta → ir a donde dice.
+  useEffect(() => listenForPushClicks((code) => useGame.getState().joinRoom(code)), []);
+
   // S3-02: "Mi perfil" vive en `#perfil` (el botón Atrás del navegador
   // vuelve a la portada). Los códigos de sala son de 4 caracteres, así
   // que no chocan.
@@ -43,6 +50,8 @@ export function App() {
   const [onPrivacy, setOnPrivacy] = useState(() => window.location.hash === '#privacidad');
   // S4-04: ranking en `#ranking`.
   const [onRanking, setOnRanking] = useState(() => window.location.hash === '#ranking');
+  // S5-01: amigos en `#amigos` (o `#amigos/Nombre%231234` para añadir).
+  const [friends, setFriends] = useState(() => friendsRoute());
   // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
   const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
   const inParty = useParty((s) => s.saved !== null);
@@ -52,6 +61,7 @@ export function App() {
       setOnProfile(window.location.hash === '#perfil');
       setOnPrivacy(window.location.hash === '#privacidad');
       setOnRanking(window.location.hash === '#ranking');
+      setFriends(friendsRoute());
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
@@ -76,6 +86,13 @@ export function App() {
       setOnRanking(false);
     }
   }, []);
+  const closeFriends = useCallback(() => {
+    if (history.length > 1 && window.location.hash === '#amigos') history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setFriends(null);
+    }
+  }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
     setInviteCode(null);
@@ -93,6 +110,8 @@ export function App() {
         <Game />
       ) : onRanking ? (
         <Ranking onBack={closeRanking} />
+      ) : friends ? (
+        <Friends onBack={closeFriends} prefill={friends.code} />
       ) : onPrivacy ? (
         <Privacy onBack={closePrivacy} />
       ) : searching ? (
@@ -105,6 +124,7 @@ export function App() {
         <Home />
       )}
       {you !== null && <ConnectionBanner />}
+      <InviteToast />
     </main>
   );
 }

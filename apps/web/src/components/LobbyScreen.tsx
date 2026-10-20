@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useGame } from '../store.js';
+import { InviteFriends } from './InviteFriends.js';
 import './LobbyScreen.css';
 
 /**
@@ -183,6 +184,8 @@ export function LobbyScreen(): JSX.Element {
         )}
 
         {!full && roomCode && <InviteButton code={roomCode} secondary={amHost} />}
+        {/* S5-01: en una mesa privada, invitar a un amigo conectado. */}
+        {priv && !full && roomCode && <InviteFriends kind="mesa" code={roomCode} />}
       </div>
     </div>
   );

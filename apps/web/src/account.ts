@@ -6,6 +6,7 @@
  * (entrar, salir, descargar datos, borrar cuenta).
  */
 import { create } from 'zustand';
+import { forgetPushOnThisDevice } from './push.js';
 import { getPlayerName } from './store.js';
 
 export interface Me {
@@ -174,12 +175,15 @@ export const useAccount = create<AccountState>((set, get) => ({
   },
 
   async logout() {
+    // S5-02: en un dispositivo compartido, que no le lleguen tus avisos al siguiente.
+    await forgetPushOnThisDevice();
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
     window.google?.accounts.id.disableAutoSelect();
     set({ me: null, stats: null, place: null });
   },
 
   async deleteAccount() {
+    await forgetPushOnThisDevice();
     const r = await fetch('/api/me', { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
     if (!r || !r.ok) {
       set({ error: 'No se pudo borrar la cuenta. Inténtalo otra vez.' });

@@ -4,6 +4,7 @@ import { partyInviteUrl, useParty } from '../party.js';
 import { isOffensiveName } from '@guinote/protocol';
 import './Home.css';
 import './Party.css';
+import { InviteFriends } from '../components/InviteFriends.js';
 
 /**
  * S3-04: pantalla de la pareja. Tres momentos:
@@ -123,6 +124,8 @@ export function Party({ inviteCode, onClose }: { inviteCode: string | null; onCl
             <button type="button" className="home-choice is-main" onClick={() => void share()}>
               <b>{copied ? '¡Enlace copiado!' : 'Compartir enlace'}</b>
             </button>
+            {/* S5-01: o, sin enlaces, a un amigo conectado. */}
+            <InviteFriends kind="pareja" code={saved.code} />
           </div>
         )}
 
