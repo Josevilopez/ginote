@@ -105,6 +105,13 @@ export function App() {
       setPena(null);
     }
   }, []);
+  // Al unirse desde una invitación: se quita `#pareja-ABCD` pero se sigue en
+  // la pantalla de la pareja (no a la portada).
+  const joinedParty = useCallback(() => {
+    if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
+    setInviteCode(null);
+    setPartyClosed(false);
+  }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
     setInviteCode(null);
@@ -131,7 +138,7 @@ export function App() {
       ) : searching ? (
         <Searching />
       ) : showParty ? (
-        <Party inviteCode={inviteCode} onClose={closeParty} />
+        <Party inviteCode={inviteCode} onClose={closeParty} onJoined={joinedParty} />
       ) : onProfile ? (
         <Profile onBack={closeProfile} />
       ) : (

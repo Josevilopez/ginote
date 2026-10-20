@@ -3,6 +3,7 @@ import { useAccount } from '../account.js';
 import { FRIENDS_POLL_MS, useFriends } from '../friends.js';
 import { useGame } from '../store.js';
 import { usePena } from '../penas.js';
+import { useParty } from '../party.js';
 import '../pages/Friends.css';
 
 /**
@@ -45,7 +46,14 @@ export function InviteToast() {
 
   const accept = () => {
     void dismiss(inv.id);
-    if (inv.kind === 'pareja') window.location.hash = `#pareja-${inv.code}`;
+    // Ya ha dicho "Unirme": entra directamente, sin otra pantalla.
+    // Si estabas en otra pantalla (#amigos, #ranking…), se vuelve a la principal,
+    // que es donde se ve la pareja o la mesa.
+    if (window.location.hash) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    }
+    if (inv.kind === 'pareja') void useParty.getState().join(inv.code);
     else joinRoom(inv.code);
   };
 

@@ -88,19 +88,6 @@ export function Home() {
             <b>Jugar con mi pareja</b>
             <span>Invita a un amigo y os sentamos juntos, enfrente.</span>
           </button>
-          {/* S3-08: un toque elige nivel y empieza. */}
-          <div className="home-choice is-alt home-practice" role="group" aria-labelledby="home-practice-title">
-            <b id="home-practice-title">Practicar contra bots</b>
-            <span>Empiezas al momento. Elige el nivel:</span>
-            <div className="home-levels">
-              <button type="button" className="home-level" onClick={() => void createRoom('bots', 1)}>
-                Fácil
-              </button>
-              <button type="button" className="home-level is-default" onClick={() => void createRoom('bots', 2)}>
-                Normal
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* S4-04 */}
@@ -168,6 +155,19 @@ export function Home() {
             Entrar
           </button>
         </form>
+
+        {/* S3-08: practicar, discreto y abajo (un toque elige nivel y empieza). */}
+        <div className="home-practice" role="group" aria-labelledby="home-practice-title">
+          <span id="home-practice-title">Practicar contra bots</span>
+          <div className="home-levels">
+            <button type="button" className="home-level" onClick={() => void createRoom('bots', 1)}>
+              Fácil
+            </button>
+            <button type="button" className="home-level" onClick={() => void createRoom('bots', 2)}>
+              Normal
+            </button>
+          </div>
+        </div>
 
         <p className="home-rules">4 jugadores en 2 parejas. Gana la pareja que se lleve 3 partidas.</p>
         <p className="home-legal"><a href="#privacidad">Privacidad</a></p>

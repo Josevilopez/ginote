@@ -173,10 +173,21 @@ export class Pusher {
 export async function initPushSender(env: NodeJS.ProcessEnv = process.env): Promise<{ sender: PushSender; publicKey: string } | null> {
   const publicKey = env.VAPID_PUBLIC_KEY?.trim();
   const privateKey = env.VAPID_PRIVATE_KEY?.trim();
-  if (!publicKey || !privateKey) return null;
+  if (!publicKey || !privateKey) {
+    console.warn('[push] sin VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY: avisos push desactivados');
+    return null;
+  }
   const subject = env.VAPID_SUBJECT?.trim() && env.VAPID_SUBJECT.trim() !== 'mailto:' ? env.VAPID_SUBJECT.trim() : 'mailto:guinote@example.invalid';
-  const webpush = (await import('web-push')).default;
-  webpush.setVapidDetails(subject, publicKey, privateKey);
+  // Si algo falla aquí (claves mal copiadas, módulo ausente), el servidor
+  // debe arrancar igual: sin avisos push, pero arrancar.
+  let webpush: typeof import('web-push');
+  try {
+    webpush = (await import('web-push')).default;
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+  } catch (err) {
+    console.error(`[push] avisos desactivados: ${(err as Error).message}`);
+    return null;
+  }
   const sender: PushSender = async (sub, payload, opts) => {
     await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload, opts);
   };

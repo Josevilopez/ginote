@@ -5,6 +5,7 @@ import { isOffensiveName } from '@guinote/protocol';
 import './Home.css';
 import './Party.css';
 import { InviteFriends } from '../components/InviteFriends.js';
+import { useAccount } from '../account.js';
 
 /**
  * S3-04: pantalla de la pareja. Tres momentos:
@@ -13,8 +14,10 @@ import { InviteFriends } from '../components/InviteFriends.js';
  *  3. Los dos dentro: el líder busca partida; el otro espera. Al
  *     encontrar mesa, los dos entran solos (enfrente, mismo equipo).
  */
-export function Party({ inviteCode, onClose }: { inviteCode: string | null; onClose: () => void }) {
+export function Party({ inviteCode, onClose, onJoined }: { inviteCode: string | null; onClose: () => void; onJoined: () => void }) {
   const { saved, view, error, busy, join, poll, play, cancel, leave } = useParty();
+  // Con cuenta ya tienes nombre: no se pregunta (S5-01).
+  const accountName = useAccount((s) => (s.me ? (s.stats?.publicName ?? null) : null));
   const [name, setName] = useState(() => getPlayerName());
   const [copied, setCopied] = useState(false);
 
@@ -39,29 +42,35 @@ export function Party({ inviteCode, onClose }: { inviteCode: string | null; onCl
         <div className="home-inner">
           <h1 className="party-title">Te invitan a jugar de pareja</h1>
           <p className="party-lead">Os sentamos enfrente, en el mismo equipo, contra otra pareja o contra dos jugadores.</p>
-          <label className="home-name">
-            Tu nombre en la mesa
-            <input
-              type="text"
-              maxLength={20}
-              autoComplete="nickname"
-              spellCheck={false}
-              value={name}
-              onChange={(e) => setName(e.target.value.slice(0, 20))}
-            />
-          </label>
+          {accountName ? (
+            <p className="party-lead">
+              Jugarás como <b>{accountName}</b>.
+            </p>
+          ) : (
+            <label className="home-name">
+              Tu nombre en la mesa
+              <input
+                type="text"
+                maxLength={20}
+                autoComplete="nickname"
+                spellCheck={false}
+                value={name}
+                onChange={(e) => setName(e.target.value.slice(0, 20))}
+              />
+            </label>
+          )}
           <button
             type="button"
             className="home-choice is-main"
-            disabled={busy || isOffensiveName(name)}
+            disabled={busy || (!accountName && isOffensiveName(name))}
             onClick={() => {
-              setPlayerName(name);
-              void join(inviteCode!).then((ok) => ok && onClose());
+              setPlayerName(accountName ?? name);
+              void join(inviteCode!).then((ok) => ok && onJoined());
             }}
           >
             <b>Unirme a la pareja</b>
           </button>
-          {isOffensiveName(name) && <p className="home-error" role="alert">Ese nombre no está permitido. Elige otro.</p>}
+          {!accountName && isOffensiveName(name) && <p className="home-error" role="alert">Ese nombre no está permitido. Elige otro.</p>}
           {error && <p className="home-error" role="alert">{error}</p>}
           <button type="button" className="party-secondary" onClick={onClose}>
             Ahora no
@@ -119,8 +128,7 @@ export function Party({ inviteCode, onClose }: { inviteCode: string | null; onCl
 
         {!mate && (
           <div className="party-invite">
-            <p>Pásale este enlace a tu pareja:</p>
-            <code className="party-link">{url.replace(/^https?:\/\//, '')}</code>
+            <p>Invita a tu pareja con un enlace:</p>
             <button type="button" className="home-choice is-main" onClick={() => void share()}>
               <b>{copied ? '¡Enlace copiado!' : 'Compartir enlace'}</b>
             </button>

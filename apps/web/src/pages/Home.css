@@ -235,33 +235,34 @@
   outline-offset: 3px;
 }
 
-/* S3-08: "Practicar contra bots" con nivel. La tarjeta no es un botón;
-   los botones son Fácil / Normal y cada uno empieza la partida. */
-.home-choice.home-practice { cursor: default; }
-.home-choice.home-practice:active { transform: none; }
-.home-choice.home-practice:hover { background: rgba(0, 0, 0, 0.18); }
-.home-levels {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  width: 100%;
-  margin-top: 8px;
-}
-.home-level {
+/* S3-08: "Practicar contra bots", ahora discreto al final: una línea
+   con el texto y dos botones pequeños (cada uno empieza la partida). */
+.home-practice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(245, 240, 225, 0.2);
+}
+.home-practice > span { font-size: 15px; color: var(--fg-mute); }
+.home-levels { display: flex; gap: 8px; }
+.home-level {
+  padding: 7px 14px;
+  border-radius: 999px;
   font-family: inherit;
-  font-size: 17px;
-  font-weight: 800;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--fg);
-  background: rgba(245, 240, 225, 0.08);
-  border: 1px solid rgba(245, 240, 225, 0.28);
+  background: transparent;
+  border: 1px solid rgba(245, 240, 225, 0.3);
   cursor: pointer;
   transition: transform 0.08s, background 0.15s;
 }
-.home-level:hover { background: rgba(245, 240, 225, 0.14); }
+.home-level:hover { background: rgba(245, 240, 225, 0.1); }
 .home-level:active { transform: scale(0.97); }
-.home-level.is-default { border-color: var(--gold); color: var(--gold); }
 .home-level:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
 
 .home-error {

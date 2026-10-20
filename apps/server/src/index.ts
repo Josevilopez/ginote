@@ -56,7 +56,6 @@ const sessionsOk = initSessionSecret(process.env, (m) => app.log.warn(m));
 // que el resto de rutas para que /api/me y compañía cuenten como "conectado").
 // S5-02: avisos push (solo si hay claves VAPID).
 const pushSetup = await initPushSender();
-if (!pushSetup) app.log.warn('[push] sin VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY: avisos push desactivados');
 const pushSubs = () => pushRepo(() => getCosmosHandles()?.pushSubs ?? null);
 const pusher = new Pusher(pushSubs, () => authRepos().users, pushSetup?.sender ?? null, (m, err) => app.log.error({ err }, m));
 registerPushRoutes(app, { sessionOf, users: () => authRepos().users, repo: pushSubs, publicKey: pushSetup?.publicKey ?? null });
