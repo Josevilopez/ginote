@@ -526,7 +526,20 @@ function startMatchAndDeal(room: Room): void {
 export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
   clearAutoPlayTimer(room);
   if (room.state === null) return;
-  if (room.state.phase === 'finished') return;
+  if (room.state.phase === 'finished') {
+    // Red de seguridad: mano terminada. Lo normal es que quien resolvió la
+    // última baza programe `triggerNextHand` (≈11,5 s); si por algún camino
+    // no se hizo, la mesa se quedaba en "Contando el coto…" para siempre.
+    // `triggerNextHand` es idempotente, así que llamarlo de más no cuenta
+    // la partida dos veces.
+    if (!room.matchFinished && room.postgame === null) {
+      room.autoPlayTimer = setTimeout(() => {
+        room.autoPlayTimer = null;
+        triggerNextHand(room);
+      }, HAND_END_FALLBACK_MS);
+    }
+    return;
+  }
   const turn = room.state.turn;
   if (turn === null) return;
   const player = room.players[turn]!;
@@ -539,6 +552,9 @@ export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
     autoPlayForHuman(room, turn);
   }, delayMs);
 }
+
+/** Red de seguridad para repartir tras una mano terminada (ver `scheduleAutoPlay`). */
+export const HAND_END_FALLBACK_MS = 15_000;
 
 export function clearAutoPlayTimer(room: Room): void {
   if (room.autoPlayTimer) {
@@ -570,8 +586,24 @@ function autoPlayForHuman(room: Room, seat: Seat): void {
     }
   }
   console.log(`[autoPlay] seat=${seat} action=${JSON.stringify(action)} code=${room.code}`);
+  const before = room.state.finishedTricks.length;
   const ok = applyActionWithResolveEvent(room, seat, action);
   if (!ok) return;
+  const after = room.state.finishedTricks.length;
+  const last = after > before ? room.state.finishedTricks[after - 1] : undefined;
+  if (last?.hadLastTrick) {
+    // La carta automática cerró la mano (p. ej. un jugador que no tiró la
+    // última carta). Igual que cuando la tira un humano o un bot: pausa
+    // para ver la baza, GAME_OVER y siguiente mano. Antes nadie programaba
+    // `triggerNextHand` en este camino y la mesa se quedaba en
+    // "Contando el coto…".
+    emitAfterChange(room, { skipGameOver: true });
+    setTimeout(() => {
+      emitAfterChange(room);
+      setTimeout(() => triggerNextHand(room), 4500);
+    }, 7000);
+    return;
+  }
   emitAfterChange(room);
   // Tras el auto-play, pueden quedar bots por tirar. stepBots se
   // encargará; al final del bucle, scheduleAutoPlay (que se llama

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  HAND_END_FALLBACK_MS,
+  scheduleAutoPlay,
   abandonDuringPostgame,
   castRematchVote,
   createRoom,
@@ -95,6 +97,22 @@ describe('S3-06 partida rápida = 1 coto, revancha al final', () => {
     const st = last(inbox[0]!, 'REMATCH_STATUS') as { votes: Record<string, string>; matchWins: unknown };
     expect(st.votes).toEqual({ '0': 'pending', '1': 'pending', '2': 'yes', '3': 'yes' });
     expect(st.matchWins).toEqual({ 0: 2, 1: 3 });
+  });
+
+  it('red de seguridad: si nadie reparte tras la última partida del coto, se abre la votación igualmente', () => {
+    const { room } = mkRoom([0, 1]);
+    playPartida(room, 0);
+    playPartida(room, 0);
+    endPartida(room, 0); // tercera partida terminada… y nadie llama a triggerNextHand
+    scheduleAutoPlay(room);
+    vi.advanceTimersByTime(HAND_END_FALLBACK_MS - 1);
+    expect(room.postgame).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(room.matchWins).toEqual({ 0: 3, 1: 0 });
+    expect(room.postgame).not.toBeNull();
+    // Un triggerNextHand tardío no la cuenta dos veces.
+    triggerNextHand(room);
+    expect(room.matchWins).toEqual({ 0: 3, 1: 0 });
   });
 
   it('triggerNextHand repetido durante la votación NO cuenta la partida dos veces', () => {
