@@ -41,13 +41,18 @@ export function LobbyScreen(): JSX.Element {
   const filled = Math.min(lobby.seatsConnected, lobby.seatsTotal);
   const full = filled >= lobby.seatsTotal;
   const me = you ?? 0;
-  const priv = lobby.isPrivate;
+  // S5-05: cruce de torneo: sin anfitrión, sin formato ni invitaciones.
+  const tournament = lobby.tournament ?? null;
+  const priv = lobby.isPrivate && !tournament;
   const amHost = priv && lobby.hostSeat === me;
   const hostName = lobby.hostSeat !== null ? seatNames[lobby.hostSeat] || 'el anfitrión' : 'el anfitrión';
 
   let heading: string;
   let status: JSX.Element;
-  if (priv) {
+  if (tournament) {
+    heading = tournament;
+    status = full ? <>Estáis los cuatro. Repartiendo…</> : <>Empieza en cuanto estéis los cuatro. Faltan {4 - filled}.</>;
+  } else if (priv) {
     heading = 'Mesa privada';
     status = amHost
       ? picked !== null
@@ -183,7 +188,7 @@ export function LobbyScreen(): JSX.Element {
           </div>
         )}
 
-        {!full && roomCode && <InviteButton code={roomCode} secondary={amHost} />}
+        {!full && roomCode && !tournament && <InviteButton code={roomCode} secondary={amHost} />}
         {/* S5-01: en una mesa privada, invitar a un amigo conectado. */}
         {priv && !full && roomCode && <InviteFriends kind="mesa" code={roomCode} />}
       </div>

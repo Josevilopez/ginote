@@ -54,6 +54,8 @@ interface AccountState {
   place: PlaceView | null;
   /** S4-09. */
   season: SeasonView | null;
+  /** S5-05: torneos ganados. */
+  trophies: { torneoId: string; name: string; at: string }[];
   savePlace: (province: string | null, municipio: string | null) => Promise<boolean>;
   /** S4-04: guarda tu nombre en la mesa en la cuenta (es tu nombre en el ranking). */
   saveName: (name: string) => Promise<void>;
@@ -76,6 +78,7 @@ export const useAccount = create<AccountState>((set, get) => ({
   error: null,
   place: null,
   season: null,
+  trophies: [],
 
   async init() {
     if (initStarted) return;
@@ -88,9 +91,10 @@ export const useAccount = create<AccountState>((set, get) => ({
           player?: AccountState['stats'];
           place?: PlaceView;
           season?: SeasonView;
+          trophies?: AccountState['trophies'];
         }>,
       ]);
-      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null, place: me.place ?? null, season: me.season ?? null });
+      set({ status: 'ready', googleClientId: config.googleClientId, me: me.user, stats: me.player ?? null, place: me.place ?? null, season: me.season ?? null, trophies: me.trophies ?? [] });
       ensurePublicName();
     } catch {
       // Servidor viejo o sin red: la portada funciona igual, sin login.
@@ -102,8 +106,8 @@ export const useAccount = create<AccountState>((set, get) => ({
     try {
       const r = await fetch('/api/me', { credentials: 'same-origin' });
       if (!r.ok) return;
-      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView; season?: SeasonView };
-      set({ me: m.user, stats: m.player ?? null, place: m.place ?? null, season: m.season ?? null });
+      const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView; season?: SeasonView; trophies?: AccountState['trophies'] };
+      set({ me: m.user, stats: m.player ?? null, place: m.place ?? null, season: m.season ?? null, trophies: m.trophies ?? [] });
       ensurePublicName();
     } catch {
       // Sin red: nos quedamos con lo que había.

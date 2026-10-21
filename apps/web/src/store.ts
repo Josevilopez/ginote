@@ -58,6 +58,8 @@ interface State {
     isPrivate: boolean;
     /** S3-03: asiento del anfitrión. */
     hostSeat: number | null;
+    /** S5-05: mesa de un cruce de torneo ("Navidad · Final"). */
+    tournament?: string;
   } | null;
   /**
    * Hay una acción del usuario en vuelo: ya se envió al server pero aún
@@ -717,6 +719,7 @@ function connect(
           windowMs: msg.windowMs,
           isPrivate: msg.isPrivate ?? false,
           hostSeat: msg.hostSeat ?? null,
+          ...(msg.tournament ? { tournament: msg.tournament } : {}),
         },
         isPrivateRoom: msg.isPrivate ?? false,
         // Quién está sentado ya (la pantalla de espera pinta la mesa).

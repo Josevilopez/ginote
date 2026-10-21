@@ -76,8 +76,8 @@ describe('rutas', () => {
     // Repetir el mismo dispositivo no duplica.
     await app.inject({ method: 'POST', url: '/api/push/subscribe', headers: { cookie: c }, payload: { subscription: SUB(1) } });
     expect((await repo.list('g_0')).length).toBe(1);
-    expect((await app.inject({ url: '/api/push/prefs', headers: { cookie: c } })).json()).toEqual({ invite: true, request: true, devices: 1 });
-    expect((await app.inject({ method: 'PUT', url: '/api/push/prefs', headers: { cookie: c }, payload: { request: false } })).json()).toEqual({ invite: true, request: false });
+    expect((await app.inject({ url: '/api/push/prefs', headers: { cookie: c } })).json()).toEqual({ invite: true, request: true, reto: true, torneo: true, devices: 1 });
+    expect((await app.inject({ method: 'PUT', url: '/api/push/prefs', headers: { cookie: c }, payload: { request: false } })).json()).toEqual({ invite: true, request: false, reto: true, torneo: true });
     await app.inject({ method: 'POST', url: '/api/push/unsubscribe', headers: { cookie: c }, payload: { endpoint: SUB(1).endpoint } });
     expect(await repo.list('g_0')).toEqual([]);
   });

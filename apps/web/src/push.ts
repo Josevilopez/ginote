@@ -24,6 +24,10 @@ export type PushStatus =
 export interface PushPrefs {
   invite: boolean;
   request: boolean;
+  /** S5-04 (servidores viejos no lo mandan). */
+  reto?: boolean;
+  /** S5-05 */
+  torneo?: boolean;
 }
 
 interface PushState {

@@ -190,6 +190,8 @@ export interface Room {
    * anfitrión), fuera del matchmaking y sin ELO (partidas entre amigos).
    */
   isPrivate: boolean;
+  /** S5-05: mesa de un cruce de torneo (sin bots de relleno, empieza con los 4, sin revancha). */
+  tournament?: { torneoId: string; matchId: string; label: string };
   /**
    * S3-05: mesa formada por la cola de "Jugar online". Los asientos ya
    * están reservados; se reparte en cuanto conectan todos o al llegar
@@ -355,6 +357,7 @@ export function broadcastLobbyStatus(room: Room): void {
     isBot: room.players.map((p) => p.token === null),
     isPrivate: room.isPrivate,
     hostSeat: room.hostSeat,
+    ...(room.tournament ? { tournament: room.tournament.label } : {}),
   } as ServerMessage;
   for (const p of room.players) {
     if (p.ws && p.ws.readyState === 1) p.ws.send(JSON.stringify(msg));
@@ -375,6 +378,19 @@ export function broadcastLobbyStatus(room: Room): void {
  */
 export function scheduleLobbyCheck(room: Room): void {
   if (room.state !== null) return;
+  if (room.tournament) {
+    // S5-05: cruce de torneo. Sin cuenta atrás ni bots: se reparte cuando
+    // están los cuatro sentados y conectados.
+    clearLobbyTimer(room);
+    room.lobbyEndsAt = null;
+    const all = room.players.every((p) => p.token !== null && p.ws !== null && p.ws.readyState === 1);
+    if (all) {
+      startMatchAndDeal(room);
+      return;
+    }
+    broadcastLobbyStatus(room);
+    return;
+  }
   if (room.isPrivate) {
     // S3-03: en la mesa privada no hay cuenta atrás ni arranque
     // automático; solo se asegura que haya anfitrión y se avisa a todos.
@@ -625,6 +641,8 @@ export function applyActionWithResolveEvent(
     // Hook S2-17: actualizar ELO de los humanos al final de la partida.
     // Fire-and-forget: no bloqueamos la respuesta de la acción al cliente.
     void updateEloOnHandEnd(room, room.state.matchWinner);
+    // S5-04: avisar a quien escuche (retos entre peñas). También mesas privadas.
+    notifyPartidaEnd(room, room.state.matchWinner);
   }
   const after = room.state.finishedTricks.length;
   if (after > before) {
@@ -863,6 +881,11 @@ export function triggerNextHand(room: Room): void {
     room.matchWins = r.progress.partidas;
     room.cotoWins = r.progress.cotos;
     if (r.matchWinner !== null) {
+      // S5-05: en un cruce de torneo no hay revancha: se cierra y cuenta.
+      if (room.tournament) {
+        closeMatch(room, r.matchWinner, 'won');
+        return;
+      }
       // S3-06: se acabó la mesa (el coto en partida rápida, o el match a N
       // cotos en privada) → AHORA se pregunta la revancha.
       openPostgame(room);
@@ -1074,6 +1097,23 @@ function closeMatch(room: Room, winner: 0 | 1 | null, reason: MatchEndReason): v
   });
   console.log(`[match] ended code=${room.code} reason=${reason} champion=${winner ?? 'empate'} matchWins=${JSON.stringify(room.matchWins)}`);
   forgetRoom(room.code); // S2-14: match cerrado → nada que rehidratar
+  // S5-05: quien escuche (torneos).
+  const e: MatchEnd = { code: room.code, winner, reason, matchWins: { ...room.matchWins } };
+  if (room.tournament) e.tournament = room.tournament;
+  for (const fn of matchEndListeners) fn(e).catch((err) => console.log(`[match] listener falló: ${(err as Error).message}`));
+}
+
+export interface MatchEnd {
+  code: string;
+  winner: 0 | 1 | null;
+  reason: MatchEndReason;
+  matchWins: { 0: number; 1: number };
+  tournament?: { torneoId: string; matchId: string; label: string };
+}
+const matchEndListeners: ((e: MatchEnd) => Promise<unknown>)[] = [];
+/** S5-05: avisa al cerrarse cada mesa (fin del match). */
+export function onMatchEnd(fn: (e: MatchEnd) => Promise<unknown>): void {
+  matchEndListeners.push(fn);
 }
 
 /** ¿Todos los humanos sentados han votado `yes`? */
@@ -1530,6 +1570,36 @@ async function penalizeAbandon(
  *    pieza 4 si el usuario quiere histórico); solo actualizamos los
  *    ratings de los 4 humanos.
  */
+// ───────────── S5-04: fin de partida para otros módulos ─────────────
+
+export interface PartidaEnd {
+  code: string;
+  isPrivate: boolean;
+  /** playerIds de los humanos (no bots ni sustitutos) de cada equipo. */
+  teams: Record<0 | 1, string[]>;
+  winner: 0 | 1;
+}
+type PartidaEndListener = (e: PartidaEnd) => Promise<unknown>;
+const partidaEndListeners: PartidaEndListener[] = [];
+
+/** Registra quien quiera enterarse de cada partida terminada (p. ej. los retos). */
+export function onPartidaEnd(fn: PartidaEndListener): void {
+  partidaEndListeners.push(fn);
+}
+
+function notifyPartidaEnd(room: Room, winner: 0 | 1): void {
+  if (partidaEndListeners.length === 0) return;
+  const teams: Record<0 | 1, string[]> = { 0: [], 1: [] };
+  for (const p of room.players) {
+    if (p.token === null || p.substitute || !p.playerId) continue;
+    teams[(p.seat % 2) as 0 | 1].push(p.playerId);
+  }
+  const e: PartidaEnd = { code: room.code, isPrivate: room.isPrivate, teams, winner };
+  for (const fn of partidaEndListeners) {
+    fn(e).catch((err) => console.log(`[partida] listener falló: ${(err as Error).message}`));
+  }
+}
+
 export async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<void> {
   if (room.isPrivate) {
     console.log(`[elo] skip code=${room.code}: mesa privada (no cuenta para ELO)`);

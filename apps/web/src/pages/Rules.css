@@ -1,0 +1,33 @@
+/* "Cómo se juega". Hereda .privacy (texto) y .home (tapete). */
+.rules-index { display: flex; flex-wrap: wrap; gap: 6px; }
+.rules-index button {
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid rgba(245, 240, 225, 0.25);
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.rules-index button:hover { background: rgba(0, 0, 0, 0.3); }
+.rules-index button:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.rules section { scroll-margin-top: 16px; }
+.rules-summary { padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(232, 196, 107, 0.5); background: rgba(0, 0, 0, 0.2); }
+.rules-cards { list-style: none; padding: 0 !important; display: grid !important; grid-template-columns: repeat(5, 1fr); gap: 6px !important; }
+.rules-cards li { display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
+.rules-cards img { width: 100%; max-width: 64px; height: auto; border-radius: 5px; box-shadow: 0 3px 8px rgba(0, 0, 0, 0.4); }
+.rules-cards b { font-size: 14px; margin-top: 4px; }
+.rules-cards span { font-size: 13px; color: var(--gold); font-weight: 700; }
+.rules-order { padding: 8px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.22); font-weight: 700; text-align: center; letter-spacing: 0.02em; }
+.rules-note { padding-left: 12px; border-left: 3px solid var(--gold); color: var(--fg-mute); }
+.rules-note b { color: var(--fg); }
+.rules-steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.rules-steps li { font-size: 16px; line-height: 1.45; }
+.rules-glossary { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; }
+.rules-glossary dt { font-weight: 800; color: var(--gold); }
+.rules-glossary dd { margin: 0; font-size: 15px; line-height: 1.4; }
+@media (max-width: 380px) {
+  .rules-glossary { grid-template-columns: 1fr; gap: 2px; }
+  .rules-glossary dd { margin-bottom: 6px; }
+}

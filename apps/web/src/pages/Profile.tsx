@@ -13,7 +13,7 @@ import { DIVISIONS, PLACEMENT_GAMES, divisionFor, divisionName, nextDivision } f
  * Aquí viven también las acciones de la cuenta (salir, mis datos, borrar).
  */
 export function Profile({ onBack }: { onBack: () => void }) {
-  const { status, me, stats, error, init, refresh, logout, deleteAccount, season } = useAccount();
+  const { status, me, stats, error, init, refresh, logout, deleteAccount, season, trophies } = useAccount();
   const [confirmDelete, setConfirmDelete] = useState(false);
   // S4-01: últimas partidas (null = cargando o sin datos).
   const [history, setHistory] = useState<ResultRow[] | null>(null);
@@ -67,6 +67,23 @@ export function Profile({ onBack }: { onBack: () => void }) {
           <p className="season-line">
             Temporada <b>{season.name}</b> · termina el {season.ends}
           </p>
+        )}
+        {/* S5-05: torneos ganados. */}
+        {trophies.length > 0 && (
+          <section aria-labelledby="profile-trophies-title">
+            <h2 id="profile-trophies-title" className="home-section">Tus torneos</h2>
+            <ul className="profile-trophies">
+              {[...trophies].reverse().map((t) => (
+                <li key={t.torneoId}>
+                  <span aria-hidden="true">🏆</span>
+                  <span>
+                    <b>Campeón · {t.name}</b>
+                    <small>{new Date(t.at).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</small>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
         {season && season.badges.length > 0 && (
           <section aria-labelledby="profile-seasons-title">

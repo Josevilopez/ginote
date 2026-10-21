@@ -2,7 +2,7 @@
 
 **Goal**: jugar con *tu gente* sin pasar enlaces: amigos que ves conectados y a los que invitas con un toque, avisos aunque no tengan la web abierta, peñas con su ranking, retos entre peñas y torneos.
 
-**Estado a fecha 2026-10-20**: S5-01, S5-02 y S5-03 hechos (pendientes de probar en Azure). Siguiente: S5-04.
+**Estado a fecha 2026-10-21**: S5-01 a S5-05 hechos (S5-03, S5-04 y S5-05 pendientes de probar en Azure). Quedan los pendientes pequeños.
 
 ---
 
@@ -62,18 +62,37 @@
 - Web: pantalla `#pena` (crear, invitaciones recibidas, tu peña con ranking de temporada y de la semana, quién está conectado o jugando, invitar amigos, expulsar, salir) y vista previa del enlace. Botón "🍻 Peña" en la portada con el número de invitaciones.
 - Tests: `tests/penas.test.ts` (7).
 
-### S5-04 — Retos entre peñas — ~1,5 d
+### S5-04 — Retos entre peñas — ~1,5 d ✅
 - Una peña reta a otra: N partidas (p. ej. 10) durante una semana; cuentan las partidas online entre miembros de las dos peñas.
 - Marcador del reto en las dos páginas y aviso al empezar/terminar.
 
-### S5-05 — Torneos — ~3 d
+**Hecho (2026-10-21)**
+- Reglas: quien lleva la peña reta a otra a **5, 10 o 20 partidas**; la otra tiene **3 días** para aceptar; después hay **7 días**. Cuenta cada partida (mano completa) en la que en una pareja solo hay gente con cuenta de una peña y en la otra solo de la otra; los huecos pueden ser bots y valen también las mesas privadas. Termina al jugar las N o al acabar el plazo; gana la que más partidas se lleve (o empate). Máx. 3 retos abiertos por peña y uno con cada peña.
+- Server: `src/retos.ts`, contenedor nuevo `retos` (PK `/id`). `room.ts` avisa del fin de cada partida (`onPartidaEnd`) y se cuenta ahí. Barrido cada 10 min (y al arrancar) para cerrar retos vencidos. Búsqueda de peñas por nombre (sin tildes) con `nameKey`.
+- Rutas: `GET /api/penas/search?q=`, `POST /api/penas/retos`, `POST /api/penas/retos/:id/accept|decline|cancel`; los retos van dentro de `GET /api/penas/mine`.
+- Avisos push: os retan (a quien lleva la peña), empieza y termina (a todos los miembros). Nueva preferencia "Retos de tu peña".
+- Web: sección "Retos" en la página de la peña (marcador con barra, pendientes con Aceptar/No o Cancelar, últimos resultados, "⚔️ Retar a otra peña" con buscador y 5/10/20).
+- Tests: `tests/retos.test.ts` (4).
+
+### S5-05 — Torneos — ~3 d ✅
 - Torneos de parejas por eliminatorias: inscripción, cuadro, cruces a una hora fija (o "jugad cuando queráis antes del domingo"), resultado automático desde la partida, campeón con insignia.
-- Empezar con torneos creados por el administrador; después, que una peña pueda montar el suyo.
+- Empezar con torneos creados por el administrador; después, que una peña pueda montar el suyo. → Lo de las peñas queda para más adelante.
+
+**Hecho (2026-10-21)**
+- Admin = emails en `ADMIN_EMAILS`. Crea: nombre, 8 o 16 parejas, cruces a 1 partida o al mejor de 3, días por ronda (1, 2, 3 o 7) y fin de la inscripción.
+- Inscripción: apuntas a un amigo como pareja y él confirma (aviso push). Cualquiera de los dos puede borrarse mientras esté abierta.
+- Al cerrar la inscripción (barrido cada 10 min, o "Empezar ya" del admin): cuadro por nivel medio de la pareja con cabezas de serie y pases directos; si hay menos de 2 parejas, se cancela.
+- Cada ronda tiene fecha límite. "Ir a la mesa" crea la mesa del cruce y reserva tu silla (pareja A en 0-2, B en 1-3). La mesa empieza sola con los cuatro, sin bots de relleno ni revancha, no cuenta para el nivel y no se puede entrar con el código. El resultado se apunta solo al terminar (`onMatchEnd` en `room.ts`).
+- Plazo vencido sin jugar: pasa la pareja que se presentó (pulsó "Ir a la mesa"); si ninguna o las dos, sorteo. Si la mesa está en juego al vencer, se le deja acabar.
+- Campeón: insignia en "Tus torneos" del perfil de los dos (`trophies` en `users`) y aviso a todos.
+- Server: `src/torneos.ts`, contenedor nuevo `torneos` (PK `/id`), rutas `GET|POST /api/torneos`, `GET /api/torneos/:id`, `POST /api/torneos/:id/signup|confirm|withdraw|play|start|cancel`. Avisos push con su preferencia "Torneos".
+- Web: botón "🎖️ Torneos" en la portada, lista, página del torneo (inscripción, tu cruce con "Ir a la mesa", cuadro por rondas, campeones, botones del admin) y sala de espera del cruce.
+- Tests: `tests/torneos.test.ts` (9).
 
 ### Pendientes pequeños
 - ✅ Quitar `POST /api/rooms/matchmake` (salas de espera antiguas). Hecho 2026-10-20: borrados el endpoint y `findOrCreateMatchmakeRoom`; "Jugar online" usa solo la cola `/ws/matchmake`.
 - Application Insights en Azure (errores reales de móviles).
-- Página "Cómo se juega" con las reglas del guiñote aragonés.
+- ✅ Página "Cómo se juega" (`#reglas`, enlace en la portada): resumen, cartas con sus puntos, reparto y triunfo, bazas, arrastre, cantes y el siete, puntos (buenas/malas, vueltas, 10 de últimas), coto, trucos y glosario. Escrita según las reglas del motor (`GUINOTE_ARAGONES`). Hecho 2026-10-21.
 
 **Total estimado: ~9 días.**
 

@@ -19,12 +19,16 @@ import type { FastifyInstance } from 'fastify';
 import type { User, UserRepo } from './auth/accounts.js';
 import type { Session } from './auth/session.js';
 
-export type PushKind = 'invite' | 'request';
+export type PushKind = 'invite' | 'request' | 'reto' | 'torneo';
 export interface PushPrefs {
   invite: boolean;
   request: boolean;
+  /** S5-04: retos de tu peña (propuesta, empieza, termina). */
+  reto: boolean;
+  /** S5-05: torneos (te apuntan, os toca, campeón). */
+  torneo: boolean;
 }
-export const DEFAULT_PREFS: PushPrefs = { invite: true, request: true };
+export const DEFAULT_PREFS: PushPrefs = { invite: true, request: true, reto: true, torneo: true };
 export const MAX_DEVICES = 10;
 
 export interface PushSub {
@@ -259,7 +263,7 @@ export function registerPushRoutes(app: FastifyInstance, opts: PushRouteOptions)
     const user = await users.get(s.uid);
     if (!user) return reply.code(404).send({ error: 'Cuenta no encontrada' });
     const prefs = prefsOf(user);
-    for (const k of ['invite', 'request'] as const) if (typeof body[k] === 'boolean') prefs[k] = body[k] as boolean;
+    for (const k of ['invite', 'request', 'reto', 'torneo'] as const) if (typeof body[k] === 'boolean') prefs[k] = body[k] as boolean;
     await users.put({ ...user, pushPrefs: prefs } as User);
     return prefs;
   });

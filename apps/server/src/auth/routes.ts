@@ -166,6 +166,8 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
       // S4-03: de dónde eres.
       place: viewPlace(p?.place, p?.placeChangedAt),
       user: { name: user.name ?? null, email: user.email ?? null, since: user.createdAt },
+      // S5-05: torneos ganados.
+      trophies: (user as { trophies?: { torneoId: string; name: string; at: string }[] }).trophies ?? [],
       player: p
         ? {
             games: p.games,

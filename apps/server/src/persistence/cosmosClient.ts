@@ -44,6 +44,10 @@ export interface CosmosHandles {
   pushSubs: Container;
   /** S5-03: peñas (PK `/id`). Hay que crearlo en el portal. */
   penas: Container;
+  /** S5-04: retos entre peñas (PK `/id`). Hay que crearlo en el portal. */
+  retos: Container;
+  /** S5-05: torneos (PK `/id`). Hay que crearlo en el portal. */
+  torneos: Container;
 }
 
 export interface CosmosConfig {
@@ -92,8 +96,10 @@ export async function initCosmos(config: CosmosConfig): Promise<CosmosHandles> {
   const pairs = client.database(config.database).container('pairs');
   const pushSubs = client.database(config.database).container('pushSubs');
   const penas = client.database(config.database).container('penas');
+  const retos = client.database(config.database).container('retos');
+  const torneos = client.database(config.database).container('torneos');
   // Si quisieras crear la BD por código, sería aquí con
   //   await client.databases.createIfNotExists({ id: config.database })
   // pero eso requiere control plane RBAC, no data plane.
-  return { client, database: client.database(config.database), players, matches, snapshots, users, results, pairs, pushSubs, penas };
+  return { client, database: client.database(config.database), players, matches, snapshots, users, results, pairs, pushSubs, penas, retos, torneos };
 }

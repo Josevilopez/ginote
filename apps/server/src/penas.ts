@@ -21,12 +21,13 @@
  */
 import type { Container } from '@azure/cosmos';
 import type { FastifyInstance } from 'fastify';
-import { divisionFor, isOffensiveName, rolloverSeason, weekId, type Division } from '@guinote/protocol';
+import { divisionFor, isOffensiveName, rolloverSeason, searchKey, weekId, type Division } from '@guinote/protocol';
 import type { LinkedPlayer, PlayerRepo, User, UserRepo } from './auth/accounts.js';
 import type { Session } from './auth/session.js';
 import { displayName, type FriendStatus, type Presence } from './friends.js';
 import { municipioName } from './places.js';
 import type { PushKind, PushMessage } from './push.js';
+import { answerReto, proposeReto, retosOfPena, type RetoDeps, type RetoRepo, type RetoView } from './retos.js';
 
 export const MAX_MEMBERS = 50;
 export const MAX_PENA_INVITES = 10;
@@ -47,6 +48,8 @@ export interface Pena {
   /** Código del enlace para entrar (`#pena-CODIGO`). */
   code: string;
   createdAt: string;
+  /** S5-04: nombre sin tildes y en minúsculas, para buscar. */
+  nameKey?: string;
 }
 
 export type PenaUser = User & { penaId?: string; penaInvites?: string[] };
@@ -70,6 +73,8 @@ export interface PenaRepo {
   byCode(code: string): Promise<Pena | null>;
   put(p: Pena): Promise<void>;
   delete(id: string): Promise<void>;
+  /** S5-04: peñas cuyo nombre contiene `key` (ya pasado por `searchKey`). */
+  search(key: string, limit: number): Promise<Pena[]>;
 }
 
 export class MemoryPenaRepo implements PenaRepo {
@@ -87,6 +92,12 @@ export class MemoryPenaRepo implements PenaRepo {
   }
   async delete(id: string) {
     this.map.delete(id);
+  }
+  async search(key: string, limit: number) {
+    return [...this.map.values()]
+      .filter((p) => (p.nameKey ?? searchKey(p.name)).includes(key))
+      .slice(0, limit)
+      .map((p) => structuredClone(p));
   }
 }
 
@@ -108,7 +119,7 @@ export class CosmosPenaRepo implements PenaRepo {
     return resources[0] ? strip(resources[0]) : null;
   }
   async put(p: Pena) {
-    await this.c.items.upsert(p);
+    await this.c.items.upsert({ ...p, nameKey: searchKey(p.name) });
   }
   async delete(id: string) {
     try {
@@ -117,10 +128,22 @@ export class CosmosPenaRepo implements PenaRepo {
       if ((err as { code?: number }).code !== 404) throw err;
     }
   }
+  async search(key: string, limit: number) {
+    const { resources } = await this.c.items
+      .query<Pena>({
+        query: 'SELECT TOP @n * FROM c WHERE CONTAINS(c.nameKey, @k)',
+        parameters: [
+          { name: '@n', value: limit },
+          { name: '@k', value: key },
+        ],
+      })
+      .fetchAll();
+    return resources.map(strip);
+  }
 }
 
 function strip(p: Pena): Pena {
-  return { id: p.id, name: p.name, municipio: p.municipio ?? null, ownerId: p.ownerId, members: p.members, code: p.code, createdAt: p.createdAt };
+  return { id: p.id, name: p.name, municipio: p.municipio ?? null, ownerId: p.ownerId, members: p.members, code: p.code, createdAt: p.createdAt, nameKey: p.nameKey ?? searchKey(p.name) };
 }
 
 const memoryPenas = new MemoryPenaRepo();
@@ -171,6 +194,7 @@ export async function createPena(d: PenaDeps, meId: string, rawName: unknown, no
     members: [{ userId: meId, joinedAt: now.toISOString() }],
     code: await codeFree(d.penas),
     createdAt: now.toISOString(),
+    nameKey: searchKey(name),
   };
   await d.penas.put(pena);
   await d.users.put({ ...me, penaId: pena.id, penaInvites: [] } as User);
@@ -298,11 +322,15 @@ export interface PenaView {
   code: string;
   youAreOwner: boolean;
   members: PenaMemberView[];
+  /** S5-04: retos abiertos y los últimos terminados. */
+  retos: RetoView[];
 }
 
 export interface ViewCtx {
   presence: Presence;
   playingPlayerIds: () => Set<string>;
+  /** S5-04 (opcional en tests de peñas). */
+  retos?: () => RetoDeps;
 }
 
 function memberStats(p: LinkedPlayer | null, now: Date) {
@@ -339,6 +367,7 @@ export async function penaView(d: PenaDeps, ctx: ViewCtx, pena: Pena, meId: stri
     code: pena.code,
     youAreOwner: pena.ownerId === meId,
     members,
+    retos: ctx.retos ? await retosOfPena(ctx.retos(), pena.id, now).catch(() => []) : [],
   };
 }
 
@@ -350,10 +379,21 @@ export interface PenaRouteOptions {
   presence: Presence;
   playingPlayerIds: () => Set<string>;
   notify?: (toUserId: string, kind: PushKind, msg: PushMessage) => void;
+  /** S5-04: retos. Sin esto, no hay retos. */
+  retos?: () => RetoRepo;
 }
 
 export function registerPenaRoutes(app: FastifyInstance, opts: PenaRouteOptions): void {
+  const retoDeps = (): RetoDeps => {
+    const d: RetoDeps = { ...opts.deps(), retos: opts.retos!() };
+    if (opts.notify) {
+      const notify = opts.notify;
+      d.notify = (to, msg) => notify(to, 'reto', msg);
+    }
+    return d;
+  };
   const ctx: ViewCtx = { presence: opts.presence, playingPlayerIds: opts.playingPlayerIds };
+  if (opts.retos) ctx.retos = retoDeps;
   type Rep = { code: (n: number) => { send: (b: unknown) => unknown } };
   const err = (reply: Rep, o: { code: number; error: string }) => reply.code(o.code).send({ error: o.error });
 
@@ -447,6 +487,44 @@ export function registerPenaRoutes(app: FastifyInstance, opts: PenaRouteOptions)
     const s = opts.sessionOf(req);
     if (!s) return reply.code(401).send({ error: 'Sin sesión' });
     const r = await kickMember(opts.deps(), s.uid, req.params.userId);
+    if (!r.ok) return err(reply, r);
+    return mine(s.uid);
+  });
+
+  // ───── S5-04: retos ─────
+  app.get<{ Querystring: { q?: string } }>('/api/penas/search', async (req, reply) => {
+    const s = opts.sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    const key = searchKey(String(req.query.q ?? '')).slice(0, 30);
+    if (key.length < 2) return { results: [] };
+    const d = opts.deps();
+    const me = (await d.users.get(s.uid)) as PenaUser | null;
+    const found = await d.penas.search(key, 11).catch(() => []);
+    return {
+      results: found
+        .filter((p) => p.id !== me?.penaId)
+        .slice(0, 10)
+        .map((p) => ({ id: p.id, name: p.name, placeName: p.municipio ? municipioName(p.municipio) : null, members: p.members.length })),
+    };
+  });
+
+  app.post('/api/penas/retos', async (req, reply) => {
+    const s = opts.sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    if (!opts.retos) return reply.code(503).send({ error: 'Retos no disponibles' });
+    const body = (req.body ?? {}) as { toPenaId?: unknown; games?: unknown };
+    const r = await proposeReto(retoDeps(), s.uid, body.toPenaId, body.games);
+    if (!r.ok) return err(reply, r);
+    return mine(s.uid);
+  });
+
+  app.post<{ Params: { id: string; action: string } }>('/api/penas/retos/:id/:action', async (req, reply) => {
+    const s = opts.sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Sin sesión' });
+    if (!opts.retos) return reply.code(503).send({ error: 'Retos no disponibles' });
+    const action = req.params.action;
+    if (action !== 'accept' && action !== 'decline' && action !== 'cancel') return reply.code(404).send({ error: 'No existe' });
+    const r = await answerReto(retoDeps(), s.uid, req.params.id, action);
     if (!r.ok) return err(reply, r);
     return mine(s.uid);
   });

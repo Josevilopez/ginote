@@ -4,12 +4,15 @@ import { Home } from './pages/Home.js';
 import { Game } from './pages/Game.js';
 import { Profile } from './pages/Profile.js';
 import { Privacy } from './pages/Privacy.js';
+import { Rules } from './pages/Rules.js';
 import { Ranking } from './pages/Ranking.js';
 import { Party } from './pages/Party.js';
 import { Searching } from './pages/Searching.js';
 import { Friends } from './pages/Friends.js';
 import { Pena } from './pages/Pena.js';
 import { penaRoute } from './penas.js';
+import { Torneos } from './pages/Torneos.js';
+import { torneoRoute } from './torneos.js';
 import { InviteToast } from './components/InviteToast.js';
 import { friendsRoute } from './friends.js';
 import { listenForPushClicks } from './push.js';
@@ -50,12 +53,16 @@ export function App() {
   const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
   // S4-00: política de privacidad en `#privacidad`.
   const [onPrivacy, setOnPrivacy] = useState(() => window.location.hash === '#privacidad');
+  // "Cómo se juega" en `#reglas`.
+  const [onRules, setOnRules] = useState(() => window.location.hash === '#reglas');
   // S4-04: ranking en `#ranking`.
   const [onRanking, setOnRanking] = useState(() => window.location.hash === '#ranking');
   // S5-01: amigos en `#amigos` (o `#amigos/Nombre%231234` para añadir).
   const [friends, setFriends] = useState(() => friendsRoute());
   // S5-03: peña en `#pena` (o `#pena-CODIGO` para entrar en una).
   const [pena, setPena] = useState(() => penaRoute());
+  // S5-05: torneos en `#torneos` y `#torneo-<id>`.
+  const [torneo, setTorneo] = useState(() => torneoRoute());
   // S3-04: invitación de pareja (`#pareja-ABCD`) y grupo activo.
   const [inviteCode, setInviteCode] = useState(() => partyCodeFromHash());
   const inParty = useParty((s) => s.saved !== null);
@@ -64,9 +71,11 @@ export function App() {
     const onHash = () => {
       setOnProfile(window.location.hash === '#perfil');
       setOnPrivacy(window.location.hash === '#privacidad');
+      setOnRules(window.location.hash === '#reglas');
       setOnRanking(window.location.hash === '#ranking');
       setFriends(friendsRoute());
       setPena(penaRoute());
+      setTorneo(torneoRoute());
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
@@ -82,6 +91,13 @@ export function App() {
     else {
       history.replaceState(null, '', window.location.pathname + window.location.search);
       setOnPrivacy(false);
+    }
+  }, []);
+  const closeRules = useCallback(() => {
+    if (history.length > 1) history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setOnRules(false);
     }
   }, []);
   const closeRanking = useCallback(() => {
@@ -112,6 +128,13 @@ export function App() {
     setInviteCode(null);
     setPartyClosed(false);
   }, []);
+  const closeTorneo = useCallback(() => {
+    if (history.length > 1) history.back();
+    else {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      setTorneo(null);
+    }
+  }, []);
   const closeParty = useCallback(() => {
     if (partyCodeFromHash()) history.replaceState(null, '', window.location.pathname + window.location.search);
     setInviteCode(null);
@@ -129,10 +152,14 @@ export function App() {
         <Game />
       ) : onRanking ? (
         <Ranking onBack={closeRanking} />
+      ) : torneo ? (
+        <Torneos id={torneo.id} onBack={closeTorneo} />
       ) : pena ? (
         <Pena onBack={closePena} joinCode={pena.code} />
       ) : friends ? (
         <Friends onBack={closeFriends} prefill={friends.code} />
+      ) : onRules ? (
+        <Rules onBack={closeRules} />
       ) : onPrivacy ? (
         <Privacy onBack={closePrivacy} />
       ) : searching ? (

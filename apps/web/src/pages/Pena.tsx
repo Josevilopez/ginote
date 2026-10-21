@@ -4,6 +4,7 @@ import { useAccount } from '../account.js';
 import { STATUS_LABEL, useFriends } from '../friends.js';
 import { fetchPenaPreview, penaLink, usePena, type PenaMember, type PenaPreview, type PenaView } from '../penas.js';
 import { GoogleButton } from './Friends.js';
+import { Retos } from '../components/Retos.js';
 import './Home.css';
 import './Ranking.css';
 import './Friends.css';
@@ -233,6 +234,9 @@ function MyPena({ pena }: { pena: PenaView }) {
       </header>
 
       <InviteToPena pena={pena} />
+
+      {/* S5-04 */}
+      <Retos pena={pena} />
 
       <section aria-labelledby="pena-rank-title">
         <h2 id="pena-rank-title" className="friends-h2">

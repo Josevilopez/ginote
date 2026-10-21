@@ -1,0 +1,56 @@
+/* S5-05: torneos. Hereda .home, .ranking, .friends y estilos de retos. */
+.torneo-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.torneo-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(245, 240, 225, 0.18);
+  color: var(--fg);
+  text-decoration: none;
+}
+.torneo-item.is-open { border-color: rgba(232, 196, 107, 0.6); }
+.torneo-item.is-running { border-color: rgba(109, 219, 155, 0.5); }
+.torneo-item b { font-size: 18px; }
+.torneo-item small { color: var(--fg-mute); font-size: 14px; }
+.torneo-status { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-mute); }
+.torneo-item.is-open .torneo-status { color: var(--gold); }
+.torneo-item.is-running .torneo-status { color: var(--ok); }
+.torneo-mine { position: absolute; top: 10px; right: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(90, 160, 240, 0.25); color: #cfe3ff; font-size: 12px; font-weight: 700; }
+.torneo-item:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.torneo-create { margin-top: 4px; }
+.torneo-form label { display: flex; flex-direction: column; gap: 4px; font-weight: 700; }
+.torneo-choice { display: flex; flex-direction: column; gap: 4px; font-weight: 700; }
+.torneo-head { display: flex; flex-direction: column; gap: 4px; }
+.torneo-head .ranking-title { line-height: 1.1; overflow-wrap: anywhere; }
+.torneo-head p { margin: 0; color: var(--fg-mute); font-size: 15px; }
+.torneo-champion { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 14px; background: linear-gradient(135deg, rgba(232, 196, 107, 0.28), rgba(0, 0, 0, 0.2)); border: 1px solid var(--gold); }
+.torneo-champion > span { font-size: 38px; }
+.torneo-champion small { display: block; color: var(--fg-mute); text-transform: uppercase; letter-spacing: 0.06em; font-size: 12px; }
+.torneo-champion b { font-size: 20px; color: var(--gold); }
+.torneo-my { align-items: flex-start; }
+.torneo-next .home-choice { align-items: center; text-align: center; margin-top: 4px; }
+.torneo-next .home-choice b { display: block; text-align: center; }
+.torneo-next p { text-align: left !important; color: var(--fg) !important; }
+.torneo-next p.friends-small { color: var(--fg-mute) !important; font-size: 14px !important; }
+.torneo-select { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.25); background: #10261c; color: var(--fg); font-family: inherit; font-size: 16px; }
+.torneo-pairs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.torneo-pairs li { padding: 8px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.16); font-weight: 700; }
+.torneo-pairs li.is-you { background: rgba(90, 160, 240, 0.18); }
+.torneo-bracket { display: flex; flex-direction: column; gap: 14px; }
+.torneo-round { display: flex; flex-direction: column; gap: 6px; }
+.torneo-round h2 small { font-size: 13px; font-weight: 400; color: var(--fg-mute); }
+.torneo-round ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.torneo-match { display: flex; flex-direction: column; border-radius: 10px; overflow: hidden; border: 1px solid rgba(245, 240, 225, 0.15); background: rgba(0, 0, 0, 0.16); }
+.torneo-side { display: flex; justify-content: space-between; gap: 10px; padding: 7px 12px; font-size: 15px; color: var(--fg-mute); }
+.torneo-side + .torneo-side { border-top: 1px solid rgba(245, 240, 225, 0.1); }
+.torneo-side.is-win { color: var(--fg); font-weight: 800; }
+.torneo-side.is-win span::after { content: ' ✓'; color: var(--ok); }
+.torneo-side.is-you { background: rgba(90, 160, 240, 0.14); }
+.torneo-side b { font-variant-numeric: lining-nums tabular-nums; }
+.torneo-note { padding: 0 12px 6px; font-size: 12px; color: var(--fg-mute); }
+.torneo-admin { display: flex; gap: 8px; justify-content: center; margin-top: 6px; }
+.torneo-side small { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--fg-mute); }

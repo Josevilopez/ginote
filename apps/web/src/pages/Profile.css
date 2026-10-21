@@ -303,3 +303,10 @@
 .season-badges span { display: flex; flex-direction: column; line-height: 1.2; }
 .season-badges b { font-size: 16px; }
 .season-badges small { font-size: 13px; color: var(--fg-mute); }
+
+/* S5-05: torneos ganados */
+.profile-trophies { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.profile-trophies li { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(0, 0, 0, 0.2); border: 1px solid rgba(232, 196, 107, 0.45); }
+.profile-trophies li > span:first-child { font-size: 26px; }
+.profile-trophies b { display: block; color: var(--gold); }
+.profile-trophies small { color: var(--fg-mute); }

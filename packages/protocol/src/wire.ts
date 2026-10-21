@@ -254,6 +254,8 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
     isPrivate: z.boolean().optional(),
     /** S3-03: asiento del anfitrión de la mesa privada. */
     hostSeat: z.number().int().min(0).max(3).nullable().optional(),
+    /** S5-05: mesa de un cruce de torneo ("Torneo de Navidad · Semifinales"). */
+    tournament: z.string().optional(),
   }),
 ]);
 

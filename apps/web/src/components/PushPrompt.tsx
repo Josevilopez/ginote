@@ -145,6 +145,14 @@ export function PushSettings() {
             <input type="checkbox" checked={prefs.request} onChange={(e) => void savePrefs({ request: e.target.checked })} />
             Solicitudes de amistad y de peña
           </label>
+          <label>
+            <input type="checkbox" checked={prefs.reto ?? true} onChange={(e) => void savePrefs({ reto: e.target.checked })} />
+            Retos de tu peña
+          </label>
+          <label>
+            <input type="checkbox" checked={prefs.torneo ?? true} onChange={(e) => void savePrefs({ torneo: e.target.checked })} />
+            Torneos
+          </label>
         </fieldset>
       )}
 

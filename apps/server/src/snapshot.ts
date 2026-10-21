@@ -37,6 +37,8 @@ export interface RoomSnapshot {
   /** S3-07 (opcionales: snapshots anteriores → 1 coto a 3, sin cotos). */
   format?: { partidasPorCoto: number; cotosParaGanar: number };
   cotoWins?: { 0: number; 1: number };
+  /** S5-05 (opcional). */
+  tournament?: { torneoId: string; matchId: string; label: string };
 }
 
 /** null si la sala no merece snapshot (lobby sin repartir). */
@@ -65,6 +67,7 @@ export function serializeRoom(room: Room): RoomSnapshot | null {
     hostSeat: room.hostSeat,
     format: { ...room.format },
     cotoWins: { ...room.cotoWins },
+    ...(room.tournament ? { tournament: { ...room.tournament } } : {}),
   };
 }
 
@@ -121,5 +124,6 @@ export function roomFromSnapshot(snap: RoomSnapshot): Room {
     hostSeat: snap.hostSeat ?? null,
     format: snap.format ?? { partidasPorCoto: 3, cotosParaGanar: 1 },
     cotoWins: snap.cotoWins ? { ...snap.cotoWins } : { 0: 0, 1: 0 },
+    ...(snap.tournament ? { tournament: { ...snap.tournament } } : {}),
   };
 }

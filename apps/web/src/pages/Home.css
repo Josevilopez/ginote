@@ -379,3 +379,5 @@
   .home-fan img { width: 112px; margin-left: -56px; }
   .home-inner { gap: 18px; }
 }
+
+.home-rules a { color: var(--gold); font-weight: 700; white-space: nowrap; }

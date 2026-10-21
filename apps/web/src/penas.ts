@@ -20,6 +20,28 @@ export interface PenaMember {
   weekGames: number;
 }
 
+/** S5-04: un reto visto desde tu peña. */
+export interface RetoView {
+  id: string;
+  rivalId: string;
+  rivalName: string;
+  weChallenged: boolean;
+  games: number;
+  status: 'pending' | 'active' | 'finished' | 'declined' | 'cancelled' | 'expired';
+  us: number;
+  them: number;
+  endsAt: string | null;
+  expiresAt: string | null;
+  result: 'win' | 'lose' | 'draw' | null;
+}
+
+export interface PenaSearchResult {
+  id: string;
+  name: string;
+  placeName: string | null;
+  members: number;
+}
+
 export interface PenaView {
   id: string;
   name: string;
@@ -27,6 +49,7 @@ export interface PenaView {
   code: string;
   youAreOwner: boolean;
   members: PenaMember[];
+  retos?: RetoView[];
 }
 
 export interface PenaInvite {
@@ -55,6 +78,9 @@ interface PenaState {
   invite: (userId: string) => Promise<string | null>;
   kick: (userId: string) => Promise<void>;
   leave: () => Promise<void>;
+  /** S5-04 */
+  propose: (toPenaId: string, games: number) => Promise<boolean>;
+  answer: (retoId: string, action: 'accept' | 'decline' | 'cancel') => Promise<void>;
   clearError: () => void;
 }
 
@@ -110,6 +136,12 @@ export const usePena = create<PenaState>((set) => {
     async leave() {
       apply(await call('/api/penas/mine/leave', { method: 'POST' }));
     },
+    async propose(toPenaId, games) {
+      return apply(await call('/api/penas/retos', { method: 'POST', body: JSON.stringify({ toPenaId, games }) }));
+    },
+    async answer(retoId, action) {
+      apply(await call(`/api/penas/retos/${encodeURIComponent(retoId)}/${action}`, { method: 'POST' }));
+    },
     clearError() {
       set({ error: null });
     },
@@ -130,4 +162,9 @@ export function penaRoute(hash: string = window.location.hash): { code: string |
   if (hash === '#pena') return { code: null };
   const m = /^#pena-([A-Za-z0-9]{6,8})$/.exec(hash);
   return m ? { code: m[1]!.toUpperCase() } : null;
+}
+
+export async function searchPenas(q: string): Promise<PenaSearchResult[]> {
+  const r = await call(`/api/penas/search?q=${encodeURIComponent(q)}`);
+  return r.ok ? (r.body as { results: PenaSearchResult[] }).results : [];
 }

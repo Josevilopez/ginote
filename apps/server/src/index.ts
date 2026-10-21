@@ -9,7 +9,7 @@ import { ClientMessageSchema, rolloverSeason, type ServerMessage } from '@guinot
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, getRoom, setRoomStore } from './rooms.js';
-import { loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { onMatchEnd, reserveSeat, onPartidaEnd, loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { persistRoom, setSnapshotSink } from './persistHooks.js';
 import { isRoomSnapshot, roomFromSnapshot, serializeRoom } from './snapshot.js';
@@ -24,6 +24,8 @@ import { authRepos, registerAuthRoutes, resolvePlayerId, sessionOf } from './aut
 import { registerFriendRoutes } from './friends.js';
 import { Pusher, initPushSender, pushRepo, registerPushRoutes } from './push.js';
 import { penaMatesOf, penaRepo, registerPenaRoutes } from './penas.js';
+import { countPartida, retoRepo, sweepRetos, type RetoDeps } from './retos.js';
+import { recordTableResult, registerTorneoRoutes, sweepTorneos, torneoRepo, type TableOps, type TorneoDeps } from './torneos.js';
 import { presence } from './friends.js';
 import { listRooms } from './rooms.js';
 import { initSessionSecret } from './auth/session.js';
@@ -59,7 +61,7 @@ const pushSetup = await initPushSender();
 const pushSubs = () => pushRepo(() => getCosmosHandles()?.pushSubs ?? null);
 const pusher = new Pusher(pushSubs, () => authRepos().users, pushSetup?.sender ?? null, (m, err) => app.log.error({ err }, m));
 registerPushRoutes(app, { sessionOf, users: () => authRepos().users, repo: pushSubs, publicKey: pushSetup?.publicKey ?? null });
-const notifyPush = (to: string, kind: 'invite' | 'request', msg: import('./push.js').PushMessage) => {
+const notifyPush = (to: string, kind: import('./push.js').PushKind, msg: import('./push.js').PushMessage) => {
   pusher.notify(to, kind, msg).catch((err) => app.log.error({ err }, '[push] fallo'));
 };
 const playingPlayerIds = () => {
@@ -95,7 +97,66 @@ registerFriendRoutes(app, {
     );
   },
 });
-registerPenaRoutes(app, { sessionOf, deps: penaDeps, presence, playingPlayerIds, notify: notifyPush });
+// S5-04: retos entre peñas.
+const retos = () => retoRepo(() => getCosmosHandles()?.retos ?? null);
+const retoDeps = (): RetoDeps => ({ ...penaDeps(), retos: retos(), notify: (to, msg) => notifyPush(to, 'reto', msg) });
+registerPenaRoutes(app, { sessionOf, deps: penaDeps, presence, playingPlayerIds, notify: notifyPush, retos });
+onPartidaEnd(async (e) => {
+  const changed = await countPartida(retoDeps(), e.teams, e.winner);
+  for (const r of changed) app.log.info(`[retos] ${r.fromName} ${r.score.from}–${r.score.to} ${r.toName} (${r.status})`);
+});
+// S5-05: torneos. Mesas de los cruces sobre las salas normales.
+const tableOps: TableOps = {
+  open(t, match, label) {
+    const room = createRoomWithBots({ fillWithBots: false });
+    room.isPrivate = true; // no cuenta para el nivel ni castiga abandonos
+    room.tournament = { torneoId: t.id, matchId: match.id, label: `${t.name} · ${label}` };
+    room.format = { partidasPorCoto: t.partidas, cotosParaGanar: 1 };
+    app.log.info(`[torneo] mesa ${room.code} para ${t.name} ${match.id}`);
+    return room.code;
+  },
+  reserve(code, seat, who) {
+    const room = getRoom(code);
+    if (!room || room.matchFinished) return null;
+    const slot = room.players[seat]!;
+    // Ya es suya (otra pestaña, o vuelve tras caerse): mismo token.
+    if (slot.token !== null && slot.playerId === who.playerId) return slot.token;
+    if (room.state !== null) return null; // ya empezó y la silla es de otro (o de un bot)
+    const token = reserveSeat(room, seat, who);
+    scheduleLobbyCheck(room);
+    return token;
+  },
+  state(code) {
+    const room = getRoom(code);
+    if (!room || room.matchFinished) return 'none';
+    return room.state === null ? 'lobby' : 'playing';
+  },
+};
+const adminEmails = (process.env.ADMIN_EMAILS ?? '')
+  .split(',')
+  .map((x) => x.trim().toLowerCase())
+  .filter(Boolean);
+const torneoDeps = (): TorneoDeps => ({
+  ...authRepos(),
+  torneos: torneoRepo(() => getCosmosHandles()?.torneos ?? null),
+  tables: tableOps,
+  notify: (to, msg) => notifyPush(to, 'torneo', msg),
+  adminEmails,
+});
+registerTorneoRoutes(app, { sessionOf, deps: torneoDeps });
+onMatchEnd(async (e) => {
+  if (!e.tournament || e.winner === null) return;
+  const ok = await recordTableResult(torneoDeps(), e.tournament.torneoId, e.tournament.matchId, e.winner, [e.matchWins[0], e.matchWins[1]]);
+  app.log.info(`[torneo] resultado ${e.tournament.label} ${e.tournament.matchId}: equipo ${e.winner} (${ok ? 'anotado' : 'ignorado'})`);
+});
+
+// Cierra retos y rondas de torneo vencidos cada 10 min (y al arrancar, por si estaba escalado a 0).
+const sweep = async () => {
+  await sweepRetos(retoDeps()).catch((err) => app.log.error({ err }, '[retos] sweep falló'));
+  await sweepTorneos(torneoDeps()).catch((err) => app.log.error({ err }, '[torneos] sweep falló'));
+};
+setTimeout(sweep, 30_000).unref();
+setInterval(sweep, 10 * 60_000).unref();
 await registerAuthRoutes(app, sessionsOk ? {} : { googleClientId: null });
 
 /**
@@ -419,6 +480,12 @@ app.register(async (instance) => {
       // S2-12: quien abandonó (o no volvió en 45 s) no puede reclamar ni
       // ocupar otro asiento de esta mesa.
       send(socket, { type: 'ERROR', code: 'SEAT_LOST', message: 'Abandonaste esta partida; un bot ha ocupado tu asiento' });
+      socket.close();
+      return;
+    }
+    if (seat < 0 && room.tournament) {
+      // S5-05: a la mesa de un cruce solo se entra desde la página del torneo.
+      send(socket, { type: 'ERROR', code: 'SEAT_LOST', message: 'Esta mesa es de un cruce de torneo' });
       socket.close();
       return;
     }
