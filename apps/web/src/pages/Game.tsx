@@ -107,6 +107,8 @@ export function Game() {
   // cuenta como derrota y suma un abandono: se pide confirmación.
   const isPrivateRoom = useGame((s) => s.isPrivateRoom);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  // Montón de bazas abierto (equipo cuya última baza se está viendo), o null.
+  const [pileOpen, setPileOpen] = useState<0 | 1 | null>(null);
   const leaveCounts =
     !isPrivateRoom &&
     !!view &&
@@ -807,7 +809,8 @@ export function Game() {
               (raw > 50 ⇒ "(raw-50)") en blanco, y el de abajo en
               rojo. Eso es lo que el usuario llama "51 Buenas" cuando
               raw = 101 — y dispara MATCH_OVER inmediatamente. */}
-          <div className="score-team is-mine">
+          {/* En las idas no se canta el tanteo: el marcador solo se ve en las vueltas. */}
+          <div className={`score-team is-mine ${view.vuelta === 1 ? 'is-hidden' : ''}`} aria-hidden={view.vuelta === 1}>
             {(() => {
               const team = you % 2 as 0 | 1;
               const value = view.cumulativeTeamPts[team] ?? 0;
@@ -848,7 +851,7 @@ export function Game() {
               )}
             </span>
           </div>
-          <div className="score-team is-theirs">
+          <div className={`score-team is-theirs ${view.vuelta === 1 ? 'is-hidden' : ''}`} aria-hidden={view.vuelta === 1}>
             {(() => {
               const team = (1 - you % 2) as 0 | 1;
               const value = view.cumulativeTeamPts[team] ?? 0;
@@ -870,6 +873,15 @@ export function Game() {
         <button className="btn small" onClick={() => (leaveCounts ? setConfirmLeave(true) : leave())}>Salir</button>
       </header>
       <DivisionToast />
+      {pileOpen !== null && (
+        <LastTrickSheet
+          view={view}
+          team={pileOpen}
+          mine={pileOpen === you % 2}
+          nameOf={(seat) => (seat === you ? 'Tú' : seatNames[seat] || SEAT_LABELS[seat])}
+          onClose={() => setPileOpen(null)}
+        />
+      )}
       {confirmLeave && (
         <div className="leave-backdrop" onClick={(e) => e.target === e.currentTarget && setConfirmLeave(false)}>
           <div className="leave-confirm" role="alertdialog" aria-modal="true" aria-labelledby="leave-title">
@@ -1056,6 +1068,30 @@ export function Game() {
         {view.trumpCard && (
           <MazoArea trumpCard={view.trumpCard} />
         )}
+
+        {/* Montones de bazas ganadas (boca abajo), uno por equipo. Al
+            tocarlos se ve la última baza que se llevó ese equipo. */}
+        {([(you % 2) as 0 | 1, (1 - (you % 2)) as 0 | 1] as const).map((team) => {
+          const count = view.finishedTricks.filter((t) => t.winner % 2 === team).length;
+          if (count === 0) return null;
+          const mine = team === you % 2;
+          return (
+            <button
+              key={team}
+              type="button"
+              className={`trick-pile ${mine ? 'is-mine' : 'is-theirs'}`}
+              onClick={() => setPileOpen(team)}
+              aria-label={`Bazas de ${mine ? 'tu pareja' : 'los rivales'}: ${count}. Ver la última`}
+            >
+              <span className="trick-pile-stack" aria-hidden="true">
+                {Array.from({ length: Math.min(count, 3) }, (_, i) => (
+                  <img key={i} src="/cards/sprite/reverso.png" alt="" />
+                ))}
+              </span>
+              <span className="trick-pile-label">{mine ? 'Nosotros' : 'Ellos'}</span>
+            </button>
+          );
+        })}
 
         {/* Baza en rombo: cada carta va en la celda de su seat */}
         <div className="trick-area">
@@ -2132,6 +2168,56 @@ function MazoArea({ trumpCard }: { trumpCard: Card }) {
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Última baza que se llevó un equipo: las cuatro cartas en el orden en
+ * que se echaron, con quién echó cada una y la que ganó. Como en la mesa
+ * de verdad, solo se puede mirar la última de cada montón.
+ */
+function LastTrickSheet(props: {
+  view: PlayerView;
+  team: 0 | 1;
+  mine: boolean;
+  nameOf: (seat: Seat) => string;
+  onClose: () => void;
+}): JSX.Element | null {
+  const { view, team, mine, nameOf, onClose } = props;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const tricks = view.finishedTricks.filter((t) => t.winner % 2 === team);
+  const last = tricks[tricks.length - 1];
+  if (!last) return null;
+  return (
+    <div className="leave-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="last-trick" role="dialog" aria-modal="true" aria-labelledby="last-trick-title">
+        <h2 id="last-trick-title">Última baza de {mine ? 'tu pareja' : 'los rivales'}</h2>
+        <p className="last-trick-sub">
+          {mine ? 'Lleváis' : 'Llevan'} {tricks.length === 1 ? '1 baza' : `${tricks.length} bazas`} en esta mano.
+        </p>
+        <ol className="last-trick-cards">
+          {last.plays.map((p, i) => (
+            <li key={`${p.seat}-${p.card.id}`} className={p.seat === last.winner ? 'is-winner' : ''}>
+              <img
+                className="last-trick-img"
+                src={`/cards/sprite/${String(p.card.rank).padStart(2, '0')}-${p.card.suit}.png`}
+                alt={cardName(p.card)}
+              />
+              <span className="last-trick-who">{nameOf(p.seat)}</span>
+              {i === 0 && <span className="last-trick-tag">salió</span>}
+              {p.seat === last.winner && <span className="last-trick-tag is-win">ganó</span>}
+            </li>
+          ))}
+        </ol>
+        <button type="button" className="last-trick-close" onClick={onClose} autoFocus>
+          Cerrar
+        </button>
       </div>
     </div>
   );
