@@ -2,17 +2,75 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <!-- Sin viewport-fit=cover: con la app instalada en Android, Chrome dibujaba
+         la web por debajo de la barra de navegación del sistema (y sin avisar
+         del hueco), así que la mano quedaba cortada por abajo. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0d4f3c" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Guiñote" />
-    <title>Guiñote aragonés</title>
+    <!--page:start-->
+    <title>Guiñote aragonés online gratis · Juega por parejas</title>
+    <meta name="description" content="Juega al guiñote aragonés desde el móvil, gratis y sin descargar nada: con tu pareja, tu peña y tu pueblo. Ranking, retos entre peñas y torneos." />
+    <link rel="canonical" href="https://guinoteonline.es/" />
+    <meta property="og:url" content="https://guinoteonline.es/" />
+    <meta property="og:title" content="Guiñote aragonés online gratis" />
+    <meta property="og:description" content="El guiñote de toda la vida, en tu móvil. Por parejas, con tu peña y tu pueblo: ranking, retos y torneos." />
+    <!--page:end-->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Guiñote aragonés" />
+    <meta property="og:locale" content="es_ES" />
+    <meta property="og:image" content="https://guinoteonline.es/og.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Cartas de la baraja española sobre el tapete: Guiñote aragonés online" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://guinoteonline.es/og.jpg" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "name": "Guiñote aragonés online",
+            "url": "https://guinoteonline.es/",
+            "inLanguage": "es"
+          },
+          {
+            "@type": "VideoGame",
+            "name": "Guiñote aragonés online",
+            "url": "https://guinoteonline.es/",
+            "description": "El juego de cartas tradicional de Aragón, por parejas y online: partidas con rivales de tu nivel, pareja fija, peñas, retos, ranking por pueblo y torneos.",
+            "inLanguage": "es",
+            "genre": ["Juego de cartas", "Juego de mesa"],
+            "gamePlatform": ["Navegador web", "Android", "iPhone"],
+            "applicationCategory": "GameApplication",
+            "operatingSystem": "Web",
+            "playMode": ["MultiPlayer", "CoOp"],
+            "numberOfPlayers": { "@type": "QuantitativeValue", "minValue": 4, "maxValue": 4 },
+            "image": "https://guinoteonline.es/og.jpg",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" }
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><!--root:start-->
+      <main class="seo-splash">
+        <h1>Guiñote aragonés online</h1>
+        <p>El guiñote de toda la vida, ahora en tu móvil. Juega gratis por parejas: con rivales de tu nivel, con tu pareja de siempre, con tu peña y con los de tu pueblo.</p>
+        <ul>
+          <li>Partidas online en un toque, con bots si falta gente.</li>
+          <li>Mesas privadas y pareja fija para jugar con tus amigos.</li>
+          <li>Peñas, retos entre peñas, torneos y ranking de España, tu provincia y tu pueblo.</li>
+        </ul>
+        <p><a href="/como-se-juega">Cómo se juega al guiñote aragonés</a> · <a href="/privacidad">Privacidad</a></p>
+      </main>
+    <!--root:end--></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

@@ -100,3 +100,9 @@
 - **Push en iPhone**: depende de que añadan la web a la pantalla de inicio; los avisos dentro de la app siguen siendo la vía principal.
 - **Presencia en memoria**: con escala a 0 y una réplica es suficiente; con varias réplicas haría falta Redis.
 - **Torneos y horarios**: si alguien no se presenta, regla clara (gana el rival a los 10 minutos).
+
+## SEO y dominio (2026-10-22)
+- Dominio: **guinoteonline.es**. `CANONICAL_HOST=guinoteonline.es` redirige con 301 (solo páginas, no `/api` ni `/ws`) desde `www.` y desde `*.azurecontainerapps.io`.
+- `index.html`: título y descripción, canónica, Open Graph / Twitter con `og.jpg` (1200×630), JSON-LD (`WebSite` + `VideoGame` gratis) y un texto de presentación dentro de `#root` que leen los buscadores (React lo sustituye al arrancar).
+- Páginas con HTML ya generado al compilar: `/como-se-juega` y `/privacidad` (`src/prerender.tsx` + `scripts/prerender.mjs`, en `npm run build` de la web). La app las abre sin recargar (`src/nav.ts`); los `#reglas` / `#privacidad` siguen valiendo.
+- `robots.txt` y `sitemap.xml`. Servidor: compresión (`@fastify/compress`), `/assets` con caché de un año, HTML sin caché.

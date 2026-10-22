@@ -7,6 +7,7 @@ import { isOffensiveName } from '@guinote/protocol';
 import { useParty } from '../party.js';
 import { useFriends } from '../friends.js';
 import { usePena } from '../penas.js';
+import { PAGE_PRIVACY, PAGE_RULES, linkTo } from '../nav.js';
 import './Home.css';
 
 /**
@@ -175,9 +176,9 @@ export function Home() {
         </div>
 
         <p className="home-rules">
-          4 jugadores en 2 parejas. Gana la pareja que se lleve 3 partidas. <a href="#reglas">Cómo se juega</a>
+          4 jugadores en 2 parejas. Gana la pareja que se lleve 3 partidas. <a href={PAGE_RULES} onClick={linkTo(PAGE_RULES)}>Cómo se juega</a>
         </p>
-        <p className="home-legal"><a href="#privacidad">Privacidad</a></p>
+        <p className="home-legal"><a href={PAGE_PRIVACY} onClick={linkTo(PAGE_PRIVACY)}>Privacidad</a></p>
 
         {/* Primera visita: entrar con Google o seguir como invitado. */}
         <WelcomeSheet />

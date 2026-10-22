@@ -16,6 +16,7 @@ import { torneoRoute } from './torneos.js';
 import { InviteToast } from './components/InviteToast.js';
 import { friendsRoute } from './friends.js';
 import { listenForPushClicks } from './push.js';
+import { PAGE_PRIVACY, PAGE_RULES, closePage } from './nav.js';
 import { partyCodeFromHash, useParty } from './party.js';
 import { ConnectionBanner } from './components/ConnectionBanner.js';
 
@@ -52,9 +53,12 @@ export function App() {
   // que no chocan.
   const [onProfile, setOnProfile] = useState(() => window.location.hash === '#perfil');
   // S4-00: política de privacidad en `#privacidad`.
-  const [onPrivacy, setOnPrivacy] = useState(() => window.location.hash === '#privacidad');
+  // SEO: también en `/privacidad` y `/como-se-juega` (páginas con HTML propio).
+  const isPrivacyLoc = () => window.location.hash === '#privacidad' || window.location.pathname === PAGE_PRIVACY;
+  const isRulesLoc = () => window.location.hash === '#reglas' || window.location.pathname === PAGE_RULES;
+  const [onPrivacy, setOnPrivacy] = useState(isPrivacyLoc);
   // "Cómo se juega" en `#reglas`.
-  const [onRules, setOnRules] = useState(() => window.location.hash === '#reglas');
+  const [onRules, setOnRules] = useState(isRulesLoc);
   // S4-04: ranking en `#ranking`.
   const [onRanking, setOnRanking] = useState(() => window.location.hash === '#ranking');
   // S5-01: amigos en `#amigos` (o `#amigos/Nombre%231234` para añadir).
@@ -70,8 +74,8 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       setOnProfile(window.location.hash === '#perfil');
-      setOnPrivacy(window.location.hash === '#privacidad');
-      setOnRules(window.location.hash === '#reglas');
+      setOnPrivacy(isPrivacyLoc());
+      setOnRules(isRulesLoc());
       setOnRanking(window.location.hash === '#ranking');
       setFriends(friendsRoute());
       setPena(penaRoute());
@@ -79,13 +83,19 @@ export function App() {
       setInviteCode(partyCodeFromHash());
     };
     window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
+    window.addEventListener('popstate', onHash);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('popstate', onHash);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const closeProfile = useCallback(() => {
     history.replaceState(null, '', window.location.pathname + window.location.search);
     setOnProfile(false);
   }, []);
   const closePrivacy = useCallback(() => {
+    if (window.location.pathname === PAGE_PRIVACY) return closePage();
     // Si vienes de otra pantalla de la app (perfil, portada), vuelve atrás.
     if (history.length > 1) history.back();
     else {
@@ -94,6 +104,7 @@ export function App() {
     }
   }, []);
   const closeRules = useCallback(() => {
+    if (window.location.pathname === PAGE_RULES) return closePage();
     if (history.length > 1) history.back();
     else {
       history.replaceState(null, '', window.location.pathname + window.location.search);

@@ -1,9 +1,10 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import cors from '@fastify/cors';
+import compress from '@fastify/compress';
 import 'dotenv/config';
-import { readFile } from 'node:fs/promises';
-import { resolve as resolvePath, join, extname } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { resolve as resolvePath, join, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ClientMessageSchema, rolloverSeason, type ServerMessage } from '@guinote/protocol';
 import type { Seat } from '@guinote/engine';
@@ -48,6 +49,23 @@ type WsSocket = {
 const app = Fastify({ logger: true, trustProxy: true });
 
 await app.register(cors, { origin: true });
+// SEO / velocidad: gzip o brotli para HTML, JS, CSS y JSON (no toca los WebSockets).
+await app.register(compress, { global: true, threshold: 1024 });
+// SEO: un solo dominio. Con CANONICAL_HOST (p. ej. guinoteonline.es), las
+// páginas pedidas por otro host (www., el *.azurecontainerapps.io…) se
+// redirigen con 301. La API y los WebSockets no se tocan, para no romper
+// a quien ya tenga la web abierta.
+const canonicalHost = process.env.CANONICAL_HOST?.trim().toLowerCase() || null;
+if (canonicalHost) {
+  app.addHook('onRequest', async (req, reply) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return;
+    if (req.url.startsWith('/api') || req.url.startsWith('/ws') || req.url.startsWith('/healthz')) return;
+    const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? '';
+    const bare = host.split(':')[0]!.toLowerCase();
+    if (!bare || bare === canonicalHost || bare === 'localhost' || bare === '127.0.0.1') return;
+    return reply.redirect(`https://${canonicalHost}${req.url}`, 301);
+  });
+}
 await app.register(websocket);
 // S3-01: cuentas con Google (opcional). Sin GOOGLE_CLIENT_ID el login
 // queda desactivado y todo sigue funcionando como invitado.
@@ -339,7 +357,16 @@ const MIME: Record<string, string> = {
   '.webp': 'image/webp',
   '.woff2': 'font/woff2',
   '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8',
 };
+
+async function fileExists(p: string): Promise<boolean> {
+  try {
+    return (await stat(p)).isFile();
+  } catch {
+    return false;
+  }
+}
 
 async function serveStatic(filePath: string, reply: import('fastify').FastifyReply) {
   try {
@@ -349,8 +376,15 @@ async function serveStatic(filePath: string, reply: import('fastify').FastifyRep
     // en el nombre (`index-ABCDEF.js`), así que cacheamos tranquilos.
     // S5-02: el service worker y el manifest, sin caché (si no, un SW viejo
     // podría quedarse hasta un día).
-    const base = filePath.split(/[\\/]/).pop();
-    reply.header('Cache-Control', base === 'sw.js' || base === 'manifest.webmanifest' ? 'no-cache' : 'public, max-age=86400');
+    const base = filePath.split(/[\\/]/).pop() ?? '';
+    // Caché: los ficheros de Vite llevan hash en el nombre → un año; el
+    // HTML, el service worker y el manifest, siempre frescos; el resto, un día.
+    const cache = filePath.includes(`${sep}assets${sep}`)
+      ? 'public, max-age=31536000, immutable'
+      : base.endsWith('.html') || base === 'sw.js' || base === 'manifest.webmanifest'
+        ? 'no-cache'
+        : 'public, max-age=86400';
+    reply.header('Cache-Control', cache);
     return reply.send(data);
   } catch {
     return reply.code(404).send('Not found');
@@ -370,11 +404,24 @@ app.get<{ Params: { '*': string } }>('/*', async (req, reply) => {
   if (req.url.startsWith('/api') || req.url.startsWith('/ws') || req.url.startsWith('/healthz')) {
     return reply.code(404).send('Not found');
   }
-  const url = req.url.split('?')[0] ?? '/';
+  let url: string;
+  try {
+    url = decodeURIComponent(req.url.split('?')[0] ?? '/');
+  } catch {
+    return reply.code(400).send('Bad request');
+  }
+  // SEO: páginas públicas con su HTML ya generado (`/como-se-juega` →
+  // `dist/como-se-juega/index.html`). Solo nombres sencillos, sin `..`.
+  const page = /^\/([a-z0-9-]{1,40})\/?$/.exec(url);
+  if (page) {
+    const pre = join(WEB_DIST, page[1]!, 'index.html');
+    if (await fileExists(pre)) return serveStatic(pre, reply);
+  }
   const target =
     url === '/' || !url.includes('.')
       ? join(WEB_DIST, 'index.html')
       : join(WEB_DIST, url);
+  if (!target.startsWith(WEB_DIST)) return reply.code(404).send('Not found');
   return serveStatic(target, reply);
 });
 

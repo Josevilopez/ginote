@@ -9,3 +9,4 @@ coverage
 .vscode
 *.log
 deploy.md
+dist-ssr

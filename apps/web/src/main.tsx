@@ -9,5 +9,15 @@ import '@fontsource/alegreya-sans/400.css';
 import '@fontsource/alegreya-sans/700.css';
 import '@fontsource/alegreya-sans/800.css';
 
+// Alto real de la ventana. En algunas webs instaladas (PWA) de Android,
+// `100dvh` cuenta también la zona de la barra de navegación del sistema y
+// la parte de abajo (tu mano) quedaba tapada. `innerHeight` es lo que se ve.
+function setAppHeight(): void {
+  document.documentElement.style.setProperty('--app-h', `${window.innerHeight}px`);
+}
+setAppHeight();
+window.addEventListener('resize', setAppHeight);
+window.addEventListener('orientationchange', setAppHeight);
+
 const root = createRoot(document.getElementById('root')!);
 root.render(<App />);

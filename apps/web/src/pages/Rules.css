@@ -31,3 +31,5 @@
   .rules-glossary { grid-template-columns: 1fr; gap: 2px; }
   .rules-glossary dd { margin-bottom: 6px; }
 }
+.rules-cta { text-decoration: none; text-align: center; align-items: center; }
+.rules-cta b, .rules-cta span { display: block; text-align: center; }

@@ -4,7 +4,8 @@ import './Rules.css';
 
 /**
  * "Cómo se juega": las reglas del guiñote aragonés tal y como las aplica
- * esta mesa (ver `GUINOTE_ARAGONES` en el motor). Vive en `#reglas`.
+ * esta mesa (ver `GUINOTE_ARAGONES` en el motor). Vive en `/como-se-juega`
+ * (con HTML ya generado para los buscadores) y en `#reglas`.
  */
 const CARDS: { file: string; name: string; points: number }[] = [
   { file: '01-oros', name: 'As', points: 11 },
@@ -39,7 +40,7 @@ export function Rules({ onBack }: { onBack: () => void }) {
           Volver
         </button>
 
-        <h1 className="privacy-title">Cómo se juega</h1>
+        <h1 className="privacy-title">Cómo se juega al guiñote aragonés</h1>
         <p className="privacy-lead">El guiñote aragonés, como se juega en esta mesa. En cada pueblo hay algún matiz; aquí van las reglas que sigue el juego.</p>
 
         <nav className="rules-index" aria-label="Índice">
@@ -243,6 +244,11 @@ export function Rules({ onBack }: { onBack: () => void }) {
             <dd>Los diez puntos para quien gana la última baza.</dd>
           </dl>
         </section>
+
+        <a className="home-choice is-main rules-cta" href="/">
+          <b>¡A jugar!</b>
+          <span>Gratis, desde el móvil o el ordenador, sin descargar nada.</span>
+        </a>
 
         <p className="privacy-updated">
           Basado en las reglas tradicionales del guiñote aragonés. Si en tu pueblo se juega distinto, ¡cuéntanoslo!
