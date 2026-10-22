@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useGame } from '../store.js';
+import { useAccount } from '../account.js';
 import { CardView } from '../components/CardView.js';
 import { SuitGlyph } from '../components/SuitGlyph.js';
 import { LobbyScreen } from '../components/LobbyScreen.js';
@@ -1648,6 +1649,10 @@ export function Game() {
                 - match cerrado → motivo + volver al inicio.
                 - partida recién acabada, aún sin REMATCH_STATUS → espera.
                 - mano normal → el server reparte solo (auto-cadencia). */}
+            {/* Al terminar el coto: pedir amistad a los de la mesa (con cuenta). */}
+            {tableOver && (rematch || matchFinished) && roomCode && (
+              <BefriendRow roomCode={roomCode} nameOf={(seat) => seatLabel(seat as Seat)} />
+            )}
             <div className="summary-actions">
               {rematch ? (
                 <RematchPanel
@@ -2169,6 +2174,71 @@ function MazoArea({ trumpCard }: { trumpCard: Card }) {
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
         <img className="mazo-deck-card" src="/cards/sprite/reverso.png" alt="" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * "¿Otra otro día?": al terminar el coto, "Añadir amigo" junto a cada
+ * jugador de la mesa que tenga cuenta. El servidor dice a quién (sin
+ * enseñar su código) y manda la solicitud por el asiento.
+ */
+function BefriendRow({ roomCode, nameOf }: { roomCode: string; nameOf: (seat: number) => string }): JSX.Element | null {
+  const loggedIn = useAccount((s) => s.me !== null);
+  const [seats, setSeats] = useState<{ seat: number; relation: 'friends' | 'sent' | 'incoming' | 'none' }[] | null>(null);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loggedIn) return;
+    let alive = true;
+    fetch(`/api/friends/table/${encodeURIComponent(roomCode)}`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : { seats: [] }))
+      .then((d: { seats: { seat: number; relation: 'friends' | 'sent' | 'incoming' | 'none' }[] }) => alive && setSeats(d.seats))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [roomCode, loggedIn]);
+  if (!loggedIn || !seats || seats.length === 0) return null;
+
+  const add = async (seat: number) => {
+    setBusy(seat);
+    setError(null);
+    try {
+      const r = await fetch(`/api/friends/table/${encodeURIComponent(roomCode)}/${seat}`, { method: 'POST', credentials: 'same-origin' });
+      const body = (await r.json().catch(() => ({}))) as { status?: string; error?: string };
+      if (!r.ok) setError(body.error ?? 'No se pudo enviar');
+      else
+        setSeats((xs) =>
+          (xs ?? []).map((x) => (x.seat === seat ? { ...x, relation: body.status === 'friends' || body.status === 'already-friends' ? 'friends' : 'sent' } : x)),
+        );
+    } catch {
+      setError('Sin conexión');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="befriend">
+      <span className="befriend-title">¿Otra otro día?</span>
+      <ul>
+        {seats.map((x) => (
+          <li key={x.seat}>
+            <span className="befriend-name">{nameOf(x.seat)}</span>
+            {x.relation === 'friends' ? (
+              <span className="befriend-state">✓ Amigos</span>
+            ) : x.relation === 'sent' ? (
+              <span className="befriend-state">Solicitud enviada</span>
+            ) : (
+              <button type="button" disabled={busy === x.seat} onClick={() => void add(x.seat)}>
+                {x.relation === 'incoming' ? 'Aceptar amistad' : 'Añadir amigo'}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {error && <p className="befriend-error" role="alert">{error}</p>}
     </div>
   );
 }

@@ -181,3 +181,46 @@ describe('rutas', () => {
     expect(r.statusCode).toBe(409);
   });
 });
+
+describe('añadir amigo desde la mesa', () => {
+  it('solo ves a los de tu mesa con cuenta; la solicitud llega con aviso', async () => {
+    const w = await world(['Josevi', 'Pilar', 'Ramiro']);
+    await w.players.put({ ...freshPlayer('anon'), publicName: 'Invitado' }); // sin cuenta
+    const seats = [
+      { seat: 0, playerId: 'p_0' },
+      { seat: 1, playerId: 'p_1' },
+      { seat: 2, playerId: 'anon' },
+      { seat: 3, playerId: null }, // bot
+    ];
+    const app = Fastify();
+    const pushes: string[] = [];
+    registerFriendRoutes(app, {
+      repos: () => ({ users: w.users, players: w.players }),
+      sessionOf,
+      presence: new Presence(),
+      invites: new InviteBox(),
+      playingPlayerIds: () => new Set(),
+      canInvite: () => true,
+      tableSeats: (code) => (code === 'MESA' ? seats : null),
+      notify: (to, _k, m) => pushes.push(`${to}: ${m.body}`),
+    });
+    const c0 = cookieFor('g_0', 'p_0');
+    expect((await app.inject({ url: '/api/friends/table/mesa', headers: { cookie: c0 } })).json()).toEqual({ seats: [{ seat: 1, relation: 'none' }] });
+    // Alguien que no está sentado en la mesa no ve nada ni puede pedir.
+    const c2 = cookieFor('g_2', 'p_2');
+    expect((await app.inject({ url: '/api/friends/table/MESA', headers: { cookie: c2 } })).json()).toEqual({ seats: [] });
+    expect((await app.inject({ method: 'POST', url: '/api/friends/table/MESA/1', headers: { cookie: c2 } })).statusCode).toBe(403);
+    // Invitado sin cuenta y bot: no.
+    expect((await app.inject({ method: 'POST', url: '/api/friends/table/MESA/2', headers: { cookie: c0 } })).statusCode).toBe(404);
+    expect((await app.inject({ method: 'POST', url: '/api/friends/table/MESA/3', headers: { cookie: c0 } })).statusCode).toBe(404);
+    // A Pilar sí.
+    expect((await app.inject({ method: 'POST', url: '/api/friends/table/MESA/1', headers: { cookie: c0 } })).json()).toEqual({ status: 'sent' });
+    expect(pushes).toEqual(['g_1: Josevi quiere ser tu amigo en el guiñote']);
+    expect((await app.inject({ url: '/api/friends/table/MESA', headers: { cookie: c0 } })).json()).toEqual({ seats: [{ seat: 1, relation: 'sent' }] });
+    // Pilar lo ve como solicitud recibida y, si pide ella, quedan amigos.
+    const c1 = cookieFor('g_1', 'p_1');
+    expect((await app.inject({ url: '/api/friends/table/MESA', headers: { cookie: c1 } })).json()).toEqual({ seats: [{ seat: 0, relation: 'incoming' }] });
+    expect((await app.inject({ method: 'POST', url: '/api/friends/table/MESA/0', headers: { cookie: c1 } })).json()).toEqual({ status: 'friends' });
+    expect((await app.inject({ url: '/api/friends/table/nada', headers: { cookie: c1 } })).statusCode).toBe(404);
+  });
+});

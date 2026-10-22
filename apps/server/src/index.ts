@@ -97,6 +97,10 @@ registerFriendRoutes(app, {
   repos: authRepos,
   notify: notifyPush,
   penaMates: (meId) => penaMatesOf(penaDeps(), meId),
+  tableSeats: (code) => {
+    const room = getRoom(code);
+    return room ? room.players.map((p) => ({ seat: p.seat, playerId: p.playerId ?? null })) : null;
+  },
   sessionOf,
   playingPlayerIds,
   canInvite: (kind, code, fromPid) => {

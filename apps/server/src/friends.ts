@@ -149,9 +149,15 @@ export async function sendRequest(users: UserRepo, players: PlayerRepo & FindByN
   if (!target?.userId) return { ok: false, code: 404, error: 'No hay nadie con ese código. Revisa el nombre y los 4 números.' };
   const otherId = target.userId;
   if (otherId === meId) return { ok: false, code: 400, error: 'Ese es tu propio código 🙂' };
+  return sendRequestTo(users, meId, otherId);
+}
+
+/** Solicitud a una cuenta concreta (por código o desde la mesa). */
+export async function sendRequestTo(users: UserRepo, meId: string, otherId: string): Promise<RequestOutcome> {
+  if (otherId === meId) return { ok: false, code: 400, error: 'No puedes añadirte a ti mismo' };
   const me = (await users.get(meId)) as FUser | null;
   const other = (await users.get(otherId)) as FUser | null;
-  if (!me || !other) return { ok: false, code: 404, error: 'No hay nadie con ese código. Revisa el nombre y los 4 números.' };
+  if (!me || !other) return { ok: false, code: 404, error: 'Esa cuenta ya no existe' };
   if (me.friends?.includes(otherId)) return { ok: true, status: 'already-friends', friendId: otherId };
   // Te la había enviado él/ella: se acepta directamente.
   if (me.friendsIn?.includes(otherId)) return acceptBetween(users, me, other);
@@ -276,6 +282,44 @@ export async function friendsView(deps: ViewDeps, meId: string, now: number = Da
 
 // ───────────── Rutas ─────────────
 
+export type SeatRelation = 'friends' | 'sent' | 'incoming' | 'none';
+
+/** Quién está sentado en una mesa (asiento → playerId), o null si la mesa no existe. */
+export type TableSeats = (roomCode: string) => { seat: number; playerId: string | null }[] | null;
+
+/**
+ * Jugadores de la mesa a los que puedes pedir amistad (con cuenta, que no
+ * seas tú). Solo si tú estás sentado en ella. No se devuelve ningún dato
+ * de su cuenta: solo el asiento y la relación contigo.
+ */
+export async function tableRelations(
+  users: UserRepo,
+  players: PlayerRepo,
+  seats: { seat: number; playerId: string | null }[],
+  meId: string,
+  myPid: string,
+): Promise<{ seat: number; relation: SeatRelation }[] | null> {
+  if (!seats.some((x) => x.playerId === myPid)) return null;
+  const me = (await users.get(meId)) as FUser | null;
+  if (!me) return null;
+  const out: { seat: number; relation: SeatRelation }[] = [];
+  for (const { seat, playerId } of seats) {
+    if (!playerId || playerId === myPid) continue;
+    const p = await players.get(playerId).catch(() => null);
+    const uid = p?.userId;
+    if (!uid || uid === meId || p?.mergedInto) continue;
+    const relation: SeatRelation = me.friends?.includes(uid)
+      ? 'friends'
+      : me.friendsOut?.includes(uid)
+        ? 'sent'
+        : me.friendsIn?.includes(uid)
+          ? 'incoming'
+          : 'none';
+    out.push({ seat, relation });
+  }
+  return out;
+}
+
 export interface FriendRouteOptions {
   repos: () => AuthRepos & { players: PlayerRepo & FindByNameTag };
   sessionOf: typeof SessionOfFn;
@@ -286,6 +330,8 @@ export interface FriendRouteOptions {
   canInvite: (kind: InviteKind, code: string, fromPlayerId: string) => boolean;
   /** S5-03: compañeros de peña (se les puede invitar a jugar aunque no sean amigos). */
   penaMates?: (meId: string) => Promise<string[]>;
+  /** Asientos de una mesa (para "Añadir amigo" al terminar el coto). */
+  tableSeats?: TableSeats;
   /** S5-02: aviso push (best-effort, no se espera). */
   notify?: (toUserId: string, kind: PushKind, msg: PushMessage) => void;
 }
@@ -325,17 +371,49 @@ export function registerFriendRoutes(app: FastifyInstance, opts: FriendRouteOpti
     const { users, players } = opts.repos();
     const r = await sendRequest(users, players, s.uid, (req.body as { code?: unknown } | undefined)?.code);
     if (!r.ok) return reply.code(r.code).send({ error: r.error });
-    if (r.status === 'sent' && opts.notify) {
-      const me = await users.get(s.uid).catch(() => null);
-      const { name } = displayName(me ? await players.get(me.primaryPlayerId).catch(() => null) : null);
-      opts.notify(r.friendId, 'request', {
-        title: 'Solicitud de amistad',
-        body: `${name} quiere ser tu amigo en el guiñote`,
-        url: '/#amigos',
-        tag: `req-${s.uid}`,
-        ttl: 7 * 24 * 3600,
-      });
-    }
+    if (r.status === 'sent') await notifyRequest(s.uid, r.friendId);
+    return { status: r.status };
+  });
+
+  const notifyRequest = async (fromId: string, toId: string) => {
+    if (!opts.notify) return;
+    const { users, players } = opts.repos();
+    const me = await users.get(fromId).catch(() => null);
+    const { name } = displayName(me ? await players.get(me.primaryPlayerId).catch(() => null) : null);
+    opts.notify(toId, 'request', {
+      title: 'Solicitud de amistad',
+      body: `${name} quiere ser tu amigo en el guiñote`,
+      url: '/#amigos',
+      tag: `req-${fromId}`,
+      ttl: 7 * 24 * 3600,
+    });
+  };
+
+  // Al terminar el coto: a quién de la mesa puedes pedir amistad.
+  app.get<{ Params: { code: string } }>('/api/friends/table/:code', async (req, reply) => {
+    const s = opts.sessionOf(req);
+    if (!s) return { seats: [] };
+    const seats = opts.tableSeats?.(req.params.code.toUpperCase()) ?? null;
+    if (!seats) return reply.code(404).send({ error: 'Esa mesa ya no existe' });
+    const { users, players } = opts.repos();
+    const rel = await tableRelations(users, players, seats, s.uid, s.pid);
+    return { seats: rel ?? [] };
+  });
+
+  app.post<{ Params: { code: string; seat: string } }>('/api/friends/table/:code/:seat', async (req, reply) => {
+    const s = opts.sessionOf(req);
+    if (!s) return reply.code(401).send({ error: 'Inicia sesión para tener amigos' });
+    const seats = opts.tableSeats?.(req.params.code.toUpperCase()) ?? null;
+    if (!seats) return reply.code(404).send({ error: 'Esa mesa ya no existe' });
+    if (!seats.some((x) => x.playerId === s.pid)) return reply.code(403).send({ error: 'No estás en esa mesa' });
+    const seat = Number(req.params.seat);
+    const target = seats.find((x) => x.seat === seat);
+    const { users, players } = opts.repos();
+    const p = target?.playerId ? await players.get(target.playerId).catch(() => null) : null;
+    if (!p?.userId || p.mergedInto) return reply.code(404).send({ error: 'Ese jugador no tiene cuenta' });
+    const r = await sendRequestTo(users, s.uid, p.userId);
+    if (!r.ok) return reply.code(r.code).send({ error: r.error });
+    if (r.status === 'sent') await notifyRequest(s.uid, r.friendId);
     return { status: r.status };
   });
 
