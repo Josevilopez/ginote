@@ -18,6 +18,7 @@ import {
   legalPlaysFromView,
 } from '@guinote/engine';
 import type { Card, PlayerView, Seat, Suit } from '@guinote/engine';
+import { apiFetch } from '../api.js';
 
 const SUIT_NAME: Record<Suit, string> = {
   oros: 'Oros',
@@ -2191,7 +2192,7 @@ function BefriendRow({ roomCode, nameOf }: { roomCode: string; nameOf: (seat: nu
   useEffect(() => {
     if (!loggedIn) return;
     let alive = true;
-    fetch(`/api/friends/table/${encodeURIComponent(roomCode)}`, { credentials: 'same-origin' })
+    apiFetch(`/api/friends/table/${encodeURIComponent(roomCode)}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? r.json() : { seats: [] }))
       .then((d: { seats: { seat: number; relation: 'friends' | 'sent' | 'incoming' | 'none' }[] }) => alive && setSeats(d.seats))
       .catch(() => undefined);
@@ -2205,7 +2206,7 @@ function BefriendRow({ roomCode, nameOf }: { roomCode: string; nameOf: (seat: nu
     setBusy(seat);
     setError(null);
     try {
-      const r = await fetch(`/api/friends/table/${encodeURIComponent(roomCode)}/${seat}`, { method: 'POST', credentials: 'same-origin' });
+      const r = await apiFetch(`/api/friends/table/${encodeURIComponent(roomCode)}/${seat}`, { method: 'POST', credentials: 'same-origin' });
       const body = (await r.json().catch(() => ({}))) as { status?: string; error?: string };
       if (!r.ok) setError(body.error ?? 'No se pudo enviar');
       else

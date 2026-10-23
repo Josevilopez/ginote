@@ -40,6 +40,7 @@ import {
   type UserRepo,
 } from './accounts.js';
 import { forgetUser } from '../friends.js';
+import { cookieDomainFor, crossOrigin, requestHost } from '../crossOrigin.js';
 import { pushRepo } from '../push.js';
 import { leavePena, penaRepo } from '../penas.js';
 import { GoogleTokenError, verifyGoogleIdToken, type KeySource, googleKeys } from './google.js';
@@ -92,12 +93,42 @@ function isHttps(req: FastifyRequest): boolean {
   return proto === 'https';
 }
 
+/** S6-02: `Domain=` de las cookies para esta petición (null = solo el host). */
+export function cookieDomainOf(req: FastifyRequest): string | null {
+  return cookieDomainFor(requestHost(req.headers), crossOrigin());
+}
+
 function clearCookies(req: FastifyRequest, reply: FastifyReply): void {
   const secure = isHttps(req);
-  reply.header('Set-Cookie', [
-    cookieString(SESSION_COOKIE, '', 0, secure),
-    cookieString(PLAYER_COOKIE, '', 0, secure),
-  ]);
+  const domain = cookieDomainOf(req);
+  const out = [cookieString(SESSION_COOKIE, '', 0, secure), cookieString(PLAYER_COOKIE, '', 0, secure)];
+  // Las dos versiones: la antigua (solo del host) y la del dominio.
+  if (domain) out.push(cookieString(SESSION_COOKIE, '', 0, secure, domain), cookieString(PLAYER_COOKIE, '', 0, secure, domain));
+  reply.header('Set-Cookie', out);
+}
+
+/**
+ * S6-02, migración: con `COOKIE_DOMAIN` puesto, las cookies que se pusieron
+ * antes (solo para `guinoteonline.es`) se vuelven a escribir con el dominio,
+ * para que sigan valiendo en `api.guinoteonline.es` cuando la web se mude.
+ * Se hace en cada `/api/me` (la web lo llama al abrir): es barato e idempotente.
+ */
+function migrateCookies(req: FastifyRequest, reply: FastifyReply): void {
+  const domain = cookieDomainOf(req);
+  if (!domain) return;
+  const secure = isHttps(req);
+  const out: string[] = [];
+  const sid = readCookie(req.headers.cookie, SESSION_COOKIE);
+  const s = sid ? decodeSession(sid) : null;
+  if (sid && s) {
+    const left = s.exp - Math.floor(Date.now() / 1000);
+    if (left > 0) out.push(cookieString(SESSION_COOKIE, '', 0, secure), cookieString(SESSION_COOKIE, sid, left, secure, domain));
+  }
+  const pid = readCookie(req.headers.cookie, PLAYER_COOKIE);
+  if (pid && /^[A-Za-z0-9_-]{1,64}$/.test(pid)) {
+    out.push(cookieString(PLAYER_COOKIE, '', 0, secure), cookieString(PLAYER_COOKIE, pid, PLAYER_COOKIE_MAX_AGE, secure, domain));
+  }
+  if (out.length) reply.header('Set-Cookie', out);
 }
 
 export interface AuthRouteOptions {
@@ -126,6 +157,7 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
   app.get('/api/config', async () => ({ googleClientId: clientId }));
 
   app.get('/api/me', async (req, reply) => {
+    migrateCookies(req, reply);
     const s = sessionOf(req);
     if (!s) return { user: null };
     const { users, players } = repos();
@@ -216,9 +248,10 @@ export async function registerAuthRoutes(app: FastifyInstance, opts: AuthRouteOp
       return reply.code(500).send({ error: 'No se pudo guardar tu cuenta' });
     }
     const secure = isHttps(req);
+    const domain = cookieDomainOf(req);
     reply.header('Set-Cookie', [
-      cookieString(SESSION_COOKIE, encodeSession(newSession(result.user.userId, result.playerId)), SESSION_MAX_AGE_S, secure),
-      cookieString(PLAYER_COOKIE, result.playerId, PLAYER_COOKIE_MAX_AGE, secure),
+      cookieString(SESSION_COOKIE, encodeSession(newSession(result.user.userId, result.playerId)), SESSION_MAX_AGE_S, secure, domain),
+      cookieString(PLAYER_COOKIE, result.playerId, PLAYER_COOKIE_MAX_AGE, secure, domain),
     ]);
     req.log.info(`[auth] login ${result.user.userId} created=${result.created} merged=${result.merged}`);
     return {

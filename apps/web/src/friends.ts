@@ -5,6 +5,7 @@
  */
 import { create } from 'zustand';
 import type { Division } from '@guinote/protocol';
+import { apiFetch } from './api.js';
 
 export type FriendStatus = 'online' | 'playing' | 'offline';
 
@@ -67,7 +68,7 @@ export const useFriends = create<FriendsState>((set, get) => ({
 
   async refresh() {
     try {
-      const r = await fetch('/api/friends', { credentials: 'same-origin' });
+      const r = await apiFetch('/api/friends', { credentials: 'same-origin' });
       if (r.status === 401) return set({ data: null });
       if (!r.ok) return;
       const data = (await r.json()) as FriendsData;
@@ -80,7 +81,7 @@ export const useFriends = create<FriendsState>((set, get) => ({
 
   async request(code) {
     try {
-      const r = await fetch('/api/friends/request', { method: 'POST', credentials: 'same-origin', headers: json, body: JSON.stringify({ code }) });
+      const r = await apiFetch('/api/friends/request', { method: 'POST', credentials: 'same-origin', headers: json, body: JSON.stringify({ code }) });
       if (!r.ok) return { ok: false, message: await errorOf(r, 'No se pudo enviar. Inténtalo otra vez.') };
       const { status } = (await r.json()) as { status: 'sent' | 'friends' | 'already-friends' | 'already-sent' };
       await get().refresh();
@@ -99,19 +100,19 @@ export const useFriends = create<FriendsState>((set, get) => ({
   },
 
   async accept(id) {
-    await fetch(`/api/friends/${encodeURIComponent(id)}/accept`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+    await apiFetch(`/api/friends/${encodeURIComponent(id)}/accept`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
     await get().refresh();
   },
 
   async remove(id, how) {
     const url = `/api/friends/${encodeURIComponent(id)}${how === 'reject' ? '/reject' : ''}`;
-    await fetch(url, { method: how === 'reject' ? 'POST' : 'DELETE', credentials: 'same-origin' }).catch(() => null);
+    await apiFetch(url, { method: how === 'reject' ? 'POST' : 'DELETE', credentials: 'same-origin' }).catch(() => null);
     await get().refresh();
   },
 
   async invite(id, kind, code) {
     try {
-      const r = await fetch(`/api/friends/${encodeURIComponent(id)}/invite`, {
+      const r = await apiFetch(`/api/friends/${encodeURIComponent(id)}/invite`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: json,
@@ -125,7 +126,7 @@ export const useFriends = create<FriendsState>((set, get) => ({
 
   async dismiss(inviteId) {
     set({ dismissed: [...get().dismissed, inviteId] });
-    await fetch(`/api/invites/${encodeURIComponent(inviteId)}/dismiss`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
+    await apiFetch(`/api/invites/${encodeURIComponent(inviteId)}/dismiss`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
   },
 
   clear() {

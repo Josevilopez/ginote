@@ -5,6 +5,7 @@ import './Profile.css';
 import { DivisionBadge } from '../components/DivisionBadge.js';
 import { PlacePicker } from '../components/PlacePicker.js';
 import { PushSettings } from '../components/PushPrompt.js';
+import { apiUrl } from '../api.js';
 import { DIVISIONS, PLACEMENT_GAMES, divisionFor, divisionName, nextDivision } from '@guinote/protocol';
 
 /**
@@ -152,7 +153,7 @@ export function Profile({ onBack }: { onBack: () => void }) {
           <h2 id="profile-account-title" className="home-section">Cuenta</h2>
           <div className="profile-actions">
             <button type="button" onClick={() => void logout()}>Cerrar sesión</button>
-            <a href="/api/me/data" download="guinote-mis-datos.json">Descargar mis datos</a>
+            <a href={apiUrl('/api/me/data')} download="guinote-mis-datos.json">Descargar mis datos</a>
             <a href="#privacidad">Privacidad: qué guardamos</a>
             {!confirmDelete ? (
               <button type="button" className="is-danger" onClick={() => setConfirmDelete(true)}>

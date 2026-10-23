@@ -102,9 +102,11 @@ export function readCookie(header: string | undefined, name: string): string | n
   return null;
 }
 
-/** Valor para `Set-Cookie`. `maxAge` 0 borra la cookie. */
-export function cookieString(name: string, value: string, maxAgeS: number, secure: boolean): string {
+/** Valor para `Set-Cookie`. `maxAge` 0 borra la cookie (con el mismo `domain` con que se puso). */
+export function cookieString(name: string, value: string, maxAgeS: number, secure: boolean, domain: string | null = null): string {
   const flags = [`${name}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeS}`];
+  // S6-02: con `Domain=.guinoteonline.es` la cookie vale también en `api.`.
+  if (domain) flags.push(`Domain=${domain}`);
   if (secure) flags.push('Secure');
   return flags.join('; ');
 }

@@ -7,6 +7,7 @@
  * no deja volver a preguntar.
  */
 import { create } from 'zustand';
+import { apiFetch } from './api.js';
 
 export type PushStatus =
   | 'loading'
@@ -65,7 +66,7 @@ let publicKey: string | null | undefined;
 async function serverKey(): Promise<string | null> {
   if (publicKey !== undefined) return publicKey;
   try {
-    const r = await fetch('/api/push/config');
+    const r = await apiFetch('/api/push/config');
     publicKey = r.ok ? ((await r.json()) as { publicKey: string | null }).publicKey : null;
   } catch {
     return null; // sin red: se reintenta la próxima vez
@@ -79,7 +80,7 @@ async function currentSubscription(): Promise<PushSubscription | null> {
 }
 
 async function sendToServer(sub: PushSubscription): Promise<boolean> {
-  const r = await fetch('/api/push/subscribe', {
+  const r = await apiFetch('/api/push/subscribe', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
@@ -147,14 +148,14 @@ export const usePush = create<PushState>((set, get) => ({
   },
 
   async loadPrefs() {
-    const r = await fetch('/api/push/prefs', { credentials: 'same-origin' }).catch(() => null);
+    const r = await apiFetch('/api/push/prefs', { credentials: 'same-origin' }).catch(() => null);
     if (r?.ok) set({ prefs: (await r.json()) as PushPrefs });
   },
 
   async savePrefs(p) {
     const prev = get().prefs;
     if (prev) set({ prefs: { ...prev, ...p } });
-    const r = await fetch('/api/push/prefs', {
+    const r = await apiFetch('/api/push/prefs', {
       method: 'PUT',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -171,7 +172,7 @@ export async function forgetPushOnThisDevice(): Promise<void> {
   try {
     const sub = await currentSubscription();
     if (!sub) return;
-    await fetch('/api/push/unsubscribe', {
+    await apiFetch('/api/push/unsubscribe', {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

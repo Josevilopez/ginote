@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ClientMessage, Division, ServerMessage } from '@guinote/protocol';
 import type { Action, Card, PlayerView } from '@guinote/engine';
+import { apiFetch, wsUrl } from './api.js';
 
 interface PartidaScore {
   buenas: { '0': number; '1': number };
@@ -234,9 +235,8 @@ function stopQueue(): void {
 
 function startQueue(set: (p: Partial<State>) => void, get: () => State): void {
   stopQueue();
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   const params = new URLSearchParams({ name: getPlayerName() });
-  const ws = new WebSocket(`${proto}://${window.location.host}/ws/matchmake?${params.toString()}`);
+  const ws = new WebSocket(wsUrl(`/ws/matchmake?${params.toString()}`));
   queueWs = ws;
   set({ queue: { waitedMs: 0, players: 1, fillAfterMs: 20_000 }, error: null });
   ws.onmessage = (e) => {
@@ -467,7 +467,7 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
           // S2-15: solo volvemos si la sala sigue viva y el asiento sigue
           // siendo nuestro. Si no (sala cerrada, server reiniciado, un bot
           // ocupó el asiento), la olvidamos y vamos al matchmaking normal.
-          const stillMine = await fetch(
+          const stillMine = await apiFetch(
             `/api/rooms/${lastCode}/seat?token=${encodeURIComponent(lastToken)}`,
           )
             .then((r) => (r.ok ? (r.json() as Promise<{ ok?: boolean }>) : { ok: false }))
@@ -487,7 +487,7 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
       } else {
         // 'bots': mesa con bots, empieza al instante.
         // 'private' (S3-03): mesa privada; espera a que el anfitrión empiece.
-        const resp = await fetch('/api/rooms', {
+        const resp = await apiFetch('/api/rooms', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           // S3-08: nivel de los bots al practicar (el server lo acepta desde S2-10).
@@ -665,7 +665,6 @@ function connect(
     old.onclose = null;
     try { old.close(); } catch { /* ignore */ }
   }
-  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
   // Enviamos `name` y `token` como query params para que el server
   // identifique re-conexiones y asigne el seat correcto. `name` lo lee
   // el server al asignar el primer slot libre; `token` se usa para
@@ -677,9 +676,7 @@ function connect(
   const storedToken = getStoredToken(code);
   if (storedToken) params.set('token', storedToken);
   const query = params.toString();
-  const ws = new WebSocket(
-    `${proto}://${window.location.host}/ws/${code}${query ? `?${query}` : ''}`,
-  );
+  const ws = new WebSocket(wsUrl(`/ws/${code}${query ? `?${query}` : ''}`));
   wsRef = ws;
 
   ws.onmessage = (e) => {

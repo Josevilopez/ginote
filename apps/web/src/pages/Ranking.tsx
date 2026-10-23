@@ -4,6 +4,7 @@ import { DivisionBadge } from '../components/DivisionBadge.js';
 import { useAccount } from '../account.js';
 import './Home.css';
 import './Ranking.css';
+import { apiFetch } from '../api.js';
 
 type ScopeKind = 'es' | 'prov' | 'mun';
 
@@ -57,7 +58,7 @@ export function Ranking({ onBack }: { onBack: () => void }) {
     let alive = true;
     setData(null);
     setFailed(false);
-    fetch(`/api/ranking?scope=${scope}&period=${period}`, { credentials: 'same-origin' })
+    apiFetch(`/api/ranking?scope=${scope}&period=${period}`, { credentials: 'same-origin' })
       .then((r) => (r.ok ? (r.json() as Promise<RankingResponse>) : Promise.reject(new Error(String(r.status)))))
       .then((d) => alive && setData(d))
       .catch(() => alive && setFailed(true));

@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import { forgetPushOnThisDevice } from './push.js';
 import { getPlayerName } from './store.js';
+import { apiFetch } from './api.js';
 
 export interface Me {
   name: string | null;
@@ -85,8 +86,8 @@ export const useAccount = create<AccountState>((set, get) => ({
     initStarted = true;
     try {
       const [config, me] = await Promise.all([
-        fetch('/api/config').then((r) => (r.ok ? r.json() : { googleClientId: null })) as Promise<{ googleClientId: string | null }>,
-        fetch('/api/me', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : { user: null })) as Promise<{
+        apiFetch('/api/config').then((r) => (r.ok ? r.json() : { googleClientId: null })) as Promise<{ googleClientId: string | null }>,
+        apiFetch('/api/me', { credentials: 'same-origin' }).then((r) => (r.ok ? r.json() : { user: null })) as Promise<{
           user: Me | null;
           player?: AccountState['stats'];
           place?: PlaceView;
@@ -104,7 +105,7 @@ export const useAccount = create<AccountState>((set, get) => ({
 
   async refresh() {
     try {
-      const r = await fetch('/api/me', { credentials: 'same-origin' });
+      const r = await apiFetch('/api/me', { credentials: 'same-origin' });
       if (!r.ok) return;
       const m = (await r.json()) as { user: Me | null; player?: AccountState['stats']; place?: PlaceView; season?: SeasonView; trophies?: AccountState['trophies'] };
       set({ me: m.user, stats: m.player ?? null, place: m.place ?? null, season: m.season ?? null, trophies: m.trophies ?? [] });
@@ -119,7 +120,7 @@ export const useAccount = create<AccountState>((set, get) => ({
     const clean = name.replace(/\s+/g, ' ').trim().slice(0, 20);
     if (!clean || clean === get().stats?.publicName) return;
     try {
-      const r = await fetch('/api/me/name', {
+      const r = await apiFetch('/api/me/name', {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -137,7 +138,7 @@ export const useAccount = create<AccountState>((set, get) => ({
   async savePlace(province, municipio) {
     set({ error: null });
     try {
-      const r = await fetch('/api/me/place', {
+      const r = await apiFetch('/api/me/place', {
         method: 'PUT',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -159,7 +160,7 @@ export const useAccount = create<AccountState>((set, get) => ({
   async login(credential) {
     set({ error: null });
     try {
-      const r = await fetch('/api/auth/google', {
+      const r = await apiFetch('/api/auth/google', {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },
@@ -181,14 +182,14 @@ export const useAccount = create<AccountState>((set, get) => ({
   async logout() {
     // S5-02: en un dispositivo compartido, que no le lleguen tus avisos al siguiente.
     await forgetPushOnThisDevice();
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
+    await apiFetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => undefined);
     window.google?.accounts.id.disableAutoSelect();
     set({ me: null, stats: null, place: null });
   },
 
   async deleteAccount() {
     await forgetPushOnThisDevice();
-    const r = await fetch('/api/me', { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
+    const r = await apiFetch('/api/me', { method: 'DELETE', credentials: 'same-origin' }).catch(() => null);
     if (!r || !r.ok) {
       set({ error: 'No se pudo borrar la cuenta. Inténtalo otra vez.' });
       return false;
@@ -305,7 +306,7 @@ export interface ResultRow {
 
 export async function fetchMyResults(): Promise<ResultRow[] | null> {
   try {
-    const r = await fetch('/api/me/results', { credentials: 'same-origin' });
+    const r = await apiFetch('/api/me/results', { credentials: 'same-origin' });
     if (!r.ok) return null;
     return ((await r.json()) as { results: ResultRow[] }).results;
   } catch {
@@ -319,7 +320,7 @@ const municipiosCache = new Map<string, Promise<MunicipioRow[]>>();
 export function fetchMunicipios(province: string): Promise<MunicipioRow[]> {
   let p = municipiosCache.get(province);
   if (!p) {
-    p = fetch(`/api/places/${province}`)
+    p = apiFetch(`/api/places/${province}`)
       .then((r) => (r.ok ? (r.json() as Promise<{ municipios: MunicipioRow[] }>) : { municipios: [] }))
       .then((b) => b.municipios);
     p.catch(() => municipiosCache.delete(province));

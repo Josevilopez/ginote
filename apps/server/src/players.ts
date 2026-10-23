@@ -75,7 +75,7 @@ export function readPlayerIdFromCookie(req: FastifyRequest): string | null {
  * Setea la cookie `guinote_pid` en la respuesta. `Secure` se activa
  * cuando el request viene por HTTPS (en local con HTTP va sin flag).
  */
-export function setPlayerCookie(reply: FastifyReply, playerId: string, isHttps: boolean): void {
+export function setPlayerCookie(reply: FastifyReply, playerId: string, isHttps: boolean, domain: string | null = null): void {
   const flags = [
     `${PLAYER_COOKIE}=${playerId}`,
     'Path=/',
@@ -83,6 +83,7 @@ export function setPlayerCookie(reply: FastifyReply, playerId: string, isHttps: 
     'SameSite=Lax',
     `Max-Age=${PLAYER_COOKIE_MAX_AGE}`,
   ];
+  if (domain) flags.push(`Domain=${domain}`); // S6-02
   if (isHttps) flags.push('Secure');
   reply.header('Set-Cookie', flags.join('; '));
 }

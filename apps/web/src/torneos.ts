@@ -3,6 +3,7 @@
  * `#torneo-<id>`.
  */
 export type TorneoStatus = 'open' | 'running' | 'finished' | 'cancelled';
+import { apiFetch } from './api.js';
 
 export interface TorneoSummary {
   id: string;
@@ -47,7 +48,7 @@ type R<T> = { ok: true; data: T } | { ok: false; error: string };
 
 async function call<T>(url: string, init: RequestInit = {}): Promise<R<T>> {
   try {
-    const r = await fetch(url, {
+    const r = await apiFetch(url, {
       credentials: 'same-origin',
       ...init,
       ...(init.body ? { headers: { 'Content-Type': 'application/json' } } : {}),

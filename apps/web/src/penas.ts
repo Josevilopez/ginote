@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import type { Division } from '@guinote/protocol';
 import type { FriendStatus } from './friends.js';
+import { apiFetch } from './api.js';
 
 export interface PenaMember {
   id: string;
@@ -88,7 +89,7 @@ type Mine = { pena: PenaView | null; invites: PenaInvite[] };
 
 async function call(url: string, init: RequestInit = {}): Promise<{ ok: true; body: unknown } | { ok: false; error: string }> {
   try {
-    const r = await fetch(url, {
+    const r = await apiFetch(url, {
       credentials: 'same-origin',
       ...init,
       ...(init.body ? { headers: { 'Content-Type': 'application/json' } } : {}),

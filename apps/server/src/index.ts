@@ -21,7 +21,8 @@ import {
   ensurePlayer,
   setPlayerCookie,
 } from './players.js';
-import { authRepos, registerAuthRoutes, resolvePlayerId, sessionOf } from './auth/routes.js';
+import { authRepos, cookieDomainOf, registerAuthRoutes, resolvePlayerId, sessionOf } from './auth/routes.js';
+import { crossOrigin, originAllowed, requestHost } from './crossOrigin.js';
 import { registerFriendRoutes } from './friends.js';
 import { Pusher, initPushSender, pushRepo, registerPushRoutes } from './push.js';
 import { penaMatesOf, penaRepo, registerPenaRoutes } from './penas.js';
@@ -48,11 +49,22 @@ type WsSocket = {
 // S4-08: detrás del proxy de Azure, la IP real del cliente viene en X-Forwarded-For.
 const app = Fastify({ logger: true, trustProxy: true });
 
-await app.register(cors, { origin: true });
+// S6-02: con ALLOWED_ORIGINS (la web en otro dominio), CORS con cookies solo
+// para esos orígenes, y el preflight cacheado 2 h. Sin lista, como antes.
+const xo = crossOrigin();
+if (xo.allowedOrigins.length > 0) {
+  await app.register(cors, {
+    origin: (origin, cb) => cb(null, !origin || xo.allowedOrigins.includes(origin.toLowerCase().replace(/\/+$/, ''))),
+    credentials: true,
+    maxAge: 7200,
+  });
+} else {
+  await app.register(cors, { origin: true });
+}
 // SEO / velocidad: gzip o brotli para HTML, JS, CSS y JSON (no toca los WebSockets).
 await app.register(compress, { global: true, threshold: 1024 });
-// SEO: un solo dominio. Con CANONICAL_HOST (p. ej. guinoteonline.es), las
-// páginas pedidas por otro host (www., el *.azurecontainerapps.io…) se
+// SEO: un solo dominio. Con CANONICAL_HOST (p. ej. www.guinoteonline.es), las
+// páginas pedidas por otro host (el dominio raíz, api., *.azurecontainerapps.io…) se
 // redirigen con 301. La API y los WebSockets no se tocan, para no romper
 // a quien ya tenga la web abierta.
 const canonicalHost = process.env.CANONICAL_HOST?.trim().toLowerCase() || null;
@@ -231,7 +243,7 @@ app.post('/api/rooms', async (req, reply) => {
     const existing = resolvePlayerId(req); // S3-01: con sesión, el player de la cuenta
     const { playerId: id } = await ensurePlayer(cosmos, existing);
     playerId = id;
-    if (!existing) setPlayerCookie(reply, playerId, isHttps(req));
+    if (!existing) setPlayerCookie(reply, playerId, isHttps(req), cookieDomainOf(req));
   } else {
     playerId = globalThis.crypto.randomUUID();
   }
@@ -245,6 +257,7 @@ app.post('/api/rooms', async (req, reply) => {
 });
 
 app.get('/api/health', async () => ({ ok: true }));
+
 
 // ───────────── S3-04: pareja fija ─────────────
 // El cliente guarda `memberId` (secreto de su plaza en el grupo) y
@@ -395,6 +408,9 @@ async function serveStatic(filePath: string, reply: import('fastify').FastifyRep
   }
 }
 
+// S6-02: con la web en Static Web Apps, `SERVE_WEB=false` y el contenedor
+// solo es API + WebSockets.
+if (xo.serveWeb) {
 app.get<{ Params: { path: string } }>('/assets/:path', async (req, reply) => {
   return serveStatic(join(WEB_DIST, 'assets', req.params.path), reply);
 });
@@ -428,8 +444,20 @@ app.get<{ Params: { '*': string } }>('/*', async (req, reply) => {
   if (!target.startsWith(WEB_DIST)) return reply.code(404).send('Not found');
   return serveStatic(target, reply);
 });
+} else {
+  app.get('/', async () => ({ ok: true, api: 'guiñote' }));
+}
 
 app.register(async (instance) => {
+  // S6-02: los navegadores no aplican CORS a los WebSockets; se mira el
+  // `Origin` a mano para que otra web no abra partidas con tus cookies.
+  instance.addHook('onRequest', async (req, reply) => {
+    const origin = req.headers.origin;
+    if (!originAllowed(origin, xo, requestHost(req.headers))) {
+      req.log.warn(`[ws] origen rechazado: ${origin}`);
+      return reply.code(403).send({ error: 'Origen no permitido' });
+    }
+  });
   // ───────────── WS: cola de "Jugar online" (S3-05) ─────────────
   // El cliente abre `/ws/matchmake?name=…` y queda en la cola mientras el
   // WS esté abierto (cerrarlo = cancelar). Cada segundo recibe

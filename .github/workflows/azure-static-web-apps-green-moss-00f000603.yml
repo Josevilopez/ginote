@@ -1,58 +1,73 @@
-name: Azure Static Web Apps CI/CD
+# S6-03 — Workflow de Azure Static Web Apps adaptado al monorepo.
+#
+# Azure genera `.github/workflows/azure-static-web-apps-<nombre>.yml` al crear
+# la Static Web App. Sustituye su contenido por este fichero y cambia SOLO
+# el nombre del secreto (las dos líneas `AZURE_STATIC_WEB_APPS_API_TOKEN_...`)
+# por el que aparezca en el fichero generado.
+#
+# Qué cambia respecto al generado:
+#  - Solo salta si cambia la web o los paquetes que usa.
+#  - Compila nosotros (npm ci + paquetes + web con VITE_API_ORIGIN) y la
+#    acción solo sube `apps/web/dist` (skip_app_build).
+name: Web (Static Web Apps)
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'package-lock.json'
+      - '.github/workflows/azure-static-web-apps-*.yml'
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    branches:
-      - main
+    branches: [main]
+    paths:
+      - 'apps/web/**'
+      - 'packages/**'
+  workflow_dispatch:
 
 jobs:
-  build_and_deploy_job:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.action != 'closed')
+  build_and_deploy:
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
     runs-on: ubuntu-latest
-    name: Build and Deploy Job
-    permissions:
-       id-token: write
-       contents: read
+    name: Compilar y desplegar
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          submodules: true
-          lfs: false
-      - name: Install OIDC Client from Core Package
-        run: npm install @actions/core@1.6.0 @actions/http-client
-      - name: Get Id Token
-        uses: actions/github-script@v6
-        id: idtoken
-        with:
-           script: |
-               const coredemo = require('@actions/core')
-               return await coredemo.getIDToken()
-           result-encoding: string
-      - name: Build And Deploy
-        id: builddeploy
+          node-version: 22
+          cache: npm
+
+      - name: Instalar
+        run: npm ci
+
+      - name: Compilar paquetes y web
+        env:
+          VITE_API_ORIGIN: https://api.guinoteonline.es
+        run: |
+          npm run build -w @guinote/engine
+          npm run build -w @guinote/protocol
+          npm run build -w @guinote/web
+
+      - name: Desplegar
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GREEN_MOSS_00F000603 }}
-          action: "upload"
-          ###### Repository/Build Configurations - These values can be configured to match your app requirements. ######
-          # For more information regarding Static Web App workflow configurations, please visit: https://aka.ms/swaworkflowconfig
-          app_location: "apps/web" # App source code path
-          api_location: "" # Api source code path - optional
-          output_location: "dist" # Built app content directory - optional
-          github_id_token: ${{ steps.idtoken.outputs.result }}
-          ###### End of Repository/Build Configurations ######
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: apps/web/dist
+          output_location: ''
+          skip_app_build: true
+          skip_api_build: true
 
-  close_pull_request_job:
+  close_pull_request:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
     runs-on: ubuntu-latest
-    name: Close Pull Request Job
+    name: Cerrar entorno de la PR
     steps:
-      - name: Close Pull Request
-        id: closepullrequest
-        uses: Azure/static-web-apps-deploy@v1
+      - uses: Azure/static-web-apps-deploy@v1
         with:
-          action: "close"
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GREEN_MOSS_00F000603 }}
+          action: close

@@ -3,4 +3,4 @@ Allow: /
 Disallow: /api/
 Disallow: /ws/
 
-Sitemap: https://guinoteonline.es/sitemap.xml
+Sitemap: https://www.guinoteonline.es/sitemap.xml

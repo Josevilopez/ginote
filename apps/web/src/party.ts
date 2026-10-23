@@ -9,6 +9,7 @@
  */
 import { create } from 'zustand';
 import { getPlayerName, useGame } from './store.js';
+import { apiFetch } from './api.js';
 
 export interface PartyView {
   code: string;
@@ -60,7 +61,7 @@ interface PartyState {
 }
 
 async function post<T>(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: T }> {
-  const r = await fetch(url, {
+  const r = await apiFetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -132,7 +133,7 @@ export const useParty = create<PartyState>((set, get) => {
       const saved = get().saved;
       if (!saved) return;
       try {
-        const r = await fetch(`/api/parties/${saved.code}?member=${encodeURIComponent(saved.memberId)}`);
+        const r = await apiFetch(`/api/parties/${saved.code}?member=${encodeURIComponent(saved.memberId)}`);
         if (r.status === 404) {
           // El grupo caducó o el servidor se reinició.
           save(null);
