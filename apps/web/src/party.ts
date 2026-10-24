@@ -9,7 +9,7 @@
  */
 import { create } from 'zustand';
 import { getPlayerName, useGame } from './store.js';
-import { apiFetch } from './api.js';
+import { apiFetch, ensurePlayerId } from './api.js';
 
 export interface PartyView {
   code: string;
@@ -61,6 +61,8 @@ interface PartyState {
 }
 
 async function post<T>(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: T }> {
+  // El jugador de cada miembro se toma al crear o unirse a la pareja.
+  await ensurePlayerId();
   const r = await apiFetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

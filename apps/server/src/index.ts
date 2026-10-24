@@ -10,7 +10,7 @@ import { ClientMessageSchema, rolloverSeason, type ServerMessage } from '@guinot
 import type { Seat } from '@guinote/engine';
 import { botThinkDelayMs } from '@guinote/bots';
 import { createRoomWithBots, getRoom, setRoomStore } from './rooms.js';
-import { onMatchEnd, reserveSeat, onPartidaEnd, loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
+import { HAND_SUMMARY_MS, LAST_TRICK_PAUSE_MS, onMatchEnd, reserveSeat, onPartidaEnd, loadSeatDivision, HEARTBEAT_MS, startPrivate, swapPrivateSeats, abandonDuringPostgame, markDisconnected, resumeRestoredRoom, applyActionWithResolveEvent, broadcastLobbyStatus, broadcastSeats, substituteWithBot, castRematchVote, clearAutoPlayTimer, clearLobbyTimer, emitAfterChange, scheduleAutoPlay, scheduleLobbyCheck, sendPostgameStateTo, stepBots, triggerNextHand } from './room.js';
 import { MemoryRoomStore } from './persistence/memory.js';
 import { persistRoom, setSnapshotSink } from './persistHooks.js';
 import { isRoomSnapshot, roomFromSnapshot, serializeRoom } from './snapshot.js';
@@ -223,6 +223,20 @@ async function readQueueInfo(playerId: string | null): Promise<{ rating: number;
     return { rating: 1000, banUntil: null };
   }
 }
+
+// Identidad de invitado. "Jugar online", la pareja y entrar a una mesa por
+// código van por WebSocket o por rutas que no crean jugador, y un WebSocket
+// no puede poner cookies: sin esto, un invitado que nunca había creado mesa
+// jugaba sin `playerId` y la partida no puntuaba ni salía en el historial de
+// nadie. La web llama aquí antes de buscar partida o sentarse.
+app.post('/api/player', async (req, reply) => {
+  const cosmos = getCosmosHandles();
+  if (!cosmos) return { ok: true };
+  const existing = resolvePlayerId(req);
+  const { playerId } = await ensurePlayer(cosmos, existing);
+  if (!existing) setPlayerCookie(reply, playerId, isHttps(req), cookieDomainOf(req));
+  return { ok: true };
+});
 
 app.post('/api/rooms', async (req, reply) => {
   const body = (req.body ?? {}) as { name?: string; mode?: 'lobby' | 'bots' | 'private' };
@@ -792,10 +806,9 @@ app.register(async (instance) => {
           // última de la mano, para que el jugador pueda leer la jugada
           // final antes de que aparezca el GAME_OVER. Para bazas no
           // finales mantenemos la pausa corta (2,5 s) para no ralentizar
-          // las bazas intermedias. Subida de 4,5 s → 7 s en línea con
-          // el retardo del overlay "10 de últimas" del cliente (4 s) y
-          // su duración en pantalla (6 s) = 10 s totales antes del panel.
-          const pause = wasLastTrick ? 7000 : 2500;
+          // las bazas intermedias. La última, LAST_TRICK_PAUSE_MS (el
+          // overlay "10 de últimas" del cliente ya no existe).
+          const pause = wasLastTrick ? LAST_TRICK_PAUSE_MS : 2500;
           await new Promise<void>((r) => setTimeout(r, pause));
         } else {
           // Pausa para que el humano vea su carta antes de que el siguiente
@@ -806,11 +819,11 @@ app.register(async (instance) => {
         if (wasLastTrick) {
           // Ahora sí, emitimos el GAME_OVER después de la pausa.
           emitAfterChange(room, { skipGameOver: false });
-          // Auto-cadencia: repartimos la siguiente mano tras una pausa
-          // más larga (4,5 s) para que el jugador lea el panel de
+          // Auto-cadencia: repartimos la siguiente mano tras
+          // HAND_SUMMARY_MS para que el jugador lea el panel de
           // resumen — sobre todo en los saltos entre idas/vueltas y
           // entre partidas, donde hay más info que procesar.
-          setTimeout(() => triggerNextHand(room), 4500);
+          setTimeout(() => triggerNextHand(room), HAND_SUMMARY_MS);
           return;
         }
 

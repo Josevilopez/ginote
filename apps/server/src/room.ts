@@ -556,6 +556,16 @@ export function scheduleAutoPlay(room: Room, delayMs = 10_000): void {
 /** Red de seguridad para repartir tras una mano terminada (ver `scheduleAutoPlay`). */
 export const HAND_END_FALLBACK_MS = 15_000;
 
+/**
+ * Ritmo del final de cada mano (un solo sitio para ajustarlo):
+ *  - `LAST_TRICK_PAUSE_MS`: tras la última baza, tiempo para verla antes de
+ *    que salga el panel de resumen (igual si la tira una persona o un bot).
+ *  - `HAND_SUMMARY_MS`: lo que dura el panel de resumen hasta el siguiente
+ *    reparto (cualquiera puede cortarlo con "Continuar").
+ */
+export const LAST_TRICK_PAUSE_MS = 4_000;
+export const HAND_SUMMARY_MS = 3_000;
+
 export function clearAutoPlayTimer(room: Room): void {
   if (room.autoPlayTimer) {
     clearTimeout(room.autoPlayTimer);
@@ -600,8 +610,8 @@ function autoPlayForHuman(room: Room, seat: Seat): void {
     emitAfterChange(room, { skipGameOver: true });
     setTimeout(() => {
       emitAfterChange(room);
-      setTimeout(() => triggerNextHand(room), 4500);
-    }, 7000);
+      setTimeout(() => triggerNextHand(room), HAND_SUMMARY_MS);
+    }, LAST_TRICK_PAUSE_MS);
     return;
   }
   emitAfterChange(room);
@@ -686,8 +696,8 @@ export function applyActionWithResolveEvent(
     // `triggerNextHand` cuando resuelve la última baza, así que aquí no
     // lo haría nadie y la mesa se quedaba congelada en "Contando la
     // partida…". Misma pausa que tras la última baza.
-    console.log(`[hand] cerrada por cante code=${room.code} → triggerNextHand en 4,5 s`);
-    setTimeout(() => triggerNextHand(room), 4500);
+    console.log(`[hand] cerrada por cante code=${room.code} → triggerNextHand en ${HAND_SUMMARY_MS} ms`);
+    setTimeout(() => triggerNextHand(room), HAND_SUMMARY_MS);
   }
   // Swap del 7: el motor ya intercambió `state.trumpCard` ↔
   // `state.hands[seat]`, así que `state.trumpCard` ahora es el 7 que
@@ -768,7 +778,7 @@ export async function stepBots(
   // el GAME_OVER y le tape el panel de resumen. Antes era 2,5 s
   // para todas las bazas — el usuario reportó que la última se
   // sentía demasiado rápida al pasar al resumen.
-  lastTrickPauseMs = 3000,
+  lastTrickPauseMs = LAST_TRICK_PAUSE_MS,
 ): Promise<boolean> {
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
   let acted = false;
@@ -821,12 +831,12 @@ export async function stepBots(
       await sleep(pause);
       if (last.hadLastTrick) {
         emitAfterChange(room); // ahora sí, con GAME_OVER
-        // Auto-cadencia: repartimos la siguiente mano tras una pausa
-        // más larga (4,5 s) para que el jugador lea el panel de
+        // Auto-cadencia: repartimos la siguiente mano tras
+        // HAND_SUMMARY_MS para que el jugador lea el panel de
         // resumen — sobre todo en los saltos entre idas/vueltas y
         // entre partidas, donde hay más info que procesar. Ver
         // comentario equivalente en `apps/server/src/index.ts`.
-        setTimeout(() => triggerNextHand(room), 4500);
+        setTimeout(() => triggerNextHand(room), HAND_SUMMARY_MS);
         return acted;
       }
     } else {
@@ -893,7 +903,7 @@ export function triggerNextHand(room: Room): void {
   }
   // Ya hay una votación de revancha abierta: la partida terminada ya se
   // contó en `matchWins`. Sin este guard, la auto-cadencia (setTimeout
-  // 4,5 s) + un NEXT_HAND del cliente sumarían la misma partida 2 veces.
+  // HAND_SUMMARY_MS) + un NEXT_HAND del cliente sumarían la misma partida 2 veces.
   if (room.postgame !== null) {
     console.log(`[triggerNextHand] no-op: postgame abierto code=${room.code}`);
     return;
@@ -1673,11 +1683,10 @@ export async function updateEloOnHandEnd(room: Room, winner: 0 | 1): Promise<voi
     const team: 0 | 1 = (slot.seat % 2 === 0 ? 0 : 1) as 0 | 1;
     try {
       const { resource } = await cosmos.players.item(slot.playerId, slot.playerId).read();
-      if (!resource) {
-        console.log(`[elo] player ${slot.playerId} no existe en Cosmos`);
-        continue;
-      }
-      const r = resource as {
+      // Sin documento (invitado que nunca creó mesa): cuenta como jugador
+      // nuevo (1000); `updatePlayerRating` lo crea al guardar.
+      if (!resource) console.log(`[elo] player ${slot.playerId} sin documento: jugador nuevo`);
+      const r = (resource ?? {}) as {
         rating?: number;
         games?: number;
         wins?: number;

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { ClientMessage, Division, ServerMessage } from '@guinote/protocol';
 import type { Action, Card, PlayerView } from '@guinote/engine';
-import { apiFetch, wsUrl } from './api.js';
+import { apiFetch, wsUrl, ensurePlayerId } from './api.js';
 
 interface PartidaScore {
   buenas: { '0': number; '1': number };
@@ -225,6 +225,7 @@ export function getPartidasJugadas(): number {
 let queueWs: WebSocket | null = null;
 
 function stopQueue(): void {
+  queueRun++;
   const ws = queueWs;
   queueWs = null;
   if (ws) {
@@ -233,12 +234,22 @@ function stopQueue(): void {
   }
 }
 
+let queueRun = 0;
 function startQueue(set: (p: Partial<State>) => void, get: () => State): void {
   stopQueue();
+  const run = ++queueRun;
+  set({ queue: { waitedMs: 0, players: 1, fillAfterMs: 20_000 }, error: null });
+  // Invitados: identidad de jugador antes de entrar en la cola (si no, la
+  // partida no puntúa ni se guarda en el historial de nadie).
+  void ensurePlayerId().finally(() => {
+    if (run === queueRun) openQueue(set, get);
+  });
+}
+
+function openQueue(set: (p: Partial<State>) => void, get: () => State): void {
   const params = new URLSearchParams({ name: getPlayerName() });
   const ws = new WebSocket(wsUrl(`/ws/matchmake?${params.toString()}`));
   queueWs = ws;
-  set({ queue: { waitedMs: 0, players: 1, fillAfterMs: 20_000 }, error: null });
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data) as ServerMessage;
     if (msg.type === 'QUEUE_STATUS') {
@@ -540,7 +551,7 @@ async createRoom(mode: 'bots' | 'lobby' | 'private', botLevel?: 1 | 2) {
     // Si el usuario llegó con `#WXYZ` y se une, normalizamos al código
     // canónico que devolvió el server (mismas letras, mismo orden).
     history.replaceState(null, '', `#${clean}`);
-    connect(clean, set, get);
+    void ensurePlayerId().finally(() => connect(clean, set, get));
   },
 
   sendAction(action) {

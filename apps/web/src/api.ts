@@ -25,3 +25,21 @@ export function wsUrl(path: string): string {
 export function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
   return fetch(apiUrl(input), { ...init, credentials: 'include' });
 }
+
+let playerReady: Promise<void> | null = null;
+/**
+ * Se asegura de que este navegador tiene identidad de jugador (cookie
+ * `guinote_pid` y su ficha en el servidor) antes de buscar partida, formar
+ * pareja o sentarse en una mesa. Con cuenta no hace nada nuevo. Una sola
+ * llamada por carga de página; si falla, se reintenta la próxima vez.
+ */
+export function ensurePlayerId(): Promise<void> {
+  return (playerReady ??= apiFetch('/api/player', { method: 'POST' }).then(
+    (r) => {
+      if (!r.ok) playerReady = null;
+    },
+    () => {
+      playerReady = null;
+    },
+  ));
+}
