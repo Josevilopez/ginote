@@ -5,6 +5,7 @@ import { STATUS_LABEL, friendCode, friendLink, useFriends, type Friend } from '.
 import './Home.css';
 import './Ranking.css';
 import './Friends.css';
+import { shouldPoll } from '../idle.js';
 
 /**
  * S5-01: "Amigos" (`#amigos`, o `#amigos/Nombre%231234` para añadir con
@@ -29,7 +30,7 @@ export function Friends({ onBack, prefill }: { onBack: () => void; prefill: stri
   // En esta pantalla, más a menudo que el sondeo general.
   useEffect(() => {
     if (!me) return;
-    const id = window.setInterval(() => void refresh(), 8000);
+    const id = window.setInterval(() => shouldPoll() && void refresh(), 8000);
     return () => window.clearInterval(id);
   }, [me, refresh]);
 

@@ -381,3 +381,28 @@
 }
 
 .home-rules a { color: var(--gold); font-weight: 700; white-space: nowrap; }
+
+/* Jugadores conectados ahora (solo si son bastantes; ver live.ts del servidor). */
+.home-live {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+.home-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #5fd38a;
+  box-shadow: 0 0 0 3px rgba(95, 211, 138, 0.2);
+  animation: home-live-pulse 2s ease-in-out infinite;
+}
+@keyframes home-live-pulse {
+  50% { box-shadow: 0 0 0 6px rgba(95, 211, 138, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-live-dot { animation: none; }
+}

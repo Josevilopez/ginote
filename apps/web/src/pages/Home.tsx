@@ -8,6 +8,7 @@ import { useParty } from '../party.js';
 import { useFriends } from '../friends.js';
 import { usePena } from '../penas.js';
 import { PAGE_PRIVACY, PAGE_RULES, linkTo } from '../nav.js';
+import { useLivePlayers } from '../live.js';
 import './Home.css';
 
 /**
@@ -19,6 +20,7 @@ const FAN_CARDS = ['01-oros', '03-copas', '12-espadas', '10-bastos'] as const;
 
 export function Home() {
   const createRoom = useGame((s) => s.createRoom);
+  const live = useLivePlayers();
   const createParty = useParty((s) => s.create);
   const partyError = useParty((s) => s.error);
   const accountError = useAccount((s) => s.error);
@@ -89,6 +91,12 @@ export function Home() {
             <b>Jugar con mi pareja</b>
             <span>Invita a un amigo y os sentamos juntos, enfrente.</span>
           </button>
+          {live !== null && (
+            <p className="home-live" aria-live="polite">
+              <span className="home-live-dot" aria-hidden="true" />
+              {live} jugadores conectados ahora
+            </p>
+          )}
         </div>
 
         {/* S4-04 */}

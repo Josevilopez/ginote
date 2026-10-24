@@ -34,6 +34,7 @@ import { initSessionSecret } from './auth/session.js';
 import { registerRateLimit } from './ratelimit.js';
 import { safeName } from './names.js';
 import { netFingerprint } from './netprint.js';
+import { Visitors, cached, countLive, publicLive } from './live.js';
 import { cancelPartySearch, createParty, dropStaleSearches, getParty, joinParty, leaveParty, playParty, renameMember, viewParty } from './parties.js';
 import { BOT_FILL_AFTER_MS, dequeue as qDequeue, enqueue as qEnqueue, formTables, isInQueue, listQueue, playersSearching } from './matchmaking.js';
 import { startQueuedTable } from './queueRoom.js';
@@ -83,6 +84,14 @@ await app.register(websocket);
 // queda desactivado y todo sigue funcionando como invitado.
 // S4-08: límites de peticiones por IP / cuenta.
 registerRateLimit(app);
+// Portada: "N jugadores conectados". Cuenta a cualquiera que use la API
+// (con cuenta, invitado con cookie o, si no, por su conexión) en el último minuto.
+const visitors = new Visitors();
+app.addHook('onRequest', async (req) => {
+  if (!req.url.startsWith('/api/')) return;
+  const pid = resolvePlayerId(req);
+  visitors.touch(pid ? `p:${pid}` : `n:${netFingerprint(req.ip)}`);
+});
 const sessionsOk = initSessionSecret(process.env, (m) => app.log.warn(m));
 // S5-01: amigos, presencia e invitaciones (su hook de presencia va antes
 // que el resto de rutas para que /api/me y compañía cuenten como "conectado").
@@ -229,6 +238,24 @@ async function readQueueInfo(playerId: string | null): Promise<{ rating: number;
 // no puede poner cookies: sin esto, un invitado que nunca había creado mesa
 // jugaba sin `playerId` y la partida no puntuaba ni salía en el historial de
 // nadie. La web llama aquí antes de buscar partida o sentarse.
+// Personas conectadas ahora: visitantes recientes + quien tiene una mesa o la
+// cola abiertas (aunque no toque la API). Solo una cifra, cacheada 10 s.
+const liveCount = cached(() => {
+  const connected: string[] = [];
+  for (const room of listRooms()) {
+    for (const p of room.players) {
+      if (p.token === null || !p.ws || p.ws.readyState !== 1) continue;
+      connected.push(p.playerId ? `p:${p.playerId}` : `s:${room.code}:${p.seat}`);
+    }
+  }
+  for (const e of listQueue()) e.members.forEach((m, i) => connected.push(m.playerId ? `p:${m.playerId}` : `q:${e.id}:${i}`));
+  return countLive(visitors.active(), connected);
+});
+app.get('/api/live', async (_req, reply) => {
+  reply.header('Cache-Control', 'no-store');
+  return publicLive(liveCount());
+});
+
 app.post('/api/player', async (req, reply) => {
   const cosmos = getCosmosHandles();
   if (!cosmos) return { ok: true };

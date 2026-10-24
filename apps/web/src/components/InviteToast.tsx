@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useAccount } from '../account.js';
 import { FRIENDS_POLL_MS, useFriends } from '../friends.js';
 import { useGame } from '../store.js';
+import { shouldPoll } from '../idle.js';
 import { usePena } from '../penas.js';
 import { useParty } from '../party.js';
 import '../pages/Friends.css';
@@ -31,7 +32,7 @@ export function InviteToast() {
     }
     void refresh();
     const tick = () => {
-      if (document.visibilityState === 'visible') void refresh();
+      if (shouldPoll()) void refresh();
     };
     const id = window.setInterval(tick, FRIENDS_POLL_MS);
     document.addEventListener('visibilitychange', tick);

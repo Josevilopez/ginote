@@ -18,6 +18,7 @@ import './Ranking.css';
 import './Friends.css';
 import '../components/Retos.css';
 import './Torneos.css';
+import { shouldPoll } from '../idle.js';
 
 const BACK_ARROW = (
   <svg className="back-arrow" aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
@@ -173,7 +174,7 @@ function Detail({ id }: { id: string }) {
   }, [id]);
   useEffect(() => {
     load();
-    const iv = window.setInterval(load, 20_000);
+    const iv = window.setInterval(() => shouldPoll() && load(), 20_000);
     return () => window.clearInterval(iv);
   }, [load, me]);
 

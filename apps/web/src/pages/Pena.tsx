@@ -9,6 +9,7 @@ import './Home.css';
 import './Ranking.css';
 import './Friends.css';
 import './Pena.css';
+import { shouldPoll } from '../idle.js';
 
 /**
  * S5-03: "Mi peña" (`#pena`) y el enlace para entrar en una (`#pena-CODIGO`).
@@ -23,7 +24,7 @@ export function Pena({ onBack, joinCode }: { onBack: () => void; joinCode: strin
   useEffect(() => {
     if (!me) return;
     void refresh();
-    const id = window.setInterval(() => void refresh(), 15_000);
+    const id = window.setInterval(() => shouldPoll() && void refresh(), 15_000);
     return () => window.clearInterval(id);
   }, [me, refresh]);
   useEffect(() => clearError, [clearError]);
