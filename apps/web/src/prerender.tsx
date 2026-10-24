@@ -21,15 +21,15 @@ export function pages(): PrerenderedPage[] {
   return [
     {
       path: '/como-se-juega',
-      title: 'Cómo se juega al guiñote aragonés · Reglas, puntos y cantes',
+      title: 'Cómo se juega al guiñote · Reglas, puntos y cantes',
       description:
-        'Reglas del guiñote aragonés explicadas fácil: lo que vale cada carta, el triunfo, el arrastre, los cantes (20 y las cuarenta), buenas y malas, vueltas y el coto.',
+        'Reglas del guiñote explicadas fácil: lo que vale cada carta, el triunfo, el arrastre, los cantes (20 y las cuarenta), buenas y malas, vueltas y el coto.',
       html: renderToString(<Rules onBack={noop} />),
     },
     {
       path: '/privacidad',
-      title: 'Privacidad · Guiñote aragonés online',
-      description: 'Qué datos guarda Guiñote aragonés online, para qué y cómo verlos o borrarlos. Sin letra pequeña.',
+      title: 'Privacidad · Guiñote online',
+      description: 'Qué datos guarda Guiñote online, para qué y cómo verlos o borrarlos. Sin letra pequeña.',
       html: renderToString(<Privacy onBack={noop} />),
     },
   ];

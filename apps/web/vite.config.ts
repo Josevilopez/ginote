@@ -11,7 +11,7 @@ export default defineConfig({
       // que se usa es `public/manifest.webmanifest`.
       disable: true,
       manifest: {
-        name: 'Guiñote aragonés',
+        name: 'Guiñote online',
         short_name: 'Guiñote',
         description: 'Juego de cartas aragonés',
         theme_color: '#0d4f3c',

@@ -40,7 +40,7 @@ export function Rules({ onBack }: { onBack: () => void }) {
           Volver
         </button>
 
-        <h1 className="privacy-title">Cómo se juega al guiñote aragonés</h1>
+        <h1 className="privacy-title">Cómo se juega al guiñote</h1>
         <p className="privacy-lead">El guiñote aragonés, como se juega en esta mesa. En cada pueblo hay algún matiz; aquí van las reglas que sigue el juego.</p>
 
         <nav className="rules-index" aria-label="Índice">

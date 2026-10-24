@@ -233,7 +233,7 @@ function InviteButton({ code, secondary = false }: { code: string; secondary?: b
   const invite = async () => {
     try {
       if (typeof navigator.share === 'function') {
-        await navigator.share({ title: 'Guiñote aragonés', text: `Siéntate conmigo en la sala ${code}`, url });
+        await navigator.share({ title: 'Guiñote online', text: `Siéntate conmigo en la sala ${code}`, url });
         return;
       }
       if (navigator.clipboard?.writeText) {

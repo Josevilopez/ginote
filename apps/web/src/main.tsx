@@ -19,5 +19,13 @@ setAppHeight();
 window.addEventListener('resize', setAppHeight);
 window.addEventListener('orientationchange', setAppHeight);
 
+// Service worker registrado siempre (no solo al activar avisos): sin él el
+// navegador no ofrece instalar la app. `sw.js` no cachea nada.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+  });
+}
+
 const root = createRoot(document.getElementById('root')!);
 root.render(<App />);
