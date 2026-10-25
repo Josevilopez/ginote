@@ -180,9 +180,14 @@ export function Game() {
 
   // ¿En qué fase estamos para el humano? ¿qué puede hacer?
   const myOptions = useMemo(() => {
-    if (!view || you === null) return { phase: 'idle' as const, plays: [], cantes: [], canSwapSeven: false, mustPass: false };
-    if (view.phase !== 'winnerWindow' || view.turn !== you) {
-      return { phase: view?.phase ?? 'idle', plays: [], cantes: [], canSwapSeven: false, mustPass: false };
+    if (!view || you === null) return { phase: 'idle' as const, plays: [], cantes: [], canSwapSeven: false, mustPass: false, inPlay: false };
+    // Se puede cantar en la ventana tras ganar la baza (antes de robar) y
+    // también ya en juego cuando te toca: p. ej. robas la carta que completa
+    // el par y sales tú, o eres el compañero del ganador y te llega el turno.
+    // Es lo mismo que permite el motor (`legalActions.puedeCantar`).
+    const inPlay = view.phase === 'lead' || view.phase === 'follow' || view.phase === 'arrastre';
+    if ((view.phase !== 'winnerWindow' && !inPlay) || view.turn !== you) {
+      return { phase: view?.phase ?? 'idle', plays: [], cantes: [], canSwapSeven: false, mustPass: false, inPlay: false };
     }
     const cantes: { suit: Card['suit']; value: number }[] = [];
     // ¿Quién puede cantar AHORA? Igual que el motor:
@@ -207,13 +212,16 @@ export function Game() {
         }
       }
     }
+    // Cambiar el 7 y "Nada" (PASS) solo existen en la ventana; jugando, para
+    // no cantar basta con tirar carta.
+    if (inPlay) return { phase: view.phase, plays: [], cantes, canSwapSeven: false, mustPass: false, inPlay: true };
     const canSwap =
       canSwapSevenWithTrump(view.trumpCard) &&
       view.lastWinner !== null &&
       (view.lastWinner === you || view.lastWinner === view.partner) &&
       view.hand.some((c) => c.id === `${view.trump}-7`);
     const mustPass = cantes.length === 0 && !canSwap;
-    return { phase: view.phase, plays: [], cantes, canSwapSeven: canSwap, mustPass };
+    return { phase: view.phase, plays: [], cantes, canSwapSeven: canSwap, mustPass, inPlay: false };
   }, [view, you]);
 
   // Cantes agrupados por seat para mostrarlos como chips fijos junto a cada
@@ -1311,7 +1319,7 @@ export function Game() {
             CSS muestra uno u otro según el viewport. */}
         {(myOptions.cantes.length > 0 || myOptions.canSwapSeven) && (() => {
           const isYouWindow =
-            view.phase === 'winnerWindow' && view.turn === you;
+            (view.phase === 'winnerWindow' || myOptions.inPlay) && view.turn === you;
           // Render helper compartido entre móvil y escritorio: itera los
           // cantes, añade Cambiar-7 si aplica, y termina con Nada.
           // `small` afecta al padding/icono (móvil más compacto).
@@ -1352,13 +1360,15 @@ export function Game() {
                     Cambiar el 7
                   </button>
                 )}
-                <button
-                  className={passCls}
-                  onClick={() => sendAction({ type: 'PASS' })}
-                  title="Pasar sin cantar ni cambiar el 7"
-                >
-                  Nada
-                </button>
+                {!myOptions.inPlay && (
+                  <button
+                    className={passCls}
+                    onClick={() => sendAction({ type: 'PASS' })}
+                    title="Pasar sin cantar ni cambiar el 7"
+                  >
+                    Nada
+                  </button>
+                )}
               </>
             );
           };
